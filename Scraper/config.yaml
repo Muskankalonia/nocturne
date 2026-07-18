@@ -1,0 +1,19 @@
+# Dark Web Scraper Configuration
+
+search_engine: ahmia  # Options: ahmia (default)
+query: "palo alto networks"
+
+# Only save pages containing at least one of these keywords
+keywords:
+  - vulnerability
+  - exploit
+  - CVE
+  - breach
+  - leak
+  - credentials
+  - zero-day
+  - CrowdStrike
+
+# Crawler settings
+max_depth: 2
+max_pages: 30
