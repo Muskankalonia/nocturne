@@ -189,6 +189,16 @@ def bfs_crawl(driver, seed_urls, max_depth=MAX_DEPTH, max_pages=MAX_PAGES):
 
             soup = BeautifulSoup(driver.page_source, "html.parser")
 
+            # Skip Chrome error pages
+            page_text = driver.page_source
+            if any(err in page_text for err in [
+                "ERR_TIMED_OUT", "ERR_CONNECTION_REFUSED", "ERR_SOCKS_CONNECTION_FAILED",
+                "ERR_NAME_NOT_RESOLVED", "This site can't be reached", "took too long to respond",
+                "net::ERR_", "about:neterror"
+            ]):
+                print(f"    SKIPPED: Site unreachable", flush=True)
+                continue
+
             for tag in soup(["script", "style"]):
                 tag.decompose()
 
