@@ -1,9 +1,10 @@
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y tor chromium chromium-driver && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir PySocks requests beautifulsoup4 selenium undetected-chromedriver
+RUN pip install --no-cache-dir PySocks requests beautifulsoup4 selenium pyyaml
 
 COPY scraper.py /app/scraper.py
+COPY config.yaml /app/config.yaml
 WORKDIR /app
 
 CMD bash -c "tor & sleep 60 && python -u scraper.py"

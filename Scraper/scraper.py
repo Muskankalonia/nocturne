@@ -3,23 +3,30 @@ import time
 import json
 import os
 import re
+import yaml
 from collections import deque
+from urllib.parse import urlparse, parse_qs
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from bs4 import BeautifulSoup
-from urllib.parse import urlparse, parse_qs
 
+
+# Load config
+with open("/app/config.yaml", "r") as f:
+    config = yaml.safe_load(f)
 
 OUTPUT_DIR = "/tmp/scraped_pages"
-MAX_DEPTH = 2
-MAX_PAGES = 30
+MAX_DEPTH = config.get("max_depth", 2)
+MAX_PAGES = config.get("max_pages", 30)
+KEYWORDS = [kw.lower() for kw in config.get("keywords", [])]
+SEARCH_ENGINE = config.get("search_engine", "ahmia")
+QUERY = config.get("query", "security research")
 
 
 def create_tor_driver():
-    """Chrome routed through Tor for .onion sites."""
     options = ChromeOptions()
     options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
@@ -33,7 +40,6 @@ def create_tor_driver():
 
 
 def create_direct_driver():
-    """Chrome with anti-detection flags for Ahmia."""
     options = ChromeOptions()
     options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
@@ -52,7 +58,6 @@ def create_direct_driver():
 
 
 def search_ahmia(query, pages=3):
-    """Step 1: Get seed URLs from Ahmia by submitting the search form."""
     print(f"\n[STEP 1] Searching Ahmia for: '{query}'\n", flush=True)
     driver = create_direct_driver()
     seed_urls = []
@@ -76,8 +81,6 @@ def search_ahmia(query, pages=3):
 
             for a in soup.find_all("a", href=True):
                 href = a["href"]
-
-                # Extract actual .onion URL from Ahmia redirect links
                 if "redirect_url=" in href:
                     parsed = parse_qs(urlparse(href).query)
                     if "redirect_url" in parsed:
@@ -104,7 +107,6 @@ def search_ahmia(query, pages=3):
 
     driver.quit()
 
-    # Deduplicate
     seed_urls = list(dict.fromkeys(seed_urls))
     print(f"\n  Ahmia returned {len(seed_urls)} seed URLs", flush=True)
 
@@ -113,16 +115,23 @@ def search_ahmia(query, pages=3):
         print("  WARNING: AHMIA SEARCH FAILED", flush=True)
         print("  Reason: Ahmia requires JavaScript that did not render.", flush=True)
         print("  Action: Falling back to pre-defined seed URLs.", flush=True)
-        print("  Note: Results will NOT be based on your search query.", flush=True)
         print("!" * 60 + "\n", flush=True)
         seed_urls = [
             "http://rnsm777cdsjrsdlbs4v5qoeppu3px6sb2igmh53jzrx7ipcrbjz5b2ad.onion/",
             "http://xmh57jrknzkhv6y3ls3ubitzfqnkrwxhopf5aygthi7d6rplyvk3noyd.onion/",
             "https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/",
-            "https://www.bbcnewsd73hkzno2ini43t4gblxvycyac5aw4gnv7t2rccijh7745uqd.onion/",
         ]
 
     return seed_urls
+
+
+def keyword_match(text):
+    """Check if text contains any of the configured keywords."""
+    if not KEYWORDS:
+        return True, []  # No keywords = save everything
+    text_lower = text.lower()
+    matched = [kw for kw in KEYWORDS if kw in text_lower]
+    return len(matched) > 0, matched
 
 
 def sanitize_filename(url):
@@ -131,7 +140,7 @@ def sanitize_filename(url):
     return name[:100] + ".txt"
 
 
-def save_page(url, title, text, depth, page_num):
+def save_page(url, title, text, depth, page_num, matched_keywords):
     filename = f"{page_num:03d}_depth{depth}_{sanitize_filename(url)}"
     filepath = os.path.join(OUTPUT_DIR, filename)
 
@@ -139,6 +148,7 @@ def save_page(url, title, text, depth, page_num):
         f.write(f"URL: {url}\n")
         f.write(f"Title: {title}\n")
         f.write(f"Depth: {depth}\n")
+        f.write(f"Keywords matched: {', '.join(matched_keywords)}\n")
         f.write(f"Scraped at: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}\n")
         f.write(f"{'=' * 80}\n\n")
         f.write(text)
@@ -160,9 +170,9 @@ def extract_onion_links(soup, current_url):
     return links
 
 
-def bfs_crawl(driver, seed_urls, max_depth=MAX_DEPTH, max_pages=MAX_PAGES):
-    """Step 2 & 3: BFS crawl through .onion sites."""
-    print(f"\n[STEP 2 & 3] BFS Crawl (max_depth={max_depth}, max_pages={max_pages})\n", flush=True)
+def bfs_crawl(driver, seed_urls):
+    print(f"\n[STEP 2 & 3] BFS Crawl (max_depth={MAX_DEPTH}, max_pages={MAX_PAGES})", flush=True)
+    print(f"  Keywords filter: {KEYWORDS if KEYWORDS else 'NONE (saving all)'}\n", flush=True)
 
     queue = deque()
     for url in seed_urls:
@@ -173,31 +183,32 @@ def bfs_crawl(driver, seed_urls, max_depth=MAX_DEPTH, max_pages=MAX_PAGES):
     visited = set()
     scraped_data = []
     page_count = 0
+    skipped_no_keyword = 0
 
-    while queue and page_count < max_pages:
+    while queue and page_count < MAX_PAGES:
         url, depth = queue.popleft()
 
-        if url in visited or depth > max_depth:
+        if url in visited or depth > MAX_DEPTH:
             continue
         visited.add(url)
 
-        print(f"  [{page_count + 1}/{max_pages}] Depth {depth} | {url}", flush=True)
+        print(f"  [{page_count + 1}/{MAX_PAGES}] Depth {depth} | {url}", flush=True)
 
         try:
             driver.get(url)
             time.sleep(10)
 
-            soup = BeautifulSoup(driver.page_source, "html.parser")
-
             # Skip Chrome error pages
-            page_text = driver.page_source
-            if any(err in page_text for err in [
+            page_source = driver.page_source
+            if any(err in page_source for err in [
                 "ERR_TIMED_OUT", "ERR_CONNECTION_REFUSED", "ERR_SOCKS_CONNECTION_FAILED",
-                "ERR_NAME_NOT_RESOLVED", "This site can't be reached", "took too long to respond",
-                "net::ERR_", "about:neterror"
+                "ERR_NAME_NOT_RESOLVED", "This site can't be reached",
+                "took too long to respond", "net::ERR_", "about:neterror"
             ]):
                 print(f"    SKIPPED: Site unreachable", flush=True)
                 continue
+
+            soup = BeautifulSoup(page_source, "html.parser")
 
             for tag in soup(["script", "style"]):
                 tag.decompose()
@@ -205,33 +216,46 @@ def bfs_crawl(driver, seed_urls, max_depth=MAX_DEPTH, max_pages=MAX_PAGES):
             title = soup.title.string.strip() if soup.title and soup.title.string else "N/A"
             text = soup.get_text(separator="\n", strip=True)
 
-            page_count += 1
-            filepath = save_page(url, title, text, depth, page_count)
-            print(f"    Title: {title}", flush=True)
-            print(f"    Content: {len(text)} chars | Saved: {os.path.basename(filepath)}", flush=True)
-
+            # Extract links for BFS (always, regardless of keyword match)
             new_links = extract_onion_links(soup, url)
             added = 0
             for link in new_links:
                 if link not in visited:
                     queue.append((link, depth + 1))
                     added += 1
-            print(f"    New links found: {len(new_links)} | Added to queue: {added}", flush=True)
 
-            scraped_data.append({
-                "url": url,
-                "title": title,
-                "depth": depth,
-                "content_length": len(text),
-                "links_found": len(new_links),
-                "file": os.path.basename(filepath),
-            })
+            # Keyword filtering - only save if keywords match
+            has_match, matched_keywords = keyword_match(text)
+
+            if has_match:
+                page_count += 1
+                filepath = save_page(url, title, text, depth, page_count, matched_keywords)
+                print(f"    SAVED | Title: {title}", flush=True)
+                print(f"    Keywords: {matched_keywords}", flush=True)
+                print(f"    Content: {len(text)} chars | File: {os.path.basename(filepath)}", flush=True)
+
+                scraped_data.append({
+                    "url": url,
+                    "title": title,
+                    "depth": depth,
+                    "content_length": len(text),
+                    "keywords_matched": matched_keywords,
+                    "links_found": len(new_links),
+                    "file": os.path.basename(filepath),
+                })
+            else:
+                skipped_no_keyword += 1
+                print(f"    NO KEYWORD MATCH - skipped (links still followed)", flush=True)
+
+            print(f"    Links: {len(new_links)} found, {added} added to queue", flush=True)
 
         except Exception as e:
             print(f"    FAILED: {type(e).__name__}: {str(e)[:100]}", flush=True)
 
         time.sleep(5)
 
+    print(f"\n  Pages saved: {page_count}", flush=True)
+    print(f"  Pages skipped (no keyword): {skipped_no_keyword}", flush=True)
     return scraped_data
 
 
@@ -239,21 +263,29 @@ if __name__ == "__main__":
     print("=" * 60, flush=True)
     print("  DARK WEB BFS CRAWLER", flush=True)
     print("=" * 60, flush=True)
+    print(f"\n  Config:", flush=True)
+    print(f"    Search engine: {SEARCH_ENGINE}", flush=True)
+    print(f"    Query: {QUERY}", flush=True)
+    print(f"    Keywords: {KEYWORDS if KEYWORDS else 'None (save all)'}", flush=True)
+    print(f"    Max depth: {MAX_DEPTH}", flush=True)
+    print(f"    Max pages: {MAX_PAGES}", flush=True)
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # Take search query from user
-    query = input("\nEnter search query: ")
-    print(f"  Searching for: '{query}'\n", flush=True)
-
-    # Step 1
-    seed_urls = search_ahmia(query, pages=2)
+    # Step 1: Search
+    if SEARCH_ENGINE == "ahmia":
+        seed_urls = search_ahmia(QUERY, pages=2)
+    else:
+        print(f"  Unknown search engine: {SEARCH_ENGINE}", flush=True)
+        sys.exit(1)
 
     print(f"\nSeed URLs ({len(seed_urls)}):", flush=True)
-    for i, url in enumerate(seed_urls, 1):
+    for i, url in enumerate(seed_urls[:20], 1):
         print(f"  {i}. {url}", flush=True)
+    if len(seed_urls) > 20:
+        print(f"  ... and {len(seed_urls) - 20} more", flush=True)
 
-    # Step 2 & 3
+    # Step 2 & 3: BFS crawl
     print("\nStarting Tor browser...", flush=True)
     driver = create_tor_driver()
 
@@ -265,15 +297,14 @@ if __name__ == "__main__":
     else:
         print("WARNING: Tor may not be connected\n", flush=True)
 
-    scraped_data = bfs_crawl(driver, seed_urls, max_depth=MAX_DEPTH, max_pages=MAX_PAGES)
+    scraped_data = bfs_crawl(driver, seed_urls)
     driver.quit()
 
     # Save summary
     summary = {
-        "query": query,
+        "config": config,
         "seed_urls": seed_urls,
         "total_pages_scraped": len(scraped_data),
-        "max_depth": MAX_DEPTH,
         "pages": scraped_data,
     }
     summary_path = os.path.join(OUTPUT_DIR, "crawl_summary.json")
@@ -282,7 +313,6 @@ if __name__ == "__main__":
 
     print(f"\n{'=' * 60}", flush=True)
     print(f"  CRAWL COMPLETE", flush=True)
-    print(f"  Pages scraped: {len(scraped_data)}", flush=True)
-    print(f"  Output directory: {OUTPUT_DIR}", flush=True)
-    print(f"  Summary: crawl_summary.json", flush=True)
+    print(f"  Pages saved (keyword match): {len(scraped_data)}", flush=True)
+    print(f"  Output: {OUTPUT_DIR}", flush=True)
     print(f"{'=' * 60}", flush=True)
