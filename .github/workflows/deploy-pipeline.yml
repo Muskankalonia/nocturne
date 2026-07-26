@@ -1,0 +1,57 @@
+name: Deploy Snowflake Pipeline
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'snowflake/**'
+      - 'deploy_pipeline.py'
+  workflow_dispatch:
+    inputs:
+      step:
+        description: 'Run specific step (1-6), or leave empty for all'
+        required: false
+      verify_only:
+        description: 'Only verify pipeline health (true/false)'
+        required: false
+        default: 'false'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: snowflake-prod
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r snowflake/requirements.txt
+
+      - name: Deploy pipeline
+        env:
+          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_TOKEN: ${{ secrets.SNOWFLAKE_TOKEN }}
+          SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE }}
+        run: |
+          ARGS=""
+          if [ "${{ github.event.inputs.step }}" != "" ]; then
+            ARGS="--step ${{ github.event.inputs.step }}"
+          fi
+          if [ "${{ github.event.inputs.verify_only }}" == "true" ]; then
+            ARGS="--verify-only"
+          fi
+          python deploy_pipeline.py $ARGS
+
+      - name: Verify deployment
+        if: github.event.inputs.verify_only != 'true'
+        env:
+          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_TOKEN: ${{ secrets.SNOWFLAKE_TOKEN }}
+          SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE }}
+        run: python deploy_pipeline.py --verify-only
