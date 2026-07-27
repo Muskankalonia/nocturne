@@ -20,6 +20,16 @@ executed and does not expose an HTTP service.
 │       ├── __init__.py
 │       ├── scraper.py
 │       └── storage.py
+├── deploy_pipeline.py
+├── snowflake/
+│   ├── requirements.txt
+│   ├── 01_storage_integration.sql
+│   ├── 02_ingestion_layer.sql
+│   ├── 03_detect_indicators_udf.sql
+│   ├── 04_dt_regex_indicators.sql
+│   ├── 05_dt_classification.sql
+│   ├── 06_seed_verify_golive.sql
+│   └── queries.sql
 └── tests/
     └── test_storage.py
 ```
