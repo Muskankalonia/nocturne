@@ -5,11 +5,14 @@ Deploys the Snowflake classification pipeline by executing SQL files in order.
 Handles multi-statement SQL files, logs progress, and verifies each step.
 
 Usage:
-    # With .env file (recommended for local dev)
+    # Existing storage integration/IAM: deploy and go live with steps 02-10
     python deploy_pipeline.py
 
-    # With explicit args
-    python deploy_pipeline.py --account <account> --user <user> --warehouse COMPUTE_WH
+    # Fresh environment: also create step 01's storage integration
+    python deploy_pipeline.py --include-storage-integration
+
+    # Run one numbered SQL step
+    python deploy_pipeline.py --step 7
 
     # Dry run (no connection needed)
     python deploy_pipeline.py --dry-run
@@ -57,14 +60,23 @@ log = logging.getLogger("nocturne_deploy")
 
 SQL_DIR = Path(__file__).parent / "snowflake"
 
-DEPLOY_ORDER = [
-    "01_storage_integration.sql",
-    "02_ingestion_layer.sql",
-    "03_detect_indicators_udf.sql",
-    "04_dt_regex_indicators.sql",
-    "05_dt_classification.sql",
-    "06_seed_verify_golive.sql",
-]
+DEPLOY_STEPS = {
+    1: "01_storage_integration.sql",
+    2: "02_ingestion_layer.sql",
+    3: "03_target_configuration.sql",
+    4: "04_detect_indicators_udf.sql",
+    5: "05_dt_regex_indicators.sql",
+    6: "06_build_classification_input_udf.sql",
+    7: "07_dt_l1_classification_input.sql",
+    8: "08_dt_relationship_classification.sql",
+    9: "09_dt_leak_type_severity.sql",
+    10: "10_seed_validate_golive.sql",
+}
+
+# Replacing a configured storage integration can change its Snowflake-generated
+# GCS identity and invalidate the bucket IAM grant. Existing environments only
+# need steps 02-10, so step 01 requires an explicit CLI option.
+DEFAULT_DEPLOY_STEPS = tuple(range(2, 11))
 
 
 def parse_sql_statements(filepath: Path) -> list[str]:
@@ -135,11 +147,39 @@ def verify_pipeline(conn: snowflake.connector.SnowflakeConnection):
     log.info("Verifying pipeline...")
 
     checks = [
-        ("Streams", "SHOW STREAMS IN SCHEMA NOCTURNE.RAW"),
+        (
+            "Monitored organizations",
+            """
+            SELECT ORG_ID, CANONICAL_NAME, ENABLED
+            FROM NOCTURNE.CONFIG.MONITORED_ORGANIZATIONS
+            ORDER BY ORG_ID
+            """,
+        ),
         ("Tasks", "SHOW TASKS IN SCHEMA NOCTURNE.RAW"),
         ("Dynamic Tables", "SHOW DYNAMIC TABLES IN SCHEMA NOCTURNE.RAW"),
         ("Raw pages count", "SELECT COUNT(*) AS cnt FROM NOCTURNE.RAW.CRAWL_PAGES"),
-        ("Classification results", "SELECT CATEGORY, COUNT(*) AS cnt FROM NOCTURNE.RAW.DT_PAGE_CLASSIFICATION GROUP BY CATEGORY ORDER BY cnt DESC"),
+        (
+            "L0 pages count",
+            "SELECT COUNT(*) AS cnt FROM NOCTURNE.RAW.DT_REGEX_INDICATORS",
+        ),
+        (
+            "Classification results",
+            """
+            SELECT
+              RELATIONSHIP_AI_STATUS,
+              RELATIONSHIP_LABEL,
+              LEAK_TYPE_AI_STATUS,
+              PRELIMINARY_SEVERITY_BAND,
+              COUNT(*) AS PAGE_COUNT
+            FROM NOCTURNE.RAW.DT_PAGE_CLASSIFICATION
+            GROUP BY
+              RELATIONSHIP_AI_STATUS,
+              RELATIONSHIP_LABEL,
+              LEAK_TYPE_AI_STATUS,
+              PRELIMINARY_SEVERITY_BAND
+            ORDER BY PAGE_COUNT DESC
+            """,
+        ),
     ]
 
     cur = conn.cursor()
@@ -157,85 +197,122 @@ def verify_pipeline(conn: snowflake.connector.SnowflakeConnection):
 
 
 def generate_report(conn: snowflake.connector.SnowflakeConnection, output_path: Path):
-    """Generate a full classification report and save to file."""
-    import json
+    """Generate a metadata-only classification report and save it to a file."""
     from datetime import datetime
 
     log.info(f"Generating report -> {output_path}")
     cur = conn.cursor(snowflake.connector.DictCursor)
 
-    # Summary stats
     cur.execute("SELECT COUNT(*) AS total FROM NOCTURNE.RAW.CRAWL_PAGES")
     total = cur.fetchone()["TOTAL"]
 
-    cur.execute("SELECT CATEGORY, COUNT(*) AS CNT FROM NOCTURNE.RAW.DT_PAGE_CLASSIFICATION GROUP BY CATEGORY ORDER BY CNT DESC")
-    categories = cur.fetchall()
-
-    # Full classification details
     cur.execute("""
-        SELECT DOC_ID, TITLE, URL, CATEGORY, INDICATORS_FOUND, RAW_TEXT
+        SELECT
+          RELATIONSHIP_AI_STATUS,
+          RELATIONSHIP_LABEL,
+          PRELIMINARY_SEVERITY_BAND,
+          COUNT(*) AS CNT
         FROM NOCTURNE.RAW.DT_PAGE_CLASSIFICATION
-        ORDER BY CATEGORY, TITLE
+        GROUP BY
+          RELATIONSHIP_AI_STATUS,
+          RELATIONSHIP_LABEL,
+          PRELIMINARY_SEVERITY_BAND
+        ORDER BY CNT DESC
+    """)
+    summary_rows = cur.fetchall()
+
+    # Do not write RAW_TEXT or exact indicator matches into a local report.
+    cur.execute("""
+        SELECT
+          DOC_ID,
+          TITLE,
+          URL,
+          RELATIONSHIP_AI_STATUS,
+          RELATIONSHIP_LABEL,
+          IS_RELEVANT,
+          INDICATOR_SUMMARY,
+          EVIDENCE_SCORE,
+          TARGET_MATCH_SCORE,
+          TARGET_RELEVANCE_SCORE,
+          LEAK_TYPE_LABELS,
+          LEAK_TYPE_AI_STATUS,
+          IMPACT_SCORE,
+          PRELIMINARY_SEVERITY_SCORE,
+          PRELIMINARY_SEVERITY_BAND
+        FROM NOCTURNE.RAW.DT_PAGE_CLASSIFICATION
+        ORDER BY PRELIMINARY_SEVERITY_SCORE DESC NULLS LAST, TITLE
     """)
     pages = cur.fetchall()
     cur.close()
 
-    # Build report
     lines = []
     lines.append("=" * 80)
     lines.append("NOCTURNE CLASSIFICATION REPORT")
-    lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"Generated: {datetime.now().astimezone().isoformat(timespec='seconds')}")
     lines.append("=" * 80)
     lines.append("")
     lines.append("SUMMARY")
     lines.append("-" * 40)
     lines.append(f"  Total pages ingested: {total}")
-    for cat in categories:
-        lines.append(f"  {cat['CATEGORY']:12s}: {cat['CNT']}")
+    for row in summary_rows:
+        lines.append(
+            "  "
+            f"relationship_status={row['RELATIONSHIP_AI_STATUS']}, "
+            f"relationship={row['RELATIONSHIP_LABEL']}, "
+            f"severity={row['PRELIMINARY_SEVERITY_BAND']}: "
+            f"{row['CNT']}"
+        )
+
     lines.append("")
-    lines.append("")
-
-    # Group by category
-    for category_name in ["malware", "violation", "benign"]:
-        category_pages = [p for p in pages if p["CATEGORY"] == category_name]
-        if not category_pages:
-            continue
-
-        lines.append("=" * 80)
-        lines.append(f"  CATEGORY: {category_name.upper()} ({len(category_pages)} pages)")
-        lines.append("=" * 80)
-
-        for i, page in enumerate(category_pages, 1):
-            lines.append("")
-            lines.append(f"--- [{i}] {page['TITLE']} ---")
-            lines.append(f"  URL: {page['URL']}")
-            lines.append(f"  DOC_ID: {page['DOC_ID']}")
-            if page["INDICATORS_FOUND"]:
-                lines.append(f"  INDICATORS: {page['INDICATORS_FOUND']}")
-            lines.append("")
-            lines.append("  CONTENT:")
-            # Full content, indented
-            text = page["RAW_TEXT"] or ""
-            for line in text.splitlines():
-                lines.append(f"    {line}")
-            lines.append("")
+    lines.append("PAGE METADATA")
+    lines.append("-" * 40)
+    for i, page in enumerate(pages, 1):
+        lines.append("")
+        lines.append(f"--- [{i}] {page['TITLE']} ---")
+        lines.append(f"  URL: {page['URL']}")
+        lines.append(f"  DOC_ID: {page['DOC_ID']}")
+        lines.append(
+            "  RELATIONSHIP: "
+            f"{page['RELATIONSHIP_LABEL']} "
+            f"(status={page['RELATIONSHIP_AI_STATUS']}, "
+            f"relevant={page['IS_RELEVANT']})"
+        )
+        lines.append(f"  INDICATOR SUMMARY: {page['INDICATOR_SUMMARY'] or 'none'}")
+        lines.append(
+            "  SCORES: "
+            f"evidence={page['EVIDENCE_SCORE']}, "
+            f"target_match={page['TARGET_MATCH_SCORE']}, "
+            f"target_relevance={page['TARGET_RELEVANCE_SCORE']}, "
+            f"impact={page['IMPACT_SCORE']}, "
+            f"severity={page['PRELIMINARY_SEVERITY_SCORE']} "
+            f"({page['PRELIMINARY_SEVERITY_BAND']})"
+        )
+        lines.append(
+            "  LEAK TYPES: "
+            f"{page['LEAK_TYPE_LABELS'] or 'not applicable'} "
+            f"(status={page['LEAK_TYPE_AI_STATUS']})"
+        )
 
     report_text = "\n".join(lines)
 
-    # Write to file
     output_path.write_text(report_text, encoding="utf-8")
     log.info(f"Report saved: {output_path} ({len(pages)} pages, {len(report_text)} bytes)")
 
-    # Also print summary to terminal
     print()
     print("=" * 60)
     print("  NOCTURNE CLASSIFICATION SUMMARY")
     print("=" * 60)
     print(f"  Total pages: {total}")
-    for cat in categories:
-        print(f"  {cat['CATEGORY']:12s}: {cat['CNT']}")
+    for row in summary_rows:
+        print(
+            "  "
+            f"{row['RELATIONSHIP_AI_STATUS']} / "
+            f"{row['RELATIONSHIP_LABEL']} / "
+            f"{row['PRELIMINARY_SEVERITY_BAND']}: "
+            f"{row['CNT']}"
+        )
     print()
-    print(f"  Full report saved to: {output_path}")
+    print(f"  Metadata-only report saved to: {output_path}")
     print("=" * 60)
     print()
 
@@ -249,12 +326,36 @@ def main():
     parser.add_argument("--warehouse", default=os.environ.get("SNOWFLAKE_WAREHOUSE", "COMPUTE_WH"), help="Warehouse name")
     parser.add_argument("--role", default=os.environ.get("SNOWFLAKE_ROLE", "ACCOUNTADMIN"), help="Role to use")
     parser.add_argument("--dry-run", action="store_true", help="Parse and display SQL without executing")
-    parser.add_argument("--step", type=int, help="Run only a specific step (1-6)")
+    deployment_scope = parser.add_mutually_exclusive_group()
+    deployment_scope.add_argument(
+        "--step",
+        type=int,
+        choices=DEPLOY_STEPS,
+        help="Run only the SQL file with this step number (1-10)",
+    )
+    deployment_scope.add_argument(
+        "--include-storage-integration",
+        action="store_true",
+        help="Also run step 01; omit for an existing Snowflake/GCS integration",
+    )
     parser.add_argument("--verify-only", action="store_true", help="Only run verification checks")
-    parser.add_argument("--report", nargs="?", const="output/report.txt", help="Generate full classification report (default: output/report.txt)")
+    parser.add_argument(
+        "--report",
+        nargs="?",
+        const="output/report.txt",
+        help="Generate a metadata-only classification report (default: output/report.txt)",
+    )
     args = parser.parse_args()
 
-    if not args.dry_run and not args.verify_only:
+    if args.step:
+        selected_steps = (args.step,)
+    elif args.include_storage_integration:
+        selected_steps = tuple(DEPLOY_STEPS)
+    else:
+        selected_steps = DEFAULT_DEPLOY_STEPS
+    files_to_run = [DEPLOY_STEPS[step] for step in selected_steps]
+
+    if not args.dry_run:
         if not args.account:
             parser.error("--account is required (or set SNOWFLAKE_ACCOUNT)")
         if not args.token and not args.password:
@@ -265,7 +366,7 @@ def main():
 
     if args.dry_run:
         log.info("=== DRY RUN MODE (no Snowflake connection) ===")
-        for filename in DEPLOY_ORDER:
+        for filename in files_to_run:
             filepath = SQL_DIR / filename
             if not filepath.exists():
                 log.error(f"Missing: {filepath}")
@@ -307,13 +408,12 @@ def main():
             verify_pipeline(conn)
             return
 
-        files_to_run = DEPLOY_ORDER
-        if args.step:
-            if args.step < 1 or args.step > len(DEPLOY_ORDER):
-                parser.error(f"--step must be 1-{len(DEPLOY_ORDER)}")
-            files_to_run = [DEPLOY_ORDER[args.step - 1]]
-
         log.info(f"Deploying {len(files_to_run)} file(s)...")
+        if 1 not in selected_steps:
+            log.info(
+                "Preserving existing NOCTURNE_GCS_INT; "
+                "step 01 is excluded from this deployment."
+            )
         for filename in files_to_run:
             filepath = SQL_DIR / filename
             if not filepath.exists():
