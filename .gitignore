@@ -1,5 +1,6 @@
 /output/
 .env
+.venv/
 __pycache__/
 *.pyc
 output/report*.txt
