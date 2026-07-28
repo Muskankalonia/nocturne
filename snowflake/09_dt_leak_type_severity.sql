@@ -13,7 +13,8 @@ USE ROLE ACCOUNTADMIN;
 USE SCHEMA NOCTURNE.RAW;
 
 -- Materialize exactly one type-classification call for each successful target
--- leak. Other relationship labels never incur this Cortex call.
+-- leak. Other relationship labels never incur this Cortex call. Error details
+-- return a structured OBJECT, so cast it to a dynamic-table-safe VARIANT.
 CREATE OR REPLACE DYNAMIC TABLE NOCTURNE.RAW.DT_L1_LEAK_TYPE_AI
   WAREHOUSE = COMPUTE_WH
   TARGET_LAG = DOWNSTREAM
@@ -24,7 +25,7 @@ AS
     RELATIONSHIP.DOC_ID,
     RELATIONSHIP.DEDUPE_KEY,
     RELATIONSHIP.ORG_ID,
-    AI_CLASSIFY(
+    TO_VARIANT(AI_CLASSIFY(
       CLASSIFICATION_INPUT.CLASSIFICATION_INPUT,
       [
         {
@@ -85,7 +86,7 @@ AS
         ]
       },
       TRUE
-    ) AS LEAK_TYPE_AI_RESULT
+    )) AS LEAK_TYPE_AI_RESULT
   FROM NOCTURNE.RAW.DT_PAGE_RELATIONSHIP_CLASSIFICATION AS RELATIONSHIP
   INNER JOIN NOCTURNE.RAW.DT_L1_CLASSIFICATION_INPUT AS CLASSIFICATION_INPUT
     ON RELATIONSHIP.DEDUPE_KEY = CLASSIFICATION_INPUT.DEDUPE_KEY
