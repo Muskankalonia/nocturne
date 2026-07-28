@@ -25,14 +25,20 @@ executed and does not expose an HTTP service.
 │   ├── requirements.txt
 │   ├── 01_storage_integration.sql
 │   ├── 02_ingestion_layer.sql
-│   ├── 03_detect_indicators_udf.sql
-│   ├── 04_dt_regex_indicators.sql
-│   ├── 05_dt_classification.sql
-│   ├── 06_seed_verify_golive.sql
-│   └── queries.sql
+│   ├── 03_target_configuration.sql
+│   ├── 04_detect_indicators_udf.sql
+│   ├── 05_dt_regex_indicators.sql
+│   ├── 06_build_classification_input_udf.sql
+│   ├── 07_dt_l1_classification_input.sql
+│   ├── 08_dt_relationship_classification.sql
+│   ├── 09_dt_leak_type_severity.sql
+│   └── 10_seed_validate_golive.sql
 └── tests/
     └── test_storage.py
 ```
+
+`snowflake/06_seed_verify_golive.sql` and `snowflake/queries.sql` belong to the
+previous pipeline and are not executed by `deploy_pipeline.py`.
 
 ## How storage works
 
@@ -252,6 +258,211 @@ all onion sites are unreachable. To inspect an object without saving a local gzi
 ```bash
 export NOCTURNE_OBJECT_URI="gs://your-bucket/raw/crawls/.../part-00000.jsonl.gz"
 gcloud storage cat "$NOCTURNE_OBJECT_URI" | gzip --decompress --stdout | sed -n '1p'
+```
+
+## Deploy the Snowflake pipeline
+
+The Snowflake pipeline reads crawler page parts from GCS, detects deterministic
+security indicators, selects bounded evidence windows, classifies each document
+against the monitored organization, and calculates preliminary severity.
+
+```text
+GCS part-*.jsonl.gz
+        |
+        v
+CRAWL_PAGES
+        |
+        v
+DT_REGEX_INDICATORS
+        |
+        v
+DT_L1_CLASSIFICATION_INPUT
+        |
+        v
+DT_PAGE_RELATIONSHIP_CLASSIFICATION
+        |
+        v
+DT_PAGE_CLASSIFICATION
+```
+
+The `_manifest.json` objects are deliberately excluded. Each JSONL line is loaded
+as one page, while `DEDUPE_KEY` reduces repeated content to one L1 input.
+
+### What each Snowflake file adds
+
+| Step | File | Purpose |
+| --- | --- | --- |
+| 01 | `01_storage_integration.sql` | Creates the Snowflake GCS storage integration and displays its generated GCP service account. |
+| 02 | `02_ingestion_layer.sql` | Creates the gzip JSON format, external stage, typed raw table, and suspended five-minute `COPY` task. It loads only `part-*.jsonl.gz`, uses `ABORT_STATEMENT`, and leaves GCS deletion disabled. |
+| 03 | `03_target_configuration.sql` | Creates the monitored-organization configuration and seeds Palo Alto Networks, `PANW`, and `paloaltonetworks.com`. |
+| 04 | `04_detect_indicators_udf.sql` | Creates the deterministic JavaScript indicator detector. It finds and scores validated cards, credentials, tokens, private-key markers, hashes, CVEs, emails, domains, and other indicators. |
+| 05 | `05_dt_regex_indicators.sql` | Runs the indicator detector once per page and stores its structured result without modifying `RAW_TEXT`. |
+| 06 | `06_build_classification_input_udf.sql` | Builds a maximum 16,000-character classification input from target anchors, leak terms, and L0 indicator spans. It masks retained sensitive matches and has a prefix/suffix fallback. |
+| 07 | `07_dt_l1_classification_input.sql` | Deduplicates pages by `DEDUPE_KEY`, joins enabled organizations, materializes the input builder once, and exposes its scores and selection metadata. |
+| 08 | `08_dt_relationship_classification.sql` | Calls `AI_CLASSIFY` once per unique document and organization to choose `target_data_leak`, `target_mentioned_no_leak`, `other_organization_leak`, or `no_leak`. Errors remain distinguishable from negative results. |
+| 09 | `09_dt_leak_type_severity.sql` | Calls multi-label `AI_CLASSIFY` only for confirmed target leaks to detect credential, corporate-data, PII, financial, and malware/exploit exposure. It then calculates impact, target relevance, and preliminary severity. |
+| 10 | `10_seed_validate_golive.sql` | Loads existing GCS parts synchronously, performs safe smoke queries, refreshes the final dynamic table, and resumes five-minute ingestion. |
+
+Both AI calls request error details and convert the structured response to `VARIANT`
+before storing it in a dynamic table. The first call establishes whether the data
+belongs to the monitored company. The second call runs only for a confirmed target
+leak, avoiding unnecessary Cortex calls. AI labels are decisions, not calibrated
+probabilities; deterministic target, evidence, impact, and severity fields are
+retained for explanation and later NER/knowledge-graph refinement.
+
+### Snowflake prerequisites
+
+- A warehouse named `COMPUTE_WH`, or matching changes to the SQL files.
+- A role with permission to create the database, schemas, integration, stage,
+  task, functions, and dynamic tables. The hackathon deployment uses
+  `ACCOUNTADMIN`.
+- Cortex access. Step 08 grants `SNOWFLAKE.CORTEX_USER` to `ACCOUNTADMIN`.
+- Explicit cross-region Cortex approval if `AI_CLASSIFY` is unavailable in the
+  account's local region.
+- At least one GCS `part-*.jsonl.gz` object for an end-to-end result.
+
+Create the Python environment from the repository root:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install --requirement snowflake/requirements.txt
+```
+
+Copy `.env.example` to `.env` and provide either a PAT or password:
+
+```dotenv
+SNOWFLAKE_ACCOUNT=your-org-your-account
+SNOWFLAKE_USER=your-user
+SNOWFLAKE_TOKEN=your-programmatic-access-token
+SNOWFLAKE_WAREHOUSE=COMPUTE_WH
+SNOWFLAKE_ROLE=ACCOUNTADMIN
+```
+
+`.env` is ignored by Git and must not be committed.
+
+### First deployment with an existing GCS integration
+
+Use this path when `NOCTURNE_GCS_INT` already exists and its generated Snowflake
+service account already has bucket access:
+
+```bash
+source .venv/bin/activate
+python deploy_pipeline.py --dry-run
+python deploy_pipeline.py
+```
+
+The normal command runs steps 02 through 10. It intentionally preserves step 01
+so an existing Snowflake-generated GCS identity and its IAM binding are not replaced.
+Step 10 loads current files, refreshes the L0/L1 chain, and starts the recurring task,
+so no separate `EXECUTE TASK` or `ALTER TASK ... RESUME` command is required.
+
+If `CRAWL_PAGES` comes from the old pipeline, migrate or back it up and recreate it
+before deployment. `CREATE TABLE IF NOT EXISTS` does not rename old columns such as
+`FETCH_TIMESTAMP`, `MATCHED_KEYWORDS`, or `LINK_COUNT`.
+
+### First deployment without a GCS integration
+
+Run step 01 by itself:
+
+```bash
+python deploy_pipeline.py --step 1
+```
+
+Copy `STORAGE_GCP_SERVICE_ACCOUNT` from the integration description and grant it
+bucket-scoped access:
+
+```bash
+gcloud storage buckets add-iam-policy-binding "gs://YOUR_BUCKET" \
+  --member="serviceAccount:SNOWFLAKE_GENERATED_SERVICE_ACCOUNT" \
+  --role="roles/storage.objectViewer"
+
+gcloud storage buckets add-iam-policy-binding "gs://YOUR_BUCKET" \
+  --member="serviceAccount:SNOWFLAKE_GENERATED_SERVICE_ACCOUNT" \
+  --role="roles/storage.legacyBucketReader"
+```
+
+After IAM propagation, run the normal deployment:
+
+```bash
+python deploy_pipeline.py
+```
+
+Do not use a crawler service account in place of the Snowflake-generated identity.
+The crawler writes objects; Snowflake needs read and list access.
+
+### Inspect the final output
+
+```sql
+SELECT
+  DOC_ID,
+  TITLE,
+  URL,
+  RELATIONSHIP_AI_STATUS,
+  RELATIONSHIP_LABEL,
+  IS_RELEVANT,
+  INDICATOR_SUMMARY,
+  EVIDENCE_SCORE,
+  TARGET_MATCH_SCORE,
+  TARGET_RELEVANCE_SCORE,
+  LEAK_TYPE_LABELS,
+  LEAK_TYPE_AI_STATUS,
+  IMPACT_SCORE,
+  PRELIMINARY_SEVERITY_SCORE,
+  PRELIMINARY_SEVERITY_BAND
+FROM NOCTURNE.RAW.DT_PAGE_CLASSIFICATION
+ORDER BY PRELIMINARY_SEVERITY_SCORE DESC NULLS LAST;
+```
+
+Check ingestion:
+
+```sql
+SHOW TASKS LIKE 'CRAWL_INGEST_TASK' IN SCHEMA NOCTURNE.RAW;
+
+SELECT COUNT(*) AS RAW_PAGES
+FROM NOCTURNE.RAW.CRAWL_PAGES;
+```
+
+### Running the pipeline again
+
+New crawler data does not require another deployment. The started task checks GCS
+every five minutes, and the final dynamic table has a 30-minute target lag. Snowflake
+load history skips object names that were loaded successfully.
+
+To process new GCS files immediately instead of waiting:
+
+```bash
+python deploy_pipeline.py --step 10
+```
+
+Step 10 performs a synchronous COPY, refreshes the full dependency chain, and leaves
+the five-minute task running.
+
+Do not run the complete deployment for every crawler execution. Steps 05 through 09
+use `CREATE OR REPLACE DYNAMIC TABLE`; unnecessarily recreating them can reinitialize
+data and repeat Cortex work.
+
+Use the smallest applicable redeployment:
+
+| Change made | Steps to rerun |
+| --- | --- |
+| New GCS data only | Nothing; wait for schedules, or run step 10 for an immediate result. |
+| Target organization configuration | Update step 03/configuration, then run step 10 to force an immediate refresh. |
+| Indicator detector | Steps 04, 05, 06, 07, 08, 09, and 10. |
+| Classification-input builder | Steps 06, 07, 08, 09, and 10. |
+| Deduplication/input dynamic tables | Steps 07, 08, 09, and 10. |
+| Relationship labels, prompt, or examples | Steps 08, 09, and 10. |
+| Leak types or severity formula | Steps 09 and 10. |
+| Ingestion table, stage, file format, or task | Steps 02 through 10. |
+| Fresh Snowflake environment with existing integration | Steps 02 through 10 with `python deploy_pipeline.py`. |
+
+For example, after changing only the relationship classifier:
+
+```bash
+python deploy_pipeline.py --step 8
+python deploy_pipeline.py --step 9
+python deploy_pipeline.py --step 10
 ```
 
 ## Optional scheduling

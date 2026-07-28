@@ -6,7 +6,8 @@
 -- and runs only for rows labeled target_data_leak.
 --
 -- AI_CLASSIFY is materialized once per DEDUPE_KEY/ORG_ID. The downstream table
--- extracts the label and error without invoking Cortex again.
+-- extracts the label and error without invoking Cortex again. Error details make
+-- AI_CLASSIFY return a structured OBJECT, so cast it to a supported VARIANT.
 -- =============================================================================
 
 USE ROLE ACCOUNTADMIN;
@@ -59,7 +60,7 @@ AS
     TARGET_ANCHORS_TRUNCATED,
     SELECTED_WINDOWS,
     SIGNAL_SCAN_TRUNCATED,
-    AI_CLASSIFY(
+    TO_VARIANT(AI_CLASSIFY(
       CLASSIFICATION_INPUT,
       [
         {
@@ -126,7 +127,7 @@ AS
         ]
       },
       TRUE
-    ) AS RELATIONSHIP_AI_RESULT
+    )) AS RELATIONSHIP_AI_RESULT
   FROM NOCTURNE.RAW.DT_L1_CLASSIFICATION_INPUT;
 
 CREATE OR REPLACE DYNAMIC TABLE
