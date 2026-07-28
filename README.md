@@ -21,6 +21,7 @@ executed and does not expose an HTTP service.
 │       ├── scraper.py
 │       └── storage.py
 ├── deploy_pipeline.py
+├── logs/                         # Generated timestamped pipeline logs
 ├── snowflake/
 │   ├── requirements.txt
 │   ├── 01_storage_integration.sql
@@ -361,6 +362,84 @@ so no separate `EXECUTE TASK` or `ALTER TASK ... RESUME` command is required.
 If `CRAWL_PAGES` comes from the old pipeline, migrate or back it up and recreate it
 before deployment. `CREATE TABLE IF NOT EXISTS` does not rename old columns such as
 `FETCH_TIMESTAMP`, `MATCHED_KEYWORDS`, or `LINK_COUNT`.
+
+### Deployment logs and AI-input inspection
+
+Every `deploy_pipeline.py` invocation creates `logs/` when needed and writes the
+console output to a timestamped file:
+
+```text
+logs/pipeline_YYYYMMDD_HHMMSS_UTC-OFFSET.log
+```
+
+The logs show object-level effects instead of complete SQL statements or Snowflake
+result tuples. Each step reports which stage, table, task, function, or dynamic
+table was created, replaced, refreshed, or resumed. COPY results include the
+affected GCS filename, loaded-row count, and error count.
+
+At the end of a deployment, the report includes:
+
+- raw and L0 page counts;
+- counts for all four relationship labels;
+- newly classified source filenames and titles;
+- L0 indicator type/count summaries, strength counts, and evidence scores;
+- the L1 input method, input length, truncation/fallback state, and selected
+  evidence-window offsets, scores, reasons, and included-character counts;
+- target anchor and match score;
+- relationship and leak-type statuses and labels; and
+- the impact, target-relevance, preliminary-severity calculation, band, and
+  completeness flag.
+
+Exact regex values are deliberately not written to logs. For example, the report
+records `validated_credit_card_count=1`, not the card number. The default detailed
+report is limited to pages ingested during the current run so historical pages do
+not overwhelm the terminal.
+
+Run a read-only health check without redeploying objects or calling Cortex again:
+
+```bash
+python deploy_pipeline.py --verify-only
+```
+
+To inspect the existing `target_data_leak` documents and the exact final document
+input passed to `AI_CLASSIFY`, enable prompt logging explicitly:
+
+```bash
+python deploy_pipeline.py --verify-only --log-ai-inputs
+```
+
+This command does not perform a deployment or another AI classification. It logs
+the stored `CLASSIFICATION_INPUT` used by the relationship classifier. The
+leak-type classifier uses the same stored document input for confirmed target
+leaks. Known indicator spans are masked by the input builder, but unmatched
+sensitive text can still appear, so use this option only in an appropriately
+restricted development environment.
+
+For a newly uploaded crawler part, process it immediately and include the target
+leak's masked AI input in the same run:
+
+```bash
+python deploy_pipeline.py --step 10 --log-ai-inputs
+```
+
+Inspect the newest log with:
+
+```bash
+ls -lt logs/
+less "$(ls -t logs/pipeline_*.log | head -1)"
+```
+
+The evidence-window builder intentionally sends the complete masked document when
+`RAW_TEXT` is at most 4,500 characters. Longer documents use the first 3,000
+characters, ranked middle windows, and the final 1,500 characters, all within a
+16,000-character input limit. Up to six middle windows are ranked using exact
+target anchors, leak terminology, and strong/medium L0 indicator locations. A
+short document showing `DOCUMENT TEXT` in the logged input is therefore expected;
+a longer document should show `DOCUMENT INTRODUCTION`, one or more
+`EVIDENCE WINDOW` sections when useful, and `DOCUMENT END`.
+
+The `logs/` directory is ignored by Git. Do not commit prompt logs because they can
+contain sensitive page content.
 
 ### First deployment without a GCS integration
 
