@@ -5,7 +5,7 @@ Deploys the Snowflake classification pipeline by executing SQL files in order.
 Handles multi-statement SQL files, logs progress, and verifies each step.
 
 Usage:
-    # Existing storage integration/IAM: deploy and go live with steps 02-10
+    # Existing storage integration/IAM: deploy and go live with steps 02-14
     python deploy_pipeline.py
 
     # Fresh environment: also create step 01's storage integration
@@ -72,6 +72,10 @@ DEPLOY_STEPS = {
     8: "08_dt_relationship_classification.sql",
     9: "09_dt_leak_type_severity.sql",
     10: "10_seed_validate_golive.sql",
+    11: "11_dt_l2_extraction_ai.sql",
+    12: "12_dt_l2_graph_elements.sql",
+    13: "13_dt_l3_knowledge_graph.sql",
+    14: "14_dt_l4_severity.sql",
 }
 
 STEP_TITLES = {
@@ -85,6 +89,10 @@ STEP_TITLES = {
     8: "Target relationship classification",
     9: "Leak type and severity",
     10: "Seed, validate, and go live",
+    11: "L2 claim and entity extraction",
+    12: "L2 grounding and graph elements",
+    13: "L3 knowledge graph",
+    14: "L4 final severity and insights",
 }
 
 RELATIONSHIP_LABELS = (
@@ -96,8 +104,8 @@ RELATIONSHIP_LABELS = (
 
 # Replacing a configured storage integration can change its Snowflake-generated
 # GCS identity and invalidate the bucket IAM grant. Existing environments only
-# need steps 02-10, so step 01 requires an explicit CLI option.
-DEFAULT_DEPLOY_STEPS = tuple(range(2, 11))
+# need steps 02-14, so step 01 requires an explicit CLI option.
+DEFAULT_DEPLOY_STEPS = tuple(range(2, 15))
 
 
 def configure_logging() -> Path:
