@@ -354,10 +354,24 @@ python deploy_pipeline.py --dry-run
 python deploy_pipeline.py
 ```
 
-The normal command runs steps 02 through 10. It intentionally preserves step 01
+The normal command runs steps 02 through 14. It intentionally preserves step 01
 so an existing Snowflake-generated GCS identity and its IAM binding are not replaced.
-Step 10 loads current files, refreshes the L0/L1 chain, and starts the recurring task,
-so no separate `EXECUTE TASK` or `ALTER TASK ... RESUME` command is required.
+Step 10 loads current files, refreshes the L0/L1 chain, and starts the recurring
+task; the remaining deployment steps create the L2-L4 objects. No separate
+`EXECUTE TASK` or `ALTER TASK ... RESUME` command is required.
+
+In other words, use `python deploy_pipeline.py` for normal deployments when
+`NOCTURNE_GCS_INT` already exists. If the storage integration has not been created,
+include step 01 explicitly:
+
+```bash
+python deploy_pipeline.py --include-storage-integration
+```
+
+Creating or replacing the integration can generate a new
+`STORAGE_GCP_SERVICE_ACCOUNT`. On a first-time setup, or whenever that identity
+changes, grant the displayed identity GCS read/list access as described below and
+then rerun the normal deployment.
 
 If `CRAWL_PAGES` comes from the old pipeline, migrate or back it up and recreate it
 before deployment. `CREATE TABLE IF NOT EXISTS` does not rename old columns such as
@@ -543,6 +557,29 @@ python deploy_pipeline.py --step 8
 python deploy_pipeline.py --step 9
 python deploy_pipeline.py --step 10
 ```
+
+### Clean up the Snowflake test environment
+
+The cleanup is destructive and does not create a backup. Run the interactive
+wrapper from the repository root:
+
+```bash
+source .venv/bin/activate
+python cleanup_snowflake.py
+```
+
+Type `DROP_NOCTURNE` when prompted. For explicitly confirmed non-interactive use:
+
+```bash
+python cleanup_snowflake.py --confirm DROP_NOCTURNE
+```
+
+The wrapper executes `snowflake/99_cleanup.sql`, stops on the first failure, and
+writes a timestamped `logs/cleanup_*.log`. It suspends Nocturne tasks, drops the
+complete `NOCTURNE` database, and drops `NOCTURNE_GCS_INT`. It does not remove
+`COMPUTE_WH`, Cortex roles/settings, the GCS bucket, GCS objects, or GCS IAM
+bindings. Recreating the storage integration can generate a new Snowflake GCS
+identity that must be granted bucket access again.
 
 ## Optional scheduling
 

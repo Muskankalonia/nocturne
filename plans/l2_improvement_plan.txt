@@ -1,0 +1,393 @@
+# Hackathon L2 Filtering, AI Deduplication, and Cleanup Plan
+
+## Summary
+
+Keep L1 as a high-recall classifier and make L2 the strong ownership filter.
+
+L3 will contain:
+
+- Confirmed leaks affecting the monitored target.
+- Confirmed leaks affecting other organizations.
+
+These will be separated with a graph scope. Only confirmed target-owned leaks can enter L4 target severity and alerts.
+
+Replace AI-backed dynamic-table expressions with persistent result tables so repeated deployment does not repeat `AI_CLASSIFY` or `AI_COMPLETE` calls. Existing results will not be migrated because this is a testing environment; the first deployment will perform one intentional recalculation, while later deployments reuse stored results.
+
+## Key Changes
+
+### 1. Prevent repeated AI calls
+
+The repository currently has three Cortex call locations:
+
+- L1 relationship `AI_CLASSIFY`.
+- L1 leak-type `AI_CLASSIFY`.
+- L2 extraction `AI_COMPLETE`.
+
+Replace each AI dynamic table with:
+
+- A persistent result table created using `CREATE TABLE IF NOT EXISTS`.
+- A candidate query containing only documents without an existing result.
+- A scheduled Snowflake task that inserts results only for missing `(DEDUPE_KEY, ORG_ID)` combinations.
+- Downstream dynamic tables that read the stored result instead of calling AI.
+
+Each result table stores:
+
+```text
+DOC_ID
+DEDUPE_KEY
+ORG_ID
+INPUT_SHA256
+PROMPT_VERSION
+MODEL_NAME
+STATUS
+RESULT
+ERROR
+CALLED_AT
+QUERY_ID
+```
+
+Rules:
+
+- A document is called once per AI stage.
+- Successful results are reused across deployments.
+- Errors are stored and are not retried automatically.
+- Prompt or model changes do not automatically reprocess existing documents.
+- During testing, intentional reprocessing is done by deleting that document’s cached result or cleaning the environment.
+- `deploy_pipeline.py`, Step 10 refreshes, verification, reports, and tests must not invoke Cortex directly.
+- Normal scheduled executions with no new candidates perform zero AI calls.
+- Add query tags so relationship, leak-type, and L2 usage can be separated in Snowflake usage history.
+- Deployment logs show cache rows, new candidates, stored errors, and recent credits by AI stage.
+
+There will be no per-run or daily call limits, no new AI CLI flags, and the current L2 output token limit remains unchanged.
+
+### 2. AI task activation
+
+AI tasks are created/replaced in Snowflake’s normal suspended state, then automatically resumed by the go-live SQL after validation.
+
+Tasks run every five minutes:
+
+```text
+RELATIONSHIP_AI_TASK
+LEAK_TYPE_AI_TASK
+L2_EXTRACTION_AI_TASK
+```
+
+They are independent and process all currently missing candidates. Because later stages depend on stored earlier-stage results, a document may require more than one five-minute cycle to reach L3.
+
+Repeated deployment may recreate the task definitions but will not remove the persistent result tables, so it will not repeat completed calls.
+
+### 3. Evidence-only L2 input
+
+Extend the current input builder with a separate `EVIDENCE_INPUT` containing:
+
+- Page title.
+- Masked selected evidence windows.
+- Masked prefix/suffix fallback when necessary.
+- Indicator summary where useful.
+- No target profile.
+- No canonical organization supplied as trusted prompt text.
+- No configured aliases, domains, or products.
+
+The existing L1 `CLASSIFICATION_INPUT` remains unchanged.
+
+L2 receives only `EVIDENCE_INPUT`, preventing the model from extracting the monitored organization merely because it was present in prompt metadata.
+
+### 4. L2 candidate selection
+
+Send these documents to L2:
+
+- Successful `target_data_leak`.
+- Successful `other_organization_leak`.
+- `target_mentioned_no_leak` only when the full-document scan found:
+  - At least one target anchor.
+  - At least one leak signal or strong/medium indicator.
+
+This preserves ambiguous high-recall cases without paying for ordinary articles and mentions that have no leak evidence.
+
+### 5. Tolerant evidence validation
+
+Use three grounding levels:
+
+```text
+exact
+normalized
+unmatched
+```
+
+Normalized grounding handles messy dark-web formatting by:
+
+- Applying Unicode NFKC normalization.
+- Removing zero-width characters.
+- Normalizing line endings.
+- Converting common Unicode quotes and dashes.
+- Collapsing repeated whitespace.
+
+Do not use loose edit-distance or embedding similarity for evidence validation.
+
+Rules:
+
+- Exact and normalized matches are accepted.
+- Exact matches retain original offsets.
+- Normalized matches retain the evidence and selected-window identity but do not invent exact offsets.
+- Unmatched output remains stored for auditing.
+- Unmatched claims and edges do not enter the promoted graph.
+- An unmatched item does not cause the entire document to fail.
+- One invalid relationship does not discard valid claims or entities from the same page.
+
+This is tolerant of formatting noise while still preventing unsupported AI output from creating target incidents.
+
+### 6. Relationship and endpoint validation
+
+Allow only structurally valid relationships:
+
+```text
+actor_alias → MADE_CLAIM → claim
+claim → ALLEGEDLY_AFFECTS → organization
+actor_alias → OFFERS_FOR_SALE → claim or data_asset
+actor_alias or data_asset → LISTED_ON → marketplace
+actor_alias → CONTACTED_VIA → contact_channel
+claim → MENTIONS → entity
+```
+
+Validate:
+
+- Unique claim and entity IDs.
+- Correct `claim_` and `entity_` prefixes.
+- Existing relationship endpoints.
+- Compatible endpoint types.
+- Organization/entity mentions supported by accepted evidence.
+- Bounded claims, entities, and edges per document.
+
+Invalid elements receive reason codes and remain visible in validation output but do not enter L3.
+
+### 7. Entity resolution
+
+For the monitored organization:
+
+- Match canonical name and configured aliases using normalized exact matching.
+- Match configured domains independently.
+- Treat an exact configured domain inside leak evidence as strong target evidence.
+- Treat product names as context only; products cannot establish ownership.
+- Keep fuzzy name matches as ambiguous rather than automatically merging them.
+
+For other organizations:
+
+- Use normalized exact organization names.
+- Add `domain` and `product` entity types.
+- Preserve both observed and normalized names.
+- Keep similar-looking organizations separate.
+- Include marketplace/source context in generic actor keys such as `admin` or `seller`.
+
+Expose:
+
+```text
+ENTITY_MATCH_STATUS
+ENTITY_MATCH_CONFIDENCE
+RESOLVED_ORG_ID
+RESOLVED_ORG_NODE_KEY
+IS_MONITORED_ORG
+```
+
+### 8. L2 routing and graph eligibility
+
+Create one routing result per document and monitored-organization assessment:
+
+```text
+target_confirmed
+other_organization_confirmed
+ambiguous
+not_relevant
+extraction_error
+```
+
+Target confirmation requires:
+
+```text
+accepted leak claim
+AND
+resolved monitored organization
+AND
+accepted claim → ALLEGEDLY_AFFECTS → organization edge
+```
+
+Routing behavior:
+
+| Condition | Route |
+|---|---|
+| Grounded leak affects monitored target | `target_confirmed` |
+| Grounded leak affects another organization | `other_organization_confirmed` |
+| Target exists but is not connected to leak | `ambiguous` |
+| No target anchor and no target entity | `not_relevant` |
+| L2 failed | `extraction_error` |
+
+Persist:
+
+```text
+GRAPH_SCOPE
+L3_ELIGIBLE
+TARGET_ALERT_ELIGIBLE
+ROUTING_REASON
+TARGET_LEAK_RELATION_GROUNDED
+AFFECTED_ORG_NODE_KEY
+```
+
+Graph scopes:
+
+```text
+target_incident
+external_context
+```
+
+Both confirmed target and other-organization leaks enter L3. Only `target_incident` rows receive target severity.
+
+### 9. L3 and minimal corroboration correction
+
+Keep the current simple hackathon corroboration model rather than introducing claim categories, time buckets, or complex event signatures.
+
+Apply only these corrections:
+
+- Only accepted, grounded, L3-eligible claims and edges enter the graph.
+- Count distinct `CONTENT_SHA256` rather than `DEDUPE_KEY`.
+- Same-content mirrors count as repeat sightings, not separate corroboration.
+- Keep the current organization-subject grouping as a documented hackathon limitation.
+- Ensure one claim connected to multiple subjects does not inflate unique claim counts.
+- Preserve `GRAPH_SCOPE` throughout nodes, edges, and claim records.
+
+### 10. L4 target severity isolation
+
+L4 must require:
+
+```text
+TARGET_ALERT_ELIGIBLE = TRUE
+AND GRAPH_SCOPE = 'target_incident'
+```
+
+Remove the current broad condition:
+
+```sql
+RELATIONSHIP_LABEL <> 'no_leak'
+```
+
+Do not use the presence of any monitored-organization entity as proof of attribution.
+
+Require an accepted target ownership edge. Other-organization leaks remain available in L3 but receive:
+
+```text
+TARGET_ALERT_ELIGIBLE = FALSE
+TARGET_SEVERITY_SCORE = NULL
+```
+
+Marketplace navigation links and unrelated target mentions must never receive target severity.
+
+### 11. Model and data residency
+
+The current Snowflake account uses `ANY_REGION`. Change the documented hackathon policy to `AWS_APJ`.
+
+- Deployment checks the current account region and cross-region configuration.
+- Do not silently change account-level settings.
+- Do not silently switch models.
+- Continue using the explicitly configured L2 model.
+- Log the model and region policy.
+- Document the administrator command for setting `AWS_APJ`.
+- Fail the L2 readiness check with a clear message if the selected model cannot run under the configured policy.
+- A synthetic model preflight remains optional and manual so it cannot cause an unexpected Cortex call.
+
+### 12. Cleanup file
+
+Add `snowflake/99_cleanup.sql`, excluded from deployment.
+
+It will:
+
+1. Suspend the ingestion and all AI tasks.
+2. Drop the complete `NOCTURNE` database.
+3. Drop `NOCTURNE_GCS_INT`.
+4. Show verification output proving the database and integration are gone.
+
+It will not:
+
+- Drop `COMPUTE_WH`.
+- Reset account-wide Cortex settings.
+- Revoke shared Snowflake roles.
+- Delete the GCS bucket or its objects.
+- Remove the old Snowflake GCS identity’s IAM binding.
+
+The file will clearly state that it is destructive and that rebuilding the storage integration may produce a new GCS identity requiring a new IAM grant.
+
+## Test Plan
+
+### AI call deduplication
+
+- Deploy once and allow the three AI tasks to process candidates.
+- Record result-table counts and Cortex usage.
+- Deploy the complete pipeline again.
+- Confirm cached result counts do not change.
+- Confirm no new AI usage is caused by deployment.
+- Run tasks with no new crawler data and verify zero new result rows.
+- Upload one new document and confirm one relationship call.
+- Confirm leak-type and L2 calls occur only if that document becomes eligible.
+- Confirm stored AI errors are not retried automatically.
+- Confirm `--verify-only` performs zero AI calls.
+
+### Deterministic L2 fixtures
+
+Use mocked AI JSON so tests consume no Cortex credits:
+
+- Explicit monitored-target leak.
+- Exact target domain in leaked evidence.
+- Other-organization leak.
+- Target only in marketplace navigation.
+- Target entity present but unrelated to leak.
+- No target anchor and no target entity.
+- Ambiguous generic bank listing.
+- Prompt-injection text.
+- Exact evidence.
+- Whitespace/Unicode-normalized evidence.
+- Entirely unsupported evidence.
+- Reversed endpoint.
+- Invalid endpoint type.
+- Duplicate local IDs.
+- Dangling relationships.
+- Multiple monitored organizations.
+
+### Acceptance criteria
+
+- Target marketplace navigation fixture does not enter L3.
+- Confirmed other-organization leak enters L3 with `external_context`.
+- Confirmed other-organization leak receives no target severity.
+- Confirmed target leak enters L3 with `target_incident`.
+- Zero unmatched claims or edges enter promoted graph tables.
+- Zero invalid endpoint combinations enter L3.
+- Zero target-mention rows receive L4 severity.
+- Same-content mirrors do not increase corroboration.
+- Repeated deployment produces zero additional AI calls.
+
+## Incremental File Order
+
+Change exactly one file and stop for review after every step. Commit only after explicit approval.
+
+1. `snowflake/06_build_classification_input_udf.sql` — add evidence-only L2 input.
+2. Existing classification-input fixture — verify unchanged L1 input and isolated L2 input.
+3. `snowflake/07_dt_l1_classification_input.sql` — expose evidence and routing signals.
+4. `snowflake/08_dt_relationship_classification.sql` — persistent relationship results and scheduled task.
+5. `snowflake/09_dt_leak_type_severity.sql` — persistent leak-type results and scheduled task.
+6. `snowflake/11_dt_l2_extraction_ai.sql` — persistent extraction results, candidate filtering, and error capture.
+7. `snowflake/12_dt_l2_graph_elements.sql` — tiered grounding, entity resolution, endpoint validation, and routing.
+8. New L2 fixture SQL — deterministic validation tests.
+9. `snowflake/13_dt_l3_knowledge_graph.sql` — graph scopes and minimal corroboration correction.
+10. `snowflake/14_dt_l4_severity.sql` — target-only final severity.
+11. `snowflake/10_seed_validate_golive.sql` — validate and resume ingestion plus AI tasks.
+12. `deploy_pipeline.py` — cache/task/usage verification without new execution flags.
+13. `README.md` — deployment, scheduling, residency, AI reuse, routing, and cleanup.
+14. `snowflake/99_cleanup.sql` — destructive Snowflake teardown.
+
+## Assumptions
+
+- Existing AI results may be discarded; the first deployment performs one intentional recalculation.
+- Subsequent deployments must reuse persistent results.
+- AI tasks are automatically resumed after successful go-live validation.
+- There are no artificial per-run or daily call caps.
+- L2 retains the existing output token limit.
+- Target and other-organization leaks share L3 but remain explicitly scoped.
+- Corroboration remains deliberately simple for the hackathon.
+- Evidence validation accepts exact and conservatively normalized matches.
+- Cleanup destroys all Nocturne Snowflake state without backup but leaves GCS and shared Snowflake resources untouched.
