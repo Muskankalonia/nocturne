@@ -188,6 +188,16 @@ RESOLVED_ORG_NODE_KEY
 IS_MONITORED_ORG
 ```
 
+The monitored-organization entity match is a hard admission requirement for the
+target L3 path. If L2 does not extract an organization entity that resolves to
+the currently monitored organization, the document must not enter the
+`target_incident` graph, even when L1 labeled it `target_data_leak`.
+
+This does not discard a grounded leak that clearly belongs to another
+organization. Such a document may enter L3 only through the separate
+`external_context` scope. If L2 resolves no affected-organization entity at all,
+the document is not eligible for either L3 scope.
+
 ### 8. L2 routing and graph eligibility
 
 Create one routing result per document and monitored-organization assessment:
@@ -216,8 +226,10 @@ Routing behavior:
 |---|---|
 | Grounded leak affects monitored target | `target_confirmed` |
 | Grounded leak affects another organization | `other_organization_confirmed` |
-| Target exists but is not connected to leak | `ambiguous` |
+| Target entity exists but is not connected to leak | `ambiguous`; no L3 |
+| Target anchor exists but no organization entity resolves to the monitored target | `ambiguous`; no target L3 |
 | No target anchor and no target entity | `not_relevant` |
+| No affected-organization entity is resolved | No L3 eligibility |
 | L2 failed | `extraction_error` |
 
 Persist:
@@ -239,6 +251,11 @@ external_context
 ```
 
 Both confirmed target and other-organization leaks enter L3. Only `target_incident` rows receive target severity.
+
+`L3_ELIGIBLE` is therefore true only when an accepted leak relationship resolves
+to an affected organization. `GRAPH_SCOPE = 'target_incident'` additionally
+requires that affected organization to resolve to the monitored organization.
+An L1 target label or deterministic target anchor cannot bypass this entity gate.
 
 ### 9. L3 and minimal corroboration correction
 
@@ -352,6 +369,10 @@ Use mocked AI JSON so tests consume no Cortex credits:
 ### Acceptance criteria
 
 - Target marketplace navigation fixture does not enter L3.
+- An L1 `target_data_leak` with no monitored-organization entity match does not
+  enter the target L3 path.
+- A document with no resolved affected-organization entity does not enter L3 at
+  all.
 - Confirmed other-organization leak enters L3 with `external_context`.
 - Confirmed other-organization leak receives no target severity.
 - Confirmed target leak enters L3 with `target_incident`.
