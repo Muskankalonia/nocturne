@@ -3,4 +3,4 @@ google-cloud-storage==2.19.0
 PySocks==1.7.1
 PyYAML==6.0.2
 requests==2.32.5
-selenium==4.35.0
+selenium==4.25.0
