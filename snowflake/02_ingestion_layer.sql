@@ -6,7 +6,8 @@
 --
 -- The scheduled COPY scans the external stage every five minutes. Snowflake load
 -- metadata prevents an object name that was loaded successfully from being loaded
--- again.
+-- again. Only organization-partitioned schema-v2 paths are considered, so older
+-- schema-v1 objects remain in GCS without entering this pipeline.
 -- =============================================================================
 
 USE ROLE ACCOUNTADMIN;
@@ -24,27 +25,39 @@ CREATE OR REPLACE STAGE NOCTURNE.RAW.GCS_CRAWL_STAGE
 
 -- Fail here if the Snowflake-generated identity cannot list the bucket.
 LIST @NOCTURNE.RAW.GCS_CRAWL_STAGE
-  PATTERN = '.*part-[0-9]+[.]jsonl[.]gz';
+  PATTERN = '.*org_id=[a-z0-9]+(_[a-z0-9]+)*/.*part-[0-9]+[.]jsonl[.]gz';
 
 -- Inspect one real crawler record without returning raw text or indicator values.
--- Expected types are INTEGER, VARCHAR, ARRAY, INTEGER, and VARCHAR respectively.
+-- RECORD_ORG_ID and PATH_ORG_ID are shown together so deployment can detect a
+-- crawler/path routing mistake before any downstream processing is enabled.
 SELECT
   METADATA$FILENAME AS SOURCE_FILE,
   OBJECT_KEYS($1) AS JSON_KEYS,
   TYPEOF($1:schema_version) AS SCHEMA_VERSION_TYPE,
+  TYPEOF($1:org_id) AS ORG_ID_TYPE,
+  $1:org_id::STRING AS RECORD_ORG_ID,
+  REGEXP_SUBSTR(
+    METADATA$FILENAME,
+    'org_id=([a-z0-9]+(_[a-z0-9]+)*)',
+    1,
+    1,
+    'e',
+    1
+  ) AS PATH_ORG_ID,
   TYPEOF($1:fetched_at) AS FETCHED_AT_TYPE,
   TYPEOF($1:keywords_matched) AS KEYWORDS_MATCHED_TYPE,
   TYPEOF($1:links_found) AS LINKS_FOUND_TYPE,
   TYPEOF($1:raw_text) AS RAW_TEXT_TYPE
 FROM @NOCTURNE.RAW.GCS_CRAWL_STAGE (
   FILE_FORMAT => 'NOCTURNE.RAW.JSONL_GZ_FORMAT',
-  PATTERN => '.*part-[0-9]+[.]jsonl[.]gz'
+  PATTERN => '.*org_id=[a-z0-9]+(_[a-z0-9]+)*/.*part-[0-9]+[.]jsonl[.]gz'
 )
 LIMIT 1;
 
 -- One typed row per JSONL page record. NOT NULL constraints turn missing crawler
 -- fields into load failures instead of silently accepting incomplete records.
 CREATE TABLE IF NOT EXISTS NOCTURNE.RAW.CRAWL_PAGES (
+  ORG_ID STRING NOT NULL,
   DOC_ID STRING NOT NULL,
   DEDUPE_KEY STRING NOT NULL,
   RUN_ID STRING NOT NULL,
@@ -60,6 +73,7 @@ CREATE TABLE IF NOT EXISTS NOCTURNE.RAW.CRAWL_PAGES (
   CONTENT_SHA256 STRING NOT NULL,
   RAW_TEXT STRING NOT NULL,
   SCHEMA_VERSION NUMBER NOT NULL,
+  _PATH_ORG_ID STRING NOT NULL,
   _SOURCE_FILE STRING NOT NULL,
   _INGESTED_AT TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP()
 );
@@ -71,12 +85,14 @@ CREATE OR REPLACE TASK NOCTURNE.RAW.CRAWL_INGEST_TASK
   SCHEDULE = '5 MINUTE'
 AS
   COPY INTO NOCTURNE.RAW.CRAWL_PAGES (
-    DOC_ID, DEDUPE_KEY, RUN_ID, SOURCE, QUERY, URL, TITLE,
+    ORG_ID, DOC_ID, DEDUPE_KEY, RUN_ID, SOURCE, QUERY, URL, TITLE,
     FETCHED_AT, DEPTH, KEYWORDS_MATCHED, LINKS_FOUND,
-    CONTENT_LENGTH, CONTENT_SHA256, RAW_TEXT, SCHEMA_VERSION, _SOURCE_FILE
+    CONTENT_LENGTH, CONTENT_SHA256, RAW_TEXT, SCHEMA_VERSION,
+    _PATH_ORG_ID, _SOURCE_FILE
   )
   FROM (
     SELECT
+      $1:org_id::STRING,
       $1:doc_id::STRING,
       $1:dedupe_key::STRING,
       $1:run_id::STRING,
@@ -92,16 +108,24 @@ AS
       $1:content_sha256::STRING,
       $1:raw_text::STRING,
       $1:schema_version::NUMBER,
+      REGEXP_SUBSTR(
+        METADATA$FILENAME,
+        'org_id=([a-z0-9]+(_[a-z0-9]+)*)',
+        1,
+        1,
+        'e',
+        1
+      ),
       METADATA$FILENAME
     FROM @NOCTURNE.RAW.GCS_CRAWL_STAGE
   )
   FILE_FORMAT = (FORMAT_NAME = 'NOCTURNE.RAW.JSONL_GZ_FORMAT')
-  PATTERN = '.*part-[0-9]+[.]jsonl[.]gz'
+  PATTERN = '.*org_id=[a-z0-9]+(_[a-z0-9]+)*/.*part-[0-9]+[.]jsonl[.]gz'
   ON_ERROR = 'ABORT_STATEMENT'
   -- TODO(production): Grant storage.objects.delete to the Snowflake GCS identity,
   -- validate deletion in a non-production prefix, then enable this option.
   -- PURGE = TRUE
 ;
 
--- Tasks are created suspended. Step 7 seeds and validates existing files before
--- resuming this task for ongoing five-minute ingestion.
+-- Tasks are created suspended. The final go-live step seeds and validates
+-- existing files before resuming this task for ongoing five-minute ingestion.

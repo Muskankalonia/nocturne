@@ -3,6 +3,12 @@
 search_engine: ahmia  # Options: ahmia (default)
 query: "palo alto networks"
 
+# Stable identifier carried with every crawled page from GCS through Snowflake.
+# Keep the organization profile (name, aliases, domains, and products) in
+# Snowflake; the crawler only needs this lowercase slug.
+organization:
+  org_id: palo_alto_networks
+
 # Only save pages containing at least one of these keywords
 keywords:
   - vulnerability

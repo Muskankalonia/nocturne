@@ -5,7 +5,7 @@ Deploys the Snowflake classification pipeline by executing SQL files in order.
 Handles multi-statement SQL files, logs progress, and verifies each step.
 
 Usage:
-    # Existing storage integration/IAM: deploy and go live with steps 02-14
+    # Existing storage integration/IAM: deploy and go live with steps 02-15
     python deploy_pipeline.py
 
     # Fresh environment: also create step 01's storage integration
@@ -70,12 +70,13 @@ DEPLOY_STEPS = {
     6: "06_build_classification_input_udf.sql",
     7: "07_dt_l1_classification_input.sql",
     8: "08_dt_relationship_classification.sql",
-    9: "09_dt_leak_type_severity.sql",
-    10: "10_seed_validate_golive.sql",
-    11: "11_dt_l2_extraction_ai.sql",
-    12: "12_dt_l2_graph_elements.sql",
-    13: "13_dt_l3_knowledge_graph.sql",
-    14: "14_dt_l4_severity.sql",
+    9: "09_dt_l2_extraction_ai.sql",
+    10: "10_dt_l2_grounding_routing.sql",
+    11: "11_dt_leak_type_severity.sql",
+    12: "12_dt_l3_knowledge_graph.sql",
+    13: "13_dt_l4_severity.sql",
+    14: "14_ai_incident_insights.sql",
+    15: "15_seed_validate_golive.sql",
 }
 
 STEP_TITLES = {
@@ -87,12 +88,13 @@ STEP_TITLES = {
     6: "Evidence-window input builder",
     7: "Deduplicated L1 input",
     8: "Target relationship classification",
-    9: "Leak type and severity",
-    10: "Seed, validate, and go live",
-    11: "L2 claim and entity extraction",
-    12: "L2 grounding and graph elements",
-    13: "L3 knowledge graph",
-    14: "L4 final severity and insights",
+    9: "Cached evidence-only L2 extraction",
+    10: "L2 grounding, target resolution, and routing",
+    11: "Cached target-confirmed leak types",
+    12: "Target-scoped L3 knowledge graph",
+    13: "L4 impact, confidence, and triage priority",
+    14: "Cached per-incident AI insights",
+    15: "Seed, validate, and go live",
 }
 
 RELATIONSHIP_LABELS = (
@@ -104,8 +106,44 @@ RELATIONSHIP_LABELS = (
 
 # Replacing a configured storage integration can change its Snowflake-generated
 # GCS identity and invalidate the bucket IAM grant. Existing environments only
-# need steps 02-14, so step 01 requires an explicit CLI option.
-DEFAULT_DEPLOY_STEPS = tuple(range(2, 15))
+# need steps 02-15, so step 01 requires an explicit CLI option.
+DEFAULT_DEPLOY_STEPS = tuple(range(2, 16))
+
+AI_STAGES = {
+    "relationship": {
+        "results": "NOCTURNE.RAW.RELATIONSHIP_AI_RESULTS",
+        "candidates": "NOCTURNE.RAW.DT_RELATIONSHIP_AI_CANDIDATES",
+        "task": "RELATIONSHIP_AI_TASK",
+        "query_tag": "NOCTURNE_RELATIONSHIP_AI",
+    },
+    "l2_extraction": {
+        "results": "NOCTURNE.RAW.L2_EXTRACTION_AI_RESULTS",
+        "candidates": "NOCTURNE.RAW.DT_L2_EXTRACTION_CANDIDATES",
+        "task": "L2_EXTRACTION_AI_TASK",
+        "query_tag": "NOCTURNE_L2_EXTRACTION_AI",
+    },
+    "leak_type": {
+        "results": "NOCTURNE.RAW.LEAK_TYPE_AI_RESULTS",
+        "candidates": "NOCTURNE.RAW.DT_LEAK_TYPE_AI_CANDIDATES",
+        "task": "LEAK_TYPE_AI_TASK",
+        "query_tag": "NOCTURNE_LEAK_TYPE_AI",
+    },
+    "incident_insight": {
+        "results": "NOCTURNE.RAW.INCIDENT_INSIGHT_AI_RESULTS",
+        "candidates": "NOCTURNE.RAW.INCIDENT_INSIGHT_AI_CANDIDATES",
+        "missing_candidates": (
+            "NOCTURNE.RAW."
+            "VW_INCIDENT_INSIGHT_AI_MISSING_CANDIDATES"
+        ),
+        "task": "INCIDENT_INSIGHT_AI_TASK",
+        "query_tag": "NOCTURNE_L4_INCIDENT_INSIGHT_AI",
+    },
+}
+
+INGEST_TASK_NAME = "CRAWL_INGEST_TASK"
+INCIDENT_DISCOVERY_TASK_NAME = "INCIDENT_INSIGHT_CANDIDATE_DISCOVERY_TASK"
+L2_MODEL_NAME = "claude-sonnet-4-5"
+EXPECTED_CROSS_REGION_POLICY = "AWS_APJ"
 
 
 def configure_logging() -> Path:
@@ -197,8 +235,9 @@ def _statement_messages(
 
     create_match = re.match(
         r"CREATE\s+(OR\s+REPLACE\s+)?"
-        r"(STORAGE INTEGRATION|FILE FORMAT|STAGE|SCHEMA|TABLE|TASK|FUNCTION|"
-        r"DYNAMIC TABLE)\s+(IF\s+NOT\s+EXISTS\s+)?([A-Z0-9_.$]+)",
+        r"(STORAGE INTEGRATION|DATABASE|FILE FORMAT|STAGE|SCHEMA|TABLE|TASK|FUNCTION|"
+        r"DYNAMIC TABLE|STREAM|VIEW)\s+"
+        r"(IF\s+NOT\s+EXISTS\s+)?([A-Z0-9_.$]+)",
         normalized,
     )
     if create_match:
@@ -213,6 +252,17 @@ def _statement_messages(
         else:
             action = "Created"
         return [f"{action} {object_kind}: {object_name}"]
+
+    drop_match = re.match(
+        r"DROP\s+(DYNAMIC TABLE|TABLE|VIEW|STREAM|TASK|FUNCTION)\s+"
+        r"(?:IF\s+EXISTS\s+)?([A-Z0-9_.$]+)",
+        normalized,
+    )
+    if drop_match:
+        return [
+            f"Removed obsolete {drop_match.group(1).lower()}: "
+            f"{drop_match.group(2)}"
+        ]
 
     if normalized.startswith("GRANT "):
         return ["Applied required role grant."]
@@ -271,13 +321,41 @@ def _statement_messages(
     if normalized.startswith("SHOW TASKS"):
         messages = []
         for row in rows:
+            schedule = row.get("SCHEDULE")
+            condition = row.get("CONDITION")
+            trigger = schedule or condition or "manual"
             messages.append(
                 "Task "
                 f"{row.get('NAME', 'unknown')}: "
                 f"state={row.get('STATE', 'unknown')}, "
-                f"schedule={row.get('SCHEDULE', 'none')}."
+                f"trigger={trigger}."
             )
         return messages
+
+    if normalized.startswith("SHOW DYNAMIC TABLES"):
+        incremental = sum(
+            1
+            for row in rows
+            if str(row.get("REFRESH_MODE", "")).upper() == "INCREMENTAL"
+        )
+        return [
+            f"Dynamic tables: {len(rows)} total, "
+            f"{incremental} incremental."
+        ]
+
+    if normalized.startswith("SHOW STREAMS"):
+        stale = sum(
+            1
+            for row in rows
+            if str(row.get("STALE", "")).lower() == "true"
+        )
+        return [f"Streams: {len(rows)} total, {stale} stale."]
+
+    if normalized.startswith("EXECUTE IMMEDIATE"):
+        if "GO-LIVE BLOCKED" in normalized:
+            result = next(iter(rows[0].values()), "passed") if rows else "passed"
+            return [f"Organization-isolation validation: {result}"]
+        return ["Executed Snowflake validation block."]
 
     if "OBJECT_KEYS($1)" in normalized:
         if not rows:
@@ -294,16 +372,33 @@ def _statement_messages(
         ]
 
     if "COUNT(*) AS RAW_PAGE_COUNT" in normalized and rows:
-        row = rows[0]
         return [
             "Raw validation: "
+            f"org_id={row.get('ORG_ID')}, "
+            f"path_org_id={row.get('_PATH_ORG_ID')}, "
+            f"schema={row.get('SCHEMA_VERSION')}, "
             f"pages={row.get('RAW_PAGE_COUNT')}, "
             f"distinct_doc_ids={row.get('DISTINCT_DOC_ID_COUNT')}, "
             f"distinct_dedupe_keys={row.get('DISTINCT_DEDUPE_KEY_COUNT')}, "
-            f"unexpected_schema_versions="
-            f"{row.get('UNEXPECTED_SCHEMA_VERSION_COUNT')}, "
             f"manifest_rows={row.get('MANIFEST_ROW_COUNT')}."
+            for row in rows
         ]
+
+    if "CACHED_RESULT_COUNT" in normalized:
+        return [
+            "AI cache: "
+            f"stage={row.get('AI_STAGE')}, org_id={row.get('ORG_ID')}, "
+            f"status={row.get('STATUS')}, rows={row.get('CACHED_RESULT_COUNT')}."
+            for row in rows
+        ] or ["AI caches are empty before go-live."]
+
+    if "MISSING_CANDIDATE_COUNT" in normalized:
+        return [
+            "AI candidates: "
+            f"stage={row.get('AI_STAGE')}, org_id={row.get('ORG_ID')}, "
+            f"missing={row.get('MISSING_CANDIDATE_COUNT')}."
+            for row in rows
+        ] or ["No missing AI candidates before go-live."]
 
     if (
         "RELATIONSHIP_AI_STATUS" in normalized
@@ -370,6 +465,8 @@ def _variant_array(value: Any) -> list[Any]:
         return []
     if isinstance(value, list):
         return value
+    if isinstance(value, tuple):
+        return list(value)
     if isinstance(value, str):
         try:
             parsed = json.loads(value)
@@ -382,7 +479,323 @@ def _variant_array(value: Any) -> list[Any]:
 def _display_bool(value: Any) -> str:
     if value is None:
         return "unknown"
+    if isinstance(value, str):
+        if value.lower() in {"true", "yes", "1"}:
+            return "true"
+        if value.lower() in {"false", "no", "0"}:
+            return "false"
     return str(bool(value)).lower()
+
+
+def _truncated(value: Any, limit: int = 240) -> str:
+    if value is None:
+        return ""
+    text = " ".join(str(value).split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _check_ai_readiness(
+    conn: snowflake.connector.SnowflakeConnection,
+    strict: bool = False,
+) -> bool:
+    """Check model and residency policy without invoking a Cortex function."""
+    region = _fetch_dicts(
+        conn,
+        "SELECT CURRENT_REGION() AS REGION",
+    )[0]["REGION"]
+    parameter_rows = _fetch_dicts(
+        conn,
+        "SHOW PARAMETERS LIKE 'CORTEX_ENABLED_CROSS_REGION' IN ACCOUNT",
+    )
+    policy = str(
+        parameter_rows[0].get("VALUE", "DISABLED")
+        if parameter_rows
+        else "DISABLED"
+    ).upper()
+    model_rows = _fetch_dicts(
+        conn,
+        f"SHOW CORTEX BASE MODELS LIKE '{L2_MODEL_NAME}' "
+        "IN SNOWFLAKE.MODELS",
+    )
+
+    availability = ""
+    lifecycle = "not_visible"
+    if model_rows:
+        availability = str(model_rows[0].get("AVAILABLE_REGIONS", "")).upper()
+        lifecycle = str(
+            model_rows[0].get("LIFECYCLE_STATUS", "unknown")
+        ).lower()
+
+    region_upper = str(region).upper()
+    local_available = region_upper in availability
+    policy_prefixes = {
+        "AWS_APJ": ("AWS_AP_", "AWS_ASIA_", "AWS_APJ"),
+        "AWS_US": ("AWS_US_", "AWS_CA_", "AWS_US"),
+        "AWS_EU": ("AWS_EU_", "AWS_EU"),
+        "AWS_AU": ("AWS_AP_SOUTHEAST_2", "AWS_AU"),
+        "AZURE_US": ("AZURE_US",),
+        "AZURE_EU": ("AZURE_EU",),
+        "GCP_US": ("GCP_US",),
+    }
+    cross_region_available = (
+        policy == "ANY_REGION" and bool(model_rows)
+    ) or any(
+        prefix in availability for prefix in policy_prefixes.get(policy, ())
+    )
+    ready = (
+        bool(model_rows)
+        and lifecycle.upper() != "EOL"
+        and (local_available or cross_region_available)
+    )
+
+    log.info(
+        "AI residency: account_region=%s, cross_region_policy=%s, "
+        "expected_policy=%s",
+        region,
+        policy,
+        EXPECTED_CROSS_REGION_POLICY,
+    )
+    log.info(
+        "AI model readiness: model=%s, lifecycle=%s, ready=%s",
+        L2_MODEL_NAME,
+        lifecycle,
+        _display_bool(ready),
+    )
+    if policy != EXPECTED_CROSS_REGION_POLICY:
+        log.warning(
+            "  Cross-region policy is %s; the documented hackathon policy is %s. "
+            "The deployer will not change this account setting.",
+            policy,
+            EXPECTED_CROSS_REGION_POLICY,
+        )
+    if not ready:
+        message = (
+            f"Model {L2_MODEL_NAME} is not available to the current role in "
+            f"account region {region} under cross-region policy {policy}. "
+            "No synthetic Cortex preflight was executed."
+        )
+        if strict:
+            raise RuntimeError(message)
+        log.warning("  %s", message)
+    return ready
+
+
+def _log_task_health(
+    conn: snowflake.connector.SnowflakeConnection,
+) -> None:
+    task_names = {INGEST_TASK_NAME} | {
+        str(config["task"]) for config in AI_STAGES.values()
+    }
+    task_names.add(INCIDENT_DISCOVERY_TASK_NAME)
+    tasks = _fetch_dicts(
+        conn,
+        "SHOW TASKS IN SCHEMA NOCTURNE.RAW",
+    )
+    log.info("Task state:")
+    for task in sorted(
+        (row for row in tasks if row.get("NAME") in task_names),
+        key=lambda row: str(row.get("NAME")),
+    ):
+        trigger = task.get("SCHEDULE") or task.get("CONDITION") or "manual"
+        log.info(
+            "  %s: state=%s, trigger=%s",
+            task.get("NAME"),
+            task.get("STATE", "unknown"),
+            trigger,
+        )
+
+    failures = _fetch_dicts(
+        conn,
+        """
+        SELECT NAME, STATE, SCHEDULED_TIME, QUERY_ID, ERROR_MESSAGE
+        FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.TASK_HISTORY(
+          SCHEDULED_TIME_RANGE_START => DATEADD('hour', -24, CURRENT_TIMESTAMP()),
+          SCHEDULED_TIME_RANGE_END => CURRENT_TIMESTAMP(),
+          RESULT_LIMIT => 500,
+          ERROR_ONLY => TRUE
+        ))
+        WHERE DATABASE_NAME = 'NOCTURNE'
+          AND SCHEMA_NAME = 'RAW'
+          AND NAME IN (
+            'CRAWL_INGEST_TASK',
+            'RELATIONSHIP_AI_TASK',
+            'L2_EXTRACTION_AI_TASK',
+            'LEAK_TYPE_AI_TASK',
+            'INCIDENT_INSIGHT_AI_TASK',
+            'INCIDENT_INSIGHT_CANDIDATE_DISCOVERY_TASK'
+          )
+        ORDER BY SCHEDULED_TIME DESC
+        LIMIT 10
+        """,
+    )
+    if not failures:
+        log.info("  Recent task failures: none in the last 24 hours.")
+    for failure in failures:
+        log.warning(
+            "  Task failure: %s at %s — %s (query_id=%s)",
+            failure.get("NAME"),
+            failure.get("SCHEDULED_TIME"),
+            _truncated(failure.get("ERROR_MESSAGE"), 320),
+            failure.get("QUERY_ID"),
+        )
+
+
+def _suspend_existing_pipeline_tasks(
+    conn: snowflake.connector.SnowflakeConnection,
+) -> None:
+    """Pause existing work before a complete redeploy mutates upstream state."""
+    task_names = {INGEST_TASK_NAME} | {
+        str(config["task"]) for config in AI_STAGES.values()
+    }
+    task_names.add(INCIDENT_DISCOVERY_TASK_NAME)
+    try:
+        tasks = _fetch_dicts(
+            conn,
+            "SHOW TASKS IN SCHEMA NOCTURNE.RAW",
+        )
+    except snowflake.connector.errors.ProgrammingError:
+        log.info("No existing NOCTURNE tasks were found to suspend.")
+        return
+
+    existing_names = sorted(
+        str(row["NAME"])
+        for row in tasks
+        if row.get("NAME") in task_names
+    )
+    for task_name in existing_names:
+        cur = conn.cursor()
+        try:
+            cur.execute(f"ALTER TASK NOCTURNE.RAW.{task_name} SUSPEND")
+        finally:
+            cur.close()
+        log.info("Pre-deployment pause: suspended %s", task_name)
+    if not existing_names:
+        log.info("No existing NOCTURNE tasks were found to suspend.")
+
+
+def _log_ai_cache_health(
+    conn: snowflake.connector.SnowflakeConnection,
+    affected_since: datetime | None,
+) -> None:
+    log.info("Persistent AI caches:")
+    for stage, config in AI_STAGES.items():
+        result_table = str(config["results"])
+        candidate_table = str(config["candidates"])
+        if affected_since is None:
+            result_rows = _fetch_dicts(
+                conn,
+                f"""
+                SELECT ORG_ID, STATUS, COUNT(*) AS CACHE_ROWS,
+                  0 AS NEW_ROWS
+                FROM {result_table}
+                GROUP BY ORG_ID, STATUS
+                ORDER BY ORG_ID, STATUS
+                """,
+            )
+        else:
+            result_rows = _fetch_dicts(
+                conn,
+                f"""
+                SELECT ORG_ID, STATUS, COUNT(*) AS CACHE_ROWS,
+                  COUNT_IF(CALLED_AT >= %s) AS NEW_ROWS
+                FROM {result_table}
+                GROUP BY ORG_ID, STATUS
+                ORDER BY ORG_ID, STATUS
+                """,
+                (affected_since,),
+            )
+        if not result_rows:
+            log.info("  %s: empty", stage)
+        for row in result_rows:
+            log.info(
+                "  %s/%s: status=%s, cached=%s, new_since_start=%s",
+                stage,
+                row.get("ORG_ID"),
+                row.get("STATUS"),
+                row.get("CACHE_ROWS"),
+                row.get("NEW_ROWS"),
+            )
+
+        missing_candidate_view = config.get("missing_candidates")
+        if missing_candidate_view:
+            candidate_rows = _fetch_dicts(
+                conn,
+                f"""
+                SELECT ORG_ID, COUNT(*) AS MISSING_ROWS
+                FROM (
+                  SELECT ORG_ID, INCIDENT_KEY
+                  FROM {missing_candidate_view}
+                  UNION ALL
+                  SELECT QUEUED.ORG_ID, QUEUED.INCIDENT_KEY
+                  FROM {candidate_table} AS QUEUED
+                  LEFT JOIN {result_table} AS RESULT
+                    ON RESULT.ORG_ID = QUEUED.ORG_ID
+                    AND RESULT.INCIDENT_KEY = QUEUED.INCIDENT_KEY
+                  WHERE RESULT.INCIDENT_KEY IS NULL
+                ) AS PENDING
+                GROUP BY ORG_ID
+                ORDER BY ORG_ID
+                """,
+            )
+        else:
+            candidate_rows = _fetch_dicts(
+                conn,
+                f"""
+                SELECT ORG_ID, COUNT(*) AS MISSING_ROWS
+                FROM {candidate_table}
+                GROUP BY ORG_ID
+                ORDER BY ORG_ID
+                """,
+            )
+        if not candidate_rows:
+            log.info("  %s: missing_candidates=0", stage)
+        for row in candidate_rows:
+            log.info(
+                "  %s/%s: missing_candidates=%s",
+                stage,
+                row.get("ORG_ID"),
+                row.get("MISSING_ROWS"),
+            )
+
+
+def _log_recent_cortex_costs(
+    conn: snowflake.connector.SnowflakeConnection,
+) -> None:
+    tags = ", ".join(
+        f"'{config['query_tag']}'" for config in AI_STAGES.values()
+    )
+    rows = _fetch_dicts(
+        conn,
+        f"""
+        SELECT
+          QUERY_TAG,
+          FUNCTION_NAME,
+          MODEL_NAME,
+          COUNT(DISTINCT QUERY_ID) AS QUERY_COUNT,
+          SUM(CREDITS) AS CREDITS
+        FROM SNOWFLAKE.ACCOUNT_USAGE.CORTEX_AI_FUNCTIONS_USAGE_HISTORY
+        WHERE START_TIME >= DATEADD('hour', -24, CURRENT_TIMESTAMP())
+          AND QUERY_TAG IN ({tags})
+        GROUP BY QUERY_TAG, FUNCTION_NAME, MODEL_NAME
+        ORDER BY QUERY_TAG, FUNCTION_NAME, MODEL_NAME
+        """,
+    )
+    if not rows:
+        log.info(
+            "Cortex usage: no tagged usage visible in the last 24 hours "
+            "(account-usage reporting can lag)."
+        )
+        return
+    log.info("Cortex usage in the last 24 hours:")
+    for row in rows:
+        log.info(
+            "  tag=%s, function=%s, model=%s, queries=%s, credits=%s",
+            row.get("QUERY_TAG"),
+            row.get("FUNCTION_NAME"),
+            row.get("MODEL_NAME"),
+            row.get("QUERY_COUNT"),
+            row.get("CREDITS"),
+        )
 
 
 def _log_relationship_groups(
@@ -392,17 +805,27 @@ def _log_relationship_groups(
     counts = _fetch_dicts(
         conn,
         """
-        SELECT RELATIONSHIP_LABEL, COUNT(*) AS PAGE_COUNT
-        FROM NOCTURNE.RAW.DT_PAGE_CLASSIFICATION
-        GROUP BY RELATIONSHIP_LABEL
+        SELECT ORG_ID, RELATIONSHIP_LABEL, COUNT(*) AS PAGE_COUNT
+        FROM NOCTURNE.RAW.DT_PAGE_RELATIONSHIP_CLASSIFICATION
+        GROUP BY ORG_ID, RELATIONSHIP_LABEL
+        ORDER BY ORG_ID, RELATIONSHIP_LABEL
         """,
     )
-    count_by_label = {
-        row["RELATIONSHIP_LABEL"]: row["PAGE_COUNT"] for row in counts
-    }
     log.info("Relationship labels:")
-    for label in RELATIONSHIP_LABELS:
-        log.info("  %-28s %s page(s)", label, count_by_label.get(label, 0))
+    organizations = sorted({row.get("ORG_ID") for row in counts})
+    for org_id in organizations:
+        count_by_label = {
+            row["RELATIONSHIP_LABEL"]: row["PAGE_COUNT"]
+            for row in counts
+            if row.get("ORG_ID") == org_id
+        }
+        for label in RELATIONSHIP_LABELS:
+            log.info(
+                "  %s/%-28s %s page(s)",
+                org_id,
+                label,
+                count_by_label.get(label, 0),
+            )
 
     if affected_since is None:
         return
@@ -410,10 +833,10 @@ def _log_relationship_groups(
     affected = _fetch_dicts(
         conn,
         """
-        SELECT RELATIONSHIP_LABEL, _SOURCE_FILE, TITLE
-        FROM NOCTURNE.RAW.DT_PAGE_CLASSIFICATION
+        SELECT ORG_ID, RELATIONSHIP_LABEL, _SOURCE_FILE, TITLE
+        FROM NOCTURNE.RAW.DT_PAGE_RELATIONSHIP_CLASSIFICATION
         WHERE _INGESTED_AT >= %s
-        ORDER BY RELATIONSHIP_LABEL, _SOURCE_FILE, TITLE
+        ORDER BY ORG_ID, RELATIONSHIP_LABEL, _SOURCE_FILE, TITLE
         """,
         (affected_since,),
     )
@@ -431,7 +854,8 @@ def _log_relationship_groups(
         log.info("  %s:", label)
         for row in label_rows:
             log.info(
-                "    %s — %s",
+                "    %s/%s — %s",
+                row["ORG_ID"],
                 Path(row["_SOURCE_FILE"]).name,
                 row["TITLE"],
             )
@@ -449,66 +873,100 @@ def _log_document_details(
     if not include_all:
         if affected_since is None:
             return
-        filters.append("PAGE._INGESTED_AT >= %s")
+        filters.append("INPUT._INGESTED_AT >= %s")
         params = (affected_since,)
     if target_leaks_only:
-        filters.append("RESULT.RELATIONSHIP_LABEL = 'target_data_leak'")
+        filters.append("RELATIONSHIP.RELATIONSHIP_LABEL = 'target_data_leak'")
 
     where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
     classification_input_column = (
-        "INPUT.CLASSIFICATION_INPUT"
-        if log_ai_inputs
-        else "NULL::STRING"
+        "INPUT.CLASSIFICATION_INPUT" if log_ai_inputs else "NULL::STRING"
+    )
+    evidence_input_column = (
+        "INPUT.EVIDENCE_INPUT" if log_ai_inputs else "NULL::STRING"
     )
 
     pages = _fetch_dicts(
         conn,
         f"""
         SELECT
-          PAGE.DOC_ID,
-          PAGE._SOURCE_FILE,
-          PAGE.TITLE,
-          PAGE.INDICATORS_FOUND:summary_text::STRING AS INDICATOR_SUMMARY,
-          PAGE.INDICATORS_FOUND:strong_count::NUMBER
-            AS STRONG_INDICATOR_COUNT,
-          PAGE.INDICATORS_FOUND:medium_count::NUMBER
-            AS MEDIUM_INDICATOR_COUNT,
-          PAGE.INDICATORS_FOUND:weak_count::NUMBER
-            AS WEAK_INDICATOR_COUNT,
-          PAGE.INDICATORS_FOUND:evidence_score::NUMBER AS EVIDENCE_SCORE,
+          INPUT.ORG_ID,
+          INPUT.DOC_ID,
+          INPUT.DEDUPE_KEY,
+          INPUT.CONTENT_SHA256,
+          INPUT._SOURCE_FILE,
+          INPUT.TITLE,
+          INPUT.INDICATOR_SUMMARY,
+          INPUT.STRONG_INDICATOR_COUNT,
+          INPUT.MEDIUM_INDICATOR_COUNT,
+          INPUT.WEAK_INDICATOR_COUNT,
+          INPUT.EVIDENCE_SCORE,
           INPUT.SOURCE_TEXT_LENGTH,
           INPUT.CLASSIFICATION_INPUT_LENGTH,
+          INPUT.EVIDENCE_INPUT_LENGTH,
           INPUT.INPUT_TRUNCATED,
+          INPUT.EVIDENCE_INPUT_TRUNCATED,
           INPUT.INPUT_METHOD_VERSION,
           INPUT.FALLBACK_USED,
           INPUT.FALLBACK_REASON,
           INPUT.SELECTED_WINDOWS,
           {classification_input_column} AS CLASSIFICATION_INPUT,
-          RESULT.TARGET_ANCHOR_TYPE,
-          RESULT.TARGET_MATCH_SCORE,
-          RESULT.RELATIONSHIP_AI_STATUS,
-          RESULT.RELATIONSHIP_LABEL,
-          RESULT.IS_RELEVANT,
-          RESULT.LEAK_TYPE_AI_STATUS,
-          RESULT.LEAK_TYPE_LABELS,
-          RESULT.IMPACT_SCORE,
-          RESULT.TARGET_RELEVANCE_SCORE,
-          RESULT.PRELIMINARY_SEVERITY_SCORE,
-          RESULT.PRELIMINARY_SEVERITY_BAND,
-          RESULT.SEVERITY_INPUT_COMPLETE
-        FROM NOCTURNE.RAW.DT_REGEX_INDICATORS AS PAGE
-        LEFT JOIN NOCTURNE.RAW.DT_L1_CLASSIFICATION_INPUT AS INPUT
-          ON PAGE.DOC_ID = INPUT.DOC_ID
-          AND PAGE.DEDUPE_KEY = INPUT.DEDUPE_KEY
-        LEFT JOIN NOCTURNE.RAW.DT_PAGE_CLASSIFICATION AS RESULT
-          ON INPUT.DOC_ID = RESULT.DOC_ID
-          AND INPUT.DEDUPE_KEY = RESULT.DEDUPE_KEY
-          AND INPUT.ORG_ID = RESULT.ORG_ID
+          {evidence_input_column} AS EVIDENCE_INPUT,
+          RELATIONSHIP.TARGET_ANCHOR_TYPE,
+          RELATIONSHIP.TARGET_MATCH_SCORE,
+          RELATIONSHIP.RELATIONSHIP_AI_STATUS,
+          RELATIONSHIP.RELATIONSHIP_LABEL,
+          RELATIONSHIP.IS_RELEVANT,
+          ROUTING.L2_GATE_REASON,
+          ROUTING.EXTRACTION_STATUS,
+          ROUTING.CLAIM_COUNT,
+          ROUTING.ACCEPTED_CLAIM_COUNT,
+          ROUTING.ENTITY_COUNT,
+          ROUTING.ACCEPTED_ENTITY_COUNT,
+          ROUTING.RELATIONSHIP_COUNT,
+          ROUTING.ACCEPTED_RELATIONSHIP_COUNT,
+          ROUTING.L2_ROUTE,
+          ROUTING.ROUTING_REASON,
+          CLASSIFICATION.LEAK_TYPE_AI_STATUS,
+          CLASSIFICATION.LEAK_TYPE_LABELS,
+          SEVERITY.INCIDENT_KEY,
+          SEVERITY.IMPACT_SEVERITY_SCORE,
+          SEVERITY.IMPACT_SEVERITY_BAND,
+          SEVERITY.EVIDENCE_CONFIDENCE_SCORE,
+          SEVERITY.EVIDENCE_CONFIDENCE_BAND,
+          SEVERITY.TRIAGE_PRIORITY_SCORE,
+          SEVERITY.TRIAGE_PRIORITY_BAND,
+          SEVERITY.SCORE_METHOD_VERSION,
+          INSIGHT.INSIGHT_AI_STATUS,
+          INSIGHT.INSIGHT_HEADLINE,
+          INSIGHT.EXECUTIVE_SUMMARY
+        FROM NOCTURNE.RAW.DT_L1_CLASSIFICATION_INPUT AS INPUT
+        LEFT JOIN NOCTURNE.RAW.DT_PAGE_RELATIONSHIP_CLASSIFICATION
+          AS RELATIONSHIP
+          ON RELATIONSHIP.ORG_ID = INPUT.ORG_ID
+          AND RELATIONSHIP.DEDUPE_KEY = INPUT.DEDUPE_KEY
+        LEFT JOIN NOCTURNE.RAW.DT_L2_ROUTING AS ROUTING
+          ON ROUTING.ORG_ID = INPUT.ORG_ID
+          AND ROUTING.DEDUPE_KEY = INPUT.DEDUPE_KEY
+        LEFT JOIN NOCTURNE.RAW.DT_PAGE_CLASSIFICATION AS CLASSIFICATION
+          ON CLASSIFICATION.ORG_ID = INPUT.ORG_ID
+          AND CLASSIFICATION.DEDUPE_KEY = INPUT.DEDUPE_KEY
+        LEFT JOIN NOCTURNE.RAW.DT_L4_DOCUMENT_SEVERITY AS SEVERITY
+          ON SEVERITY.ORG_ID = INPUT.ORG_ID
+          AND SEVERITY.DEDUPE_KEY = INPUT.DEDUPE_KEY
+        LEFT JOIN NOCTURNE.RAW.VW_L4_INCIDENT_INSIGHTS AS INSIGHT
+          ON INSIGHT.ORG_ID = SEVERITY.ORG_ID
+          AND INSIGHT.INCIDENT_KEY = SEVERITY.INCIDENT_KEY
         {where_clause}
+          {"AND" if where_clause else "WHERE"} (
+            RELATIONSHIP.RELATIONSHIP_LABEL = 'target_data_leak'
+            OR ROUTING.DEDUPE_KEY IS NOT NULL
+          )
         ORDER BY
-          RESULT.PRELIMINARY_SEVERITY_SCORE DESC NULLS LAST,
-          PAGE._SOURCE_FILE,
-          PAGE.TITLE
+          SEVERITY.TRIAGE_PRIORITY_SCORE DESC NULLS LAST,
+          INPUT.ORG_ID,
+          INPUT._SOURCE_FILE,
+          INPUT.TITLE
         """,
         params,
     )
@@ -523,10 +981,69 @@ def _log_document_details(
         )
         leak_types = _variant_array(page["LEAK_TYPE_LABELS"])
         windows = _variant_array(page["SELECTED_WINDOWS"])
+        entities = []
+        claims = []
+        affects_edges = []
+        if page["EXTRACTION_STATUS"] is not None:
+            entities = _fetch_dicts(
+                conn,
+                """
+                SELECT ENTITY_TYPE, ENTITY_NAME, RESOLVED_ORG_ID,
+                  ENTITY_MATCH_STATUS, ENTITY_MATCH_METHOD,
+                  ENTITY_MATCH_CONFIDENCE, GROUNDING_LEVEL
+                FROM NOCTURNE.RAW.DT_L2_ENTITIES
+                WHERE ORG_ID = %s AND DEDUPE_KEY = %s
+                  AND ENTITY_TYPE IN ('organization', 'domain')
+                ORDER BY
+                  IS_MONITORED_ORG DESC,
+                  ENTITY_MATCH_CONFIDENCE DESC,
+                  ENTITY_NAME
+                LIMIT 5
+                """,
+                (page["ORG_ID"], page["DEDUPE_KEY"]),
+            )
+            claims = _fetch_dicts(
+                conn,
+                """
+                SELECT LEFT(STATEMENT, 240) AS STATEMENT,
+                  CLAIM_STATUS_EXTRACTED, GROUNDING_LEVEL
+                FROM NOCTURNE.RAW.DT_L2_CLAIMS
+                WHERE ORG_ID = %s AND DEDUPE_KEY = %s
+                  AND IS_ACCEPTED AND IS_GROUNDED
+                ORDER BY CLAIM_LOCAL_ID
+                LIMIT 3
+                """,
+                (page["ORG_ID"], page["DEDUPE_KEY"]),
+            )
+            affects_edges = _fetch_dicts(
+                conn,
+                """
+                SELECT LEFT(CLAIM.STATEMENT, 160) AS CLAIM_STATEMENT,
+                  ENTITY.ENTITY_NAME AS AFFECTED_ENTITY,
+                  ENTITY.ENTITY_TYPE AS AFFECTED_ENTITY_TYPE,
+                  EDGE.GROUNDING_LEVEL
+                FROM NOCTURNE.RAW.DT_L2_EDGES AS EDGE
+                LEFT JOIN NOCTURNE.RAW.DT_L2_CLAIMS AS CLAIM
+                  ON CLAIM.ORG_ID = EDGE.ORG_ID
+                  AND CLAIM.DEDUPE_KEY = EDGE.DEDUPE_KEY
+                  AND CLAIM.CLAIM_LOCAL_ID = EDGE.SOURCE_LOCAL_ID
+                LEFT JOIN NOCTURNE.RAW.DT_L2_ENTITIES AS ENTITY
+                  ON ENTITY.ORG_ID = EDGE.ORG_ID
+                  AND ENTITY.DEDUPE_KEY = EDGE.DEDUPE_KEY
+                  AND ENTITY.ENTITY_LOCAL_ID = EDGE.TARGET_LOCAL_ID
+                WHERE EDGE.ORG_ID = %s AND EDGE.DEDUPE_KEY = %s
+                  AND EDGE.IS_ACCEPTED AND EDGE.IS_GROUNDED
+                  AND EDGE.EDGE_TYPE = 'ALLEGEDLY_AFFECTS'
+                ORDER BY EDGE.RELATIONSHIP_LOCAL_ID
+                LIMIT 5
+                """,
+                (page["ORG_ID"], page["DEDUPE_KEY"]),
+            )
 
         lines = [
             "",
             "=" * 72,
+            f"Organization: {page['ORG_ID']}",
             f"File: {page['_SOURCE_FILE']}",
             f"Title: {page['TITLE']}",
             f"Document ID: {page['DOC_ID']}",
@@ -546,6 +1063,7 @@ def _log_document_details(
                 "  Input length: "
                 f"{page['CLASSIFICATION_INPUT_LENGTH']} of "
                 f"{page['SOURCE_TEXT_LENGTH']} source characters",
+                f"  Evidence-only L2 input length: {page['EVIDENCE_INPUT_LENGTH']}",
                 f"  Truncated: {_display_bool(page['INPUT_TRUNCATED'])}",
                 f"  Fallback used: {_display_bool(page['FALLBACK_USED'])}",
             ]
@@ -575,7 +1093,6 @@ def _log_document_details(
             )
         if (
             log_ai_inputs
-            and page["RELATIONSHIP_LABEL"] == "target_data_leak"
             and page["CLASSIFICATION_INPUT"]
         ):
             lines.extend(
@@ -587,6 +1104,11 @@ def _log_document_details(
                     "-" * 72,
                     "  Note: indicator spans are masked by the input builder; "
                     "unmatched sensitive text may still appear.",
+                    "",
+                    "Exact masked evidence-only input sent to L2 AI_COMPLETE:",
+                    "-" * 72,
+                    str(page["EVIDENCE_INPUT"] or "not available"),
+                    "-" * 72,
                 ]
             )
 
@@ -603,34 +1125,78 @@ def _log_document_details(
                 f"  Label: {page['RELATIONSHIP_LABEL'] or 'not available'}",
                 f"  Relevant: {_display_bool(page['IS_RELEVANT'])}",
                 "",
+                "L2 extraction and ownership routing:",
+                f"  Gate: {page['L2_GATE_REASON'] or 'not eligible/pending'}",
+                f"  Extraction status: {page['EXTRACTION_STATUS'] or 'pending'}",
+                "  Elements: "
+                f"claims={page['CLAIM_COUNT'] or 0} "
+                f"(accepted={page['ACCEPTED_CLAIM_COUNT'] or 0}), "
+                f"entities={page['ENTITY_COUNT'] or 0} "
+                f"(accepted={page['ACCEPTED_ENTITY_COUNT'] or 0}), "
+                f"relationships={page['RELATIONSHIP_COUNT'] or 0} "
+                f"(accepted={page['ACCEPTED_RELATIONSHIP_COUNT'] or 0})",
+            ]
+        )
+        if entities:
+            lines.append("  Extracted organization/domain entities:")
+            for entity in entities:
+                resolved = entity.get("RESOLVED_ORG_ID") or "not resolved"
+                lines.append(
+                    "    "
+                    f"{_truncated(entity.get('ENTITY_NAME'), 100)} "
+                    f"({entity.get('ENTITY_TYPE')}) → {resolved}; "
+                    f"match={entity.get('ENTITY_MATCH_METHOD')}/"
+                    f"{entity.get('ENTITY_MATCH_CONFIDENCE')}; "
+                    f"status={entity.get('ENTITY_MATCH_STATUS')}; "
+                    f"grounding={entity.get('GROUNDING_LEVEL')}"
+                )
+        if claims:
+            lines.append("  Grounded claims:")
+            for claim in claims:
+                lines.append(
+                    "    "
+                    f"[{claim.get('CLAIM_STATUS_EXTRACTED')}; "
+                    f"{claim.get('GROUNDING_LEVEL')}] "
+                    f"{_truncated(claim.get('STATEMENT'), 240)}"
+                )
+        if affects_edges:
+            lines.append("  Accepted ALLEGEDLY_AFFECTS relationships:")
+            for edge in affects_edges:
+                lines.append(
+                    "    claim → "
+                    f"{_truncated(edge.get('AFFECTED_ENTITY'), 100)} "
+                    f"({edge.get('AFFECTED_ENTITY_TYPE')}); "
+                    f"grounding={edge.get('GROUNDING_LEVEL')}"
+                )
+        lines.extend(
+            [
+                f"  Route: {page['L2_ROUTE'] or 'pending/not applicable'}",
+                f"  Reason: {page['ROUTING_REASON'] or 'not available'}",
+                "",
                 "Leak-type classification:",
                 f"  Status: {page['LEAK_TYPE_AI_STATUS'] or 'not available'}",
                 "  Labels: "
                 + (", ".join(str(label) for label in leak_types) or "none"),
                 "",
-                "Severity:",
-                f"  Impact score: {page['IMPACT_SCORE']}",
-                f"  Target relevance: {page['TARGET_RELEVANCE_SCORE']}",
+                "L4 scoring:",
+                f"  Impact severity: {page['IMPACT_SEVERITY_SCORE']} "
+                f"({page['IMPACT_SEVERITY_BAND'] or 'not available'})",
+                f"  Evidence confidence: {page['EVIDENCE_CONFIDENCE_SCORE']} "
+                f"({page['EVIDENCE_CONFIDENCE_BAND'] or 'not available'})",
+                f"  Triage priority: {page['TRIAGE_PRIORITY_SCORE']} "
+                f"({page['TRIAGE_PRIORITY_BAND'] or 'not available'})",
+                f"  Method: {page['SCORE_METHOD_VERSION'] or 'not available'}",
             ]
         )
-        if (
-            page["IMPACT_SCORE"] is not None
-            and page["TARGET_RELEVANCE_SCORE"] is not None
-            and page["PRELIMINARY_SEVERITY_SCORE"] is not None
-        ):
-            lines.append(
-                "  Final preliminary score: "
-                f"{page['IMPACT_SCORE']} × "
-                f"{page['TARGET_RELEVANCE_SCORE']} / 100 = "
-                f"{page['PRELIMINARY_SEVERITY_SCORE']}"
-            )
-        else:
-            lines.append("  Final preliminary score: not available")
         lines.extend(
             [
-                f"  Band: {page['PRELIMINARY_SEVERITY_BAND']}",
-                "  Severity input complete: "
-                f"{_display_bool(page['SEVERITY_INPUT_COMPLETE'])}",
+                "",
+                "Incident insight:",
+                f"  Incident key: {page['INCIDENT_KEY'] or 'not available'}",
+                f"  Status: {page['INSIGHT_AI_STATUS'] or 'pending/not applicable'}",
+                f"  Headline: {page['INSIGHT_HEADLINE'] or 'not available'}",
+                "  Summary: "
+                f"{_truncated(page['EXECUTIVE_SUMMARY'], 600) or 'not available'}",
                 "=" * 72,
             ]
         )
@@ -644,8 +1210,13 @@ def verify_pipeline(
     log_ai_inputs: bool = False,
     target_leaks_only: bool = False,
 ):
-    """Log concise health checks and safe, human-readable affected-page details."""
+    """Read pipeline state without invoking Cortex or advancing streams."""
     log.info("Pipeline verification")
+
+    try:
+        _check_ai_readiness(conn, strict=False)
+    except Exception as error:
+        log.warning("  AI residency/model readiness unavailable: %s", error)
 
     try:
         organizations = _fetch_dicts(
@@ -668,18 +1239,9 @@ def verify_pipeline(
         log.warning("  Monitored organizations unavailable: %s", error)
 
     try:
-        tasks = _fetch_dicts(
-            conn,
-            "SHOW TASKS LIKE 'CRAWL_INGEST_TASK' IN SCHEMA NOCTURNE.RAW",
-        )
-        for task in tasks:
-            log.info(
-                "  Ingestion task: state=%s, schedule=%s",
-                task.get("STATE", "unknown"),
-                task.get("SCHEDULE", "unknown"),
-            )
+        _log_task_health(conn)
     except Exception as error:
-        log.warning("  Ingestion task unavailable: %s", error)
+        log.warning("  Task health unavailable: %s", error)
 
     try:
         dynamic_tables = _fetch_dicts(
@@ -700,20 +1262,45 @@ def verify_pipeline(
         log.warning("  Dynamic-table status unavailable: %s", error)
 
     try:
-        raw_count = _fetch_dicts(
+        raw_rows = _fetch_dicts(
             conn,
-            "SELECT COUNT(*) AS CNT FROM NOCTURNE.RAW.CRAWL_PAGES",
-        )[0]["CNT"]
-        log.info("Raw pages count: %s", raw_count)
+            """
+            SELECT ORG_ID, _PATH_ORG_ID, COUNT(*) AS PAGE_COUNT,
+              COUNT_IF(SCHEMA_VERSION <> 2) AS INVALID_SCHEMA_ROWS,
+              COUNT_IF(ORG_ID <> _PATH_ORG_ID) AS PATH_MISMATCH_ROWS
+            FROM NOCTURNE.RAW.CRAWL_PAGES
+            GROUP BY ORG_ID, _PATH_ORG_ID
+            ORDER BY ORG_ID, _PATH_ORG_ID
+            """,
+        )
+        for row in raw_rows:
+            log.info(
+                "Raw pages: org_id=%s, path_org_id=%s, pages=%s, "
+                "invalid_schema=%s, path_mismatch=%s",
+                row.get("ORG_ID"),
+                row.get("_PATH_ORG_ID"),
+                row.get("PAGE_COUNT"),
+                row.get("INVALID_SCHEMA_ROWS"),
+                row.get("PATH_MISMATCH_ROWS"),
+            )
     except Exception as error:
         log.warning("Raw pages count unavailable: %s", error)
 
     try:
-        l0_count = _fetch_dicts(
+        l0_rows = _fetch_dicts(
             conn,
-            "SELECT COUNT(*) AS CNT FROM NOCTURNE.RAW.DT_REGEX_INDICATORS",
-        )[0]["CNT"]
-        log.info("L0 pages count: %s", l0_count)
+            """
+            SELECT ORG_ID, COUNT(*) AS PAGE_COUNT
+            FROM NOCTURNE.RAW.DT_REGEX_INDICATORS
+            GROUP BY ORG_ID ORDER BY ORG_ID
+            """,
+        )
+        for row in l0_rows:
+            log.info(
+                "L0 pages: org_id=%s, pages=%s",
+                row.get("ORG_ID"),
+                row.get("PAGE_COUNT"),
+            )
     except Exception as error:
         log.warning("L0 pages count unavailable: %s", error)
 
@@ -722,26 +1309,35 @@ def verify_pipeline(
             conn,
             """
             SELECT
-              RELATIONSHIP_AI_STATUS,
-              RELATIONSHIP_LABEL,
-              LEAK_TYPE_AI_STATUS,
-              PRELIMINARY_SEVERITY_BAND,
+              PAGE.ORG_ID,
+              PAGE.RELATIONSHIP_AI_STATUS,
+              PAGE.RELATIONSHIP_LABEL,
+              PAGE.L2_ROUTE,
+              PAGE.LEAK_TYPE_AI_STATUS,
+              SEVERITY.IMPACT_SEVERITY_BAND,
               COUNT(*) AS PAGE_COUNT
-            FROM NOCTURNE.RAW.DT_PAGE_CLASSIFICATION
+            FROM NOCTURNE.RAW.DT_PAGE_CLASSIFICATION AS PAGE
+            LEFT JOIN NOCTURNE.RAW.DT_L4_DOCUMENT_SEVERITY AS SEVERITY
+              ON SEVERITY.ORG_ID = PAGE.ORG_ID
+              AND SEVERITY.DEDUPE_KEY = PAGE.DEDUPE_KEY
             GROUP BY
-              RELATIONSHIP_AI_STATUS,
-              RELATIONSHIP_LABEL,
-              LEAK_TYPE_AI_STATUS,
-              PRELIMINARY_SEVERITY_BAND
-            ORDER BY PAGE_COUNT DESC
+              PAGE.ORG_ID,
+              PAGE.RELATIONSHIP_AI_STATUS,
+              PAGE.RELATIONSHIP_LABEL,
+              PAGE.L2_ROUTE,
+              PAGE.LEAK_TYPE_AI_STATUS,
+              SEVERITY.IMPACT_SEVERITY_BAND
+            ORDER BY PAGE.ORG_ID, PAGE_COUNT DESC
             """,
         )
         classification_results = [
             (
+                row["ORG_ID"],
                 row["RELATIONSHIP_AI_STATUS"],
                 row["RELATIONSHIP_LABEL"],
+                row["L2_ROUTE"],
                 row["LEAK_TYPE_AI_STATUS"],
-                row["PRELIMINARY_SEVERITY_BAND"],
+                row["IMPACT_SEVERITY_BAND"],
                 row["PAGE_COUNT"],
             )
             for row in summary_rows
@@ -758,126 +1354,278 @@ def verify_pipeline(
     except Exception as error:
         log.warning("Classification results unavailable: %s", error)
 
+    try:
+        routes = _fetch_dicts(
+            conn,
+            """
+            SELECT ORG_ID, L2_ROUTE, COUNT(*) AS PAGE_COUNT
+            FROM NOCTURNE.RAW.DT_L2_ROUTING
+            GROUP BY ORG_ID, L2_ROUTE
+            ORDER BY ORG_ID, L2_ROUTE
+            """,
+        )
+        log.info(
+            "L2 routes: %s",
+            [
+                (row["ORG_ID"], row["L2_ROUTE"], row["PAGE_COUNT"])
+                for row in routes
+            ],
+        )
+    except Exception as error:
+        log.warning("L2 routing results unavailable: %s", error)
 
-def generate_report(conn: snowflake.connector.SnowflakeConnection, output_path: Path):
-    """Generate a metadata-only classification report and save it to a file."""
-    from datetime import datetime
+    try:
+        incidents = _fetch_dicts(
+            conn,
+            """
+            SELECT ORG_ID, INSIGHT_AI_STATUS,
+              INCIDENT_IMPACT_SEVERITY_BAND,
+              COUNT(*) AS INCIDENT_COUNT
+            FROM NOCTURNE.RAW.VW_L4_INCIDENT_INSIGHTS
+            GROUP BY ORG_ID, INSIGHT_AI_STATUS,
+              INCIDENT_IMPACT_SEVERITY_BAND
+            ORDER BY ORG_ID, INCIDENT_IMPACT_SEVERITY_BAND,
+              INSIGHT_AI_STATUS
+            """,
+        )
+        log.info(
+            "L4 incidents: %s",
+            [
+                (
+                    row["ORG_ID"],
+                    row["INSIGHT_AI_STATUS"],
+                    row["INCIDENT_IMPACT_SEVERITY_BAND"],
+                    row["INCIDENT_COUNT"],
+                )
+                for row in incidents
+            ],
+        )
+    except Exception as error:
+        log.warning("L4 incident results unavailable: %s", error)
 
-    log.info(f"Generating report -> {output_path}")
-    cur = conn.cursor(snowflake.connector.DictCursor)
+    try:
+        _log_ai_cache_health(conn, affected_since)
+    except Exception as error:
+        log.warning("AI cache/candidate health unavailable: %s", error)
 
-    cur.execute("SELECT COUNT(*) AS total FROM NOCTURNE.RAW.CRAWL_PAGES")
-    total = cur.fetchone()["TOTAL"]
+    try:
+        _log_recent_cortex_costs(conn)
+    except Exception as error:
+        log.warning("Cortex cost visibility unavailable: %s", error)
 
-    cur.execute("""
+
+def generate_report(
+    conn: snowflake.connector.SnowflakeConnection,
+    output_path: Path,
+) -> None:
+    """Write metadata, deterministic scores, and cached incident insights."""
+    log.info("Generating report -> %s", output_path)
+    raw_counts = _fetch_dicts(
+        conn,
+        """
+        SELECT ORG_ID, COUNT(*) AS PAGE_COUNT
+        FROM NOCTURNE.RAW.CRAWL_PAGES
+        GROUP BY ORG_ID ORDER BY ORG_ID
+        """,
+    )
+    summary_rows = _fetch_dicts(
+        conn,
+        """
         SELECT
-          RELATIONSHIP_AI_STATUS,
-          RELATIONSHIP_LABEL,
-          PRELIMINARY_SEVERITY_BAND,
-          COUNT(*) AS CNT
-        FROM NOCTURNE.RAW.DT_PAGE_CLASSIFICATION
+          PAGE.ORG_ID,
+          PAGE.RELATIONSHIP_AI_STATUS,
+          PAGE.RELATIONSHIP_LABEL,
+          PAGE.L2_ROUTE,
+          PAGE.LEAK_TYPE_AI_STATUS,
+          SEVERITY.IMPACT_SEVERITY_BAND,
+          COUNT(*) AS PAGE_COUNT
+        FROM NOCTURNE.RAW.DT_PAGE_CLASSIFICATION AS PAGE
+        LEFT JOIN NOCTURNE.RAW.DT_L4_DOCUMENT_SEVERITY AS SEVERITY
+          ON SEVERITY.ORG_ID = PAGE.ORG_ID
+          AND SEVERITY.DEDUPE_KEY = PAGE.DEDUPE_KEY
         GROUP BY
-          RELATIONSHIP_AI_STATUS,
-          RELATIONSHIP_LABEL,
-          PRELIMINARY_SEVERITY_BAND
-        ORDER BY CNT DESC
-    """)
-    summary_rows = cur.fetchall()
+          PAGE.ORG_ID,
+          PAGE.RELATIONSHIP_AI_STATUS,
+          PAGE.RELATIONSHIP_LABEL,
+          PAGE.L2_ROUTE,
+          PAGE.LEAK_TYPE_AI_STATUS,
+          SEVERITY.IMPACT_SEVERITY_BAND
+        ORDER BY PAGE.ORG_ID, PAGE_COUNT DESC
+        """,
+    )
 
-    # Do not write RAW_TEXT or exact indicator matches into a local report.
-    cur.execute("""
+    # RAW_TEXT, exact indicator matches, evidence quotes, and prompts are omitted.
+    pages = _fetch_dicts(
+        conn,
+        """
         SELECT
-          DOC_ID,
-          TITLE,
-          URL,
-          RELATIONSHIP_AI_STATUS,
-          RELATIONSHIP_LABEL,
-          IS_RELEVANT,
-          INDICATOR_SUMMARY,
-          EVIDENCE_SCORE,
-          TARGET_MATCH_SCORE,
-          TARGET_RELEVANCE_SCORE,
-          LEAK_TYPE_LABELS,
-          LEAK_TYPE_AI_STATUS,
-          IMPACT_SCORE,
-          PRELIMINARY_SEVERITY_SCORE,
-          PRELIMINARY_SEVERITY_BAND
-        FROM NOCTURNE.RAW.DT_PAGE_CLASSIFICATION
-        ORDER BY PRELIMINARY_SEVERITY_SCORE DESC NULLS LAST, TITLE
-    """)
-    pages = cur.fetchall()
-    cur.close()
+          PAGE.ORG_ID,
+          PAGE.DOC_ID,
+          PAGE.TITLE,
+          PAGE.URL,
+          PAGE.RELATIONSHIP_AI_STATUS,
+          PAGE.RELATIONSHIP_LABEL,
+          PAGE.L2_ROUTE,
+          PAGE.ROUTING_REASON,
+          PAGE.INDICATOR_SUMMARY,
+          PAGE.EVIDENCE_SCORE,
+          PAGE.TARGET_MATCH_SCORE,
+          PAGE.LEAK_TYPE_LABELS,
+          PAGE.LEAK_TYPE_AI_STATUS,
+          SEVERITY.INCIDENT_KEY,
+          SEVERITY.IMPACT_SEVERITY_SCORE,
+          SEVERITY.IMPACT_SEVERITY_BAND,
+          SEVERITY.EVIDENCE_CONFIDENCE_SCORE,
+          SEVERITY.EVIDENCE_CONFIDENCE_BAND,
+          SEVERITY.TRIAGE_PRIORITY_SCORE,
+          SEVERITY.TRIAGE_PRIORITY_BAND
+        FROM NOCTURNE.RAW.DT_PAGE_CLASSIFICATION AS PAGE
+        LEFT JOIN NOCTURNE.RAW.DT_L4_DOCUMENT_SEVERITY AS SEVERITY
+          ON SEVERITY.ORG_ID = PAGE.ORG_ID
+          AND SEVERITY.DEDUPE_KEY = PAGE.DEDUPE_KEY
+        ORDER BY
+          SEVERITY.TRIAGE_PRIORITY_SCORE DESC NULLS LAST,
+          PAGE.ORG_ID,
+          PAGE.TITLE
+        """,
+    )
+    incidents = _fetch_dicts(
+        conn,
+        """
+        SELECT
+          ORG_ID,
+          INCIDENT_KEY,
+          TOP_TITLE,
+          INCIDENT_IMPACT_SEVERITY_SCORE,
+          INCIDENT_IMPACT_SEVERITY_BAND,
+          INCIDENT_EVIDENCE_CONFIDENCE_SCORE,
+          INCIDENT_EVIDENCE_CONFIDENCE_BAND,
+          INCIDENT_TRIAGE_PRIORITY_SCORE,
+          INCIDENT_TRIAGE_PRIORITY_BAND,
+          INSIGHT_AI_STATUS,
+          INSIGHT_HEADLINE,
+          EXECUTIVE_SUMMARY,
+          WHAT_HAPPENED,
+          BUSINESS_IMPACT,
+          RECOMMENDED_ACTIONS,
+          CONFIDENCE_ASSESSMENT,
+          INSIGHT_CAVEATS,
+          INSIGHT_CALLED_AT
+        FROM NOCTURNE.RAW.VW_L4_INCIDENT_INSIGHTS
+        ORDER BY
+          INCIDENT_TRIAGE_PRIORITY_SCORE DESC NULLS LAST,
+          ORG_ID,
+          INCIDENT_KEY
+        """,
+    )
 
-    lines = []
-    lines.append("=" * 80)
-    lines.append("NOCTURNE CLASSIFICATION REPORT")
-    lines.append(f"Generated: {datetime.now().astimezone().isoformat(timespec='seconds')}")
-    lines.append("=" * 80)
-    lines.append("")
-    lines.append("SUMMARY")
-    lines.append("-" * 40)
-    lines.append(f"  Total pages ingested: {total}")
+    lines = [
+        "=" * 80,
+        "NOCTURNE ORGANIZATION-SCOPED INCIDENT REPORT",
+        "Generated: "
+        + datetime.now().astimezone().isoformat(timespec="seconds"),
+        "=" * 80,
+        "",
+        "SUMMARY",
+        "-" * 40,
+    ]
+    for row in raw_counts:
+        lines.append(
+            f"  org_id={row['ORG_ID']}: raw_pages={row['PAGE_COUNT']}"
+        )
     for row in summary_rows:
         lines.append(
             "  "
+            f"org_id={row['ORG_ID']}, "
             f"relationship_status={row['RELATIONSHIP_AI_STATUS']}, "
             f"relationship={row['RELATIONSHIP_LABEL']}, "
-            f"severity={row['PRELIMINARY_SEVERITY_BAND']}: "
-            f"{row['CNT']}"
+            f"l2_route={row['L2_ROUTE']}, "
+            f"leak_type_status={row['LEAK_TYPE_AI_STATUS']}, "
+            f"impact_band={row['IMPACT_SEVERITY_BAND']}: "
+            f"{row['PAGE_COUNT']}"
         )
 
-    lines.append("")
-    lines.append("PAGE METADATA")
-    lines.append("-" * 40)
-    for i, page in enumerate(pages, 1):
-        lines.append("")
-        lines.append(f"--- [{i}] {page['TITLE']} ---")
-        lines.append(f"  URL: {page['URL']}")
-        lines.append(f"  DOC_ID: {page['DOC_ID']}")
-        lines.append(
-            "  RELATIONSHIP: "
-            f"{page['RELATIONSHIP_LABEL']} "
-            f"(status={page['RELATIONSHIP_AI_STATUS']}, "
-            f"relevant={page['IS_RELEVANT']})"
+    lines.extend(["", "PAGE METADATA", "-" * 40])
+    for index, page in enumerate(pages, 1):
+        leak_types = ", ".join(
+            str(value) for value in _variant_array(page["LEAK_TYPE_LABELS"])
         )
-        lines.append(f"  INDICATOR SUMMARY: {page['INDICATOR_SUMMARY'] or 'none'}")
-        lines.append(
-            "  SCORES: "
-            f"evidence={page['EVIDENCE_SCORE']}, "
-            f"target_match={page['TARGET_MATCH_SCORE']}, "
-            f"target_relevance={page['TARGET_RELEVANCE_SCORE']}, "
-            f"impact={page['IMPACT_SCORE']}, "
-            f"severity={page['PRELIMINARY_SEVERITY_SCORE']} "
-            f"({page['PRELIMINARY_SEVERITY_BAND']})"
+        lines.extend(
+            [
+                "",
+                f"--- [{index}] {page['ORG_ID']} / {page['TITLE']} ---",
+                f"  URL: {page['URL']}",
+                f"  DOC_ID: {page['DOC_ID']}",
+                "  RELATIONSHIP: "
+                f"{page['RELATIONSHIP_LABEL']} "
+                f"(status={page['RELATIONSHIP_AI_STATUS']})",
+                "  L2 ROUTE: "
+                f"{page['L2_ROUTE'] or 'not applicable/pending'} "
+                f"({page['ROUTING_REASON'] or 'no routing result'})",
+                "  INDICATOR SUMMARY: "
+                f"{page['INDICATOR_SUMMARY'] or 'none'}",
+                "  LEAK TYPES: "
+                f"{leak_types or 'not applicable'} "
+                f"(status={page['LEAK_TYPE_AI_STATUS']})",
+                "  SCORES: "
+                f"impact={page['IMPACT_SEVERITY_SCORE']} "
+                f"({page['IMPACT_SEVERITY_BAND']}), "
+                f"confidence={page['EVIDENCE_CONFIDENCE_SCORE']} "
+                f"({page['EVIDENCE_CONFIDENCE_BAND']}), "
+                f"triage={page['TRIAGE_PRIORITY_SCORE']} "
+                f"({page['TRIAGE_PRIORITY_BAND']})",
+                f"  INCIDENT KEY: {page['INCIDENT_KEY'] or 'not applicable'}",
+            ]
         )
-        lines.append(
-            "  LEAK TYPES: "
-            f"{page['LEAK_TYPE_LABELS'] or 'not applicable'} "
-            f"(status={page['LEAK_TYPE_AI_STATUS']})"
+
+    lines.extend(["", "TARGET INCIDENT DETAILS", "-" * 40])
+    if not incidents:
+        lines.append("  No L2-confirmed target incidents are available.")
+    for index, incident in enumerate(incidents, 1):
+        actions = _variant_array(incident["RECOMMENDED_ACTIONS"])
+        caveats = _variant_array(incident["INSIGHT_CAVEATS"])
+        lines.extend(
+            [
+                "",
+                f"--- Incident [{index}] {incident['ORG_ID']} ---",
+                f"  INCIDENT KEY: {incident['INCIDENT_KEY']}",
+                f"  TITLE: {incident['TOP_TITLE']}",
+                "  IMPACT: "
+                f"{incident['INCIDENT_IMPACT_SEVERITY_SCORE']} "
+                f"({incident['INCIDENT_IMPACT_SEVERITY_BAND']})",
+                "  EVIDENCE CONFIDENCE: "
+                f"{incident['INCIDENT_EVIDENCE_CONFIDENCE_SCORE']} "
+                f"({incident['INCIDENT_EVIDENCE_CONFIDENCE_BAND']})",
+                "  TRIAGE PRIORITY: "
+                f"{incident['INCIDENT_TRIAGE_PRIORITY_SCORE']} "
+                f"({incident['INCIDENT_TRIAGE_PRIORITY_BAND']})",
+                f"  INSIGHT STATUS: {incident['INSIGHT_AI_STATUS']}",
+                f"  HEADLINE: {incident['INSIGHT_HEADLINE'] or 'pending'}",
+                "  EXECUTIVE SUMMARY: "
+                f"{incident['EXECUTIVE_SUMMARY'] or 'pending'}",
+                f"  WHAT HAPPENED: {incident['WHAT_HAPPENED'] or 'pending'}",
+                f"  BUSINESS IMPACT: {incident['BUSINESS_IMPACT'] or 'pending'}",
+                "  CONFIDENCE ASSESSMENT: "
+                f"{incident['CONFIDENCE_ASSESSMENT'] or 'pending'}",
+            ]
         )
+        if actions:
+            lines.append("  RECOMMENDED ACTIONS:")
+            lines.extend(f"    - {action}" for action in actions)
+        if caveats:
+            lines.append("  CAVEATS:")
+            lines.extend(f"    - {caveat}" for caveat in caveats)
 
     report_text = "\n".join(lines)
-
     output_path.write_text(report_text, encoding="utf-8")
-    log.info(f"Report saved: {output_path} ({len(pages)} pages, {len(report_text)} bytes)")
-
-    print()
-    print("=" * 60)
-    print("  NOCTURNE CLASSIFICATION SUMMARY")
-    print("=" * 60)
-    print(f"  Total pages: {total}")
-    for row in summary_rows:
-        print(
-            "  "
-            f"{row['RELATIONSHIP_AI_STATUS']} / "
-            f"{row['RELATIONSHIP_LABEL']} / "
-            f"{row['PRELIMINARY_SEVERITY_BAND']}: "
-            f"{row['CNT']}"
-        )
-    print()
-    print(f"  Metadata-only report saved to: {output_path}")
-    print("=" * 60)
-    print()
+    log.info(
+        "Report saved: %s (%d pages, %d incidents, %d bytes)",
+        output_path,
+        len(pages),
+        len(incidents),
+        len(report_text),
+    )
+    print(f"Metadata-only report saved to: {output_path}")
 
 
 def main():
@@ -895,7 +1643,7 @@ def main():
         "--step",
         type=int,
         choices=DEPLOY_STEPS,
-        help="Run only the SQL file with this step number (1-10)",
+        help="Run only the SQL file with this step number (1-15)",
     )
     deployment_scope.add_argument(
         "--include-storage-integration",
@@ -907,8 +1655,8 @@ def main():
         "--log-ai-inputs",
         action="store_true",
         help=(
-            "Log the exact masked CLASSIFICATION_INPUT for target-data-leak "
-            "documents; may still contain sensitive unmatched text"
+            "Log masked L1 CLASSIFICATION_INPUT and evidence-only L2 input "
+            "for eligible documents; unmatched sensitive text may remain"
         ),
     )
     parser.add_argument(
@@ -926,6 +1674,15 @@ def main():
     else:
         selected_steps = DEFAULT_DEPLOY_STEPS
     files_to_run = [DEPLOY_STEPS[step] for step in selected_steps]
+    missing_files = [
+        SQL_DIR / filename
+        for filename in files_to_run
+        if not (SQL_DIR / filename).exists()
+    ]
+    if missing_files:
+        for filepath in missing_files:
+            log.error("Missing: %s", filepath)
+        return
 
     if not args.dry_run:
         if not args.account:
@@ -986,7 +1743,7 @@ def main():
                 conn,
                 include_all_details=args.log_ai_inputs,
                 log_ai_inputs=args.log_ai_inputs,
-                target_leaks_only=args.log_ai_inputs,
+                target_leaks_only=False,
             )
             log.info("Verification complete. Log saved to %s", log_path)
             return
@@ -997,22 +1754,41 @@ def main():
                 "Preserving existing NOCTURNE_GCS_INT; "
                 "step 01 is excluded from this deployment."
             )
-        for filename in files_to_run:
+        if 15 in selected_steps:
+            _suspend_existing_pipeline_tasks(conn)
+
+        readiness_checked = False
+        for step in selected_steps:
+            filename = DEPLOY_STEPS[step]
+            if step in {9, 14, 15} and not readiness_checked:
+                try:
+                    _check_ai_readiness(conn, strict=True)
+                except RuntimeError as error:
+                    log.error("AI readiness check failed: %s", error)
+                    log.error(
+                        "No paid AI task was resumed. Any existing pipeline "
+                        "tasks remain suspended; review model access and "
+                        "CORTEX_ENABLED_CROSS_REGION, then retry."
+                    )
+                    return
+                readiness_checked = True
             filepath = SQL_DIR / filename
-            if not filepath.exists():
-                log.error(f"Missing: {filepath}")
-                sys.exit(1)
             execute_file(conn, filepath)
 
         verify_pipeline(
             conn,
             affected_since=deployment_started_at,
             include_all_details=(
-                args.step is not None and args.step in range(5, 10)
+                args.step is not None and args.step in range(5, 16)
             ),
             log_ai_inputs=args.log_ai_inputs,
         )
         log.info("Pipeline deployment complete.")
+        if 15 in selected_steps:
+            log.info(
+                "AI tasks run asynchronously. Use --verify-only after the "
+                "triggered tasks finish to see final L2/L4 results."
+            )
         log.info("Log saved to %s", log_path)
 
     finally:

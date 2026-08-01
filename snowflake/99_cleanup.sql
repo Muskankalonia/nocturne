@@ -24,12 +24,13 @@
 
 USE ROLE ACCOUNTADMIN;
 
--- Stop scheduled work before removing the database. The future AI tasks are
--- included now so this cleanup remains valid after the L1/L2 cache work lands.
+-- Stop every ingestion and paid-AI task before removing the database. These
+-- statements are safe when an optional task was never created.
 ALTER TASK IF EXISTS NOCTURNE.RAW.CRAWL_INGEST_TASK SUSPEND;
 ALTER TASK IF EXISTS NOCTURNE.RAW.RELATIONSHIP_AI_TASK SUSPEND;
-ALTER TASK IF EXISTS NOCTURNE.RAW.LEAK_TYPE_AI_TASK SUSPEND;
 ALTER TASK IF EXISTS NOCTURNE.RAW.L2_EXTRACTION_AI_TASK SUSPEND;
+ALTER TASK IF EXISTS NOCTURNE.RAW.LEAK_TYPE_AI_TASK SUSPEND;
+ALTER TASK IF EXISTS NOCTURNE.RAW.INCIDENT_INSIGHT_AI_TASK SUSPEND;
 
 -- Dropping the database removes every schema and pipeline object beneath it.
 DROP DATABASE IF EXISTS NOCTURNE;
@@ -40,4 +41,3 @@ DROP STORAGE INTEGRATION IF EXISTS NOCTURNE_GCS_INT;
 -- Both SHOW statements should return zero rows after a successful cleanup.
 SHOW DATABASES LIKE 'NOCTURNE';
 SHOW INTEGRATIONS LIKE 'NOCTURNE_GCS_INT';
-
