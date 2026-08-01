@@ -52,6 +52,25 @@ QUERY = os.getenv("QUERY", config.get("query", "security research"))
 TOR_STARTUP_TIMEOUT = env_int("TOR_STARTUP_TIMEOUT", 90, 1)
 
 
+def configured_org_id():
+    organization = config.get("organization") or {}
+    raw_value = os.getenv("ORG_ID", organization.get("org_id", ""))
+    org_id = str(raw_value).strip()
+    if not org_id:
+        raise ValueError(
+            "organization.org_id is required in config.yaml or through ORG_ID"
+        )
+    if not re.fullmatch(r"[a-z0-9]+(?:_[a-z0-9]+)*", org_id):
+        raise ValueError(
+            "ORG_ID must be a lowercase slug containing letters, numbers, "
+            "and single underscores"
+        )
+    return org_id
+
+
+ORG_ID = configured_org_id()
+
+
 def utc_now():
     return datetime.now(timezone.utc)
 
@@ -217,10 +236,13 @@ def build_page_record(
     canonical_url = canonicalize_url(url)
     content_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
     return {
-        "schema_version": 1,
-        "doc_id": sha256_parts(SEARCH_ENGINE, canonical_url, fetched_at),
+        "schema_version": 2,
+        "org_id": ORG_ID,
+        "doc_id": sha256_parts(
+            ORG_ID, SEARCH_ENGINE, canonical_url, fetched_at
+        ),
         "dedupe_key": sha256_parts(
-            SEARCH_ENGINE, canonical_url, content_sha256
+            ORG_ID, SEARCH_ENGINE, canonical_url, content_sha256
         ),
         "run_id": run_id,
         "source": SEARCH_ENGINE,
@@ -427,6 +449,7 @@ def main():
     print("  DARK WEB BFS CRAWLER", flush=True)
     print("=" * 60, flush=True)
     print("\n  Config:", flush=True)
+    print(f"    Organization ID: {ORG_ID}", flush=True)
     print(f"    Search engine: {SEARCH_ENGINE}", flush=True)
     print(f"    Query: {QUERY}", flush=True)
     print(f"    Keywords: {KEYWORDS if KEYWORDS else 'None (save all)'}", flush=True)
@@ -438,7 +461,7 @@ def main():
 
     driver = None
     try:
-        sink = create_output_sink(OUTPUT_DIR)
+        sink = create_output_sink(OUTPUT_DIR, org_id=ORG_ID)
         run_id = getattr(
             sink,
             "run_id",
@@ -483,12 +506,14 @@ def main():
         )
 
         manifest = {
-            "schema_version": 1,
+            "schema_version": 2,
             "status": "succeeded",
+            "org_id": ORG_ID,
             "run_id": run_id,
             "started_at": format_utc(started_at),
             "completed_at": format_utc(utc_now()),
             "config": {
+                "org_id": ORG_ID,
                 "search_engine": SEARCH_ENGINE,
                 "query": QUERY,
                 "keywords": KEYWORDS,

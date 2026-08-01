@@ -1,5 +1,5 @@
 -- =============================================================================
--- Nocturne regression test: evidence outside prefix/suffix fallback slices
+-- Nocturne regression test: target-aware and evidence-only AI inputs
 -- =============================================================================
 -- Prerequisites:
 --   * 04_detect_indicators_udf.sql has been deployed.
@@ -10,6 +10,9 @@
 -- characters and before the final 4,000 characters. A passing result therefore
 -- demonstrates that the builder selected an evidence-centered window instead
 -- of relying on prefix/suffix fallback text.
+--
+-- A second synthetic document has no ranked target/leak window and verifies that
+-- the masked prefix/suffix fallback is also target-profile-free for L2.
 --
 -- All values are synthetic. The card number is a published Luhn-valid test
 -- number, and the password is an explicit non-secret fixture value.
@@ -66,11 +69,48 @@ built AS (
       title,
       indicators,
       'Palo Alto Networks',
-      ARRAY_CONSTRUCT('PANW'),
+      ARRAY_CONSTRUCT('PANW', 'CONFIG_ONLY_ALIAS'),
       ARRAY_CONSTRUCT('paloaltonetworks.com'),
-      ARRAY_CONSTRUCT('Cortex', 'Prisma Cloud', 'Strata')
+      ARRAY_CONSTRUCT(
+        'Cortex',
+        'Prisma Cloud',
+        'Strata',
+        'CONFIG_ONLY_PRODUCT'
+      )
     ) AS build_result
   FROM detected
+),
+fallback_fixture AS (
+  SELECT
+    'fixture_fallback_user@example.net\n'
+      || LEFT(
+        REPEAT(
+          'Neutral filler sentence for deterministic fallback validation. ',
+          500
+        ),
+        20000
+      ) AS raw_text,
+    'Synthetic fallback input test' AS title
+),
+fallback_detected AS (
+  SELECT
+    raw_text,
+    title,
+    NOCTURNE.RAW.DETECT_INDICATORS(raw_text) AS indicators
+  FROM fallback_fixture
+),
+fallback_built AS (
+  SELECT
+    NOCTURNE.RAW.BUILD_CLASSIFICATION_INPUT(
+      raw_text,
+      title,
+      indicators,
+      'Configuration Only Organization',
+      ARRAY_CONSTRUCT('CONFIG_ONLY_ALIAS'),
+      ARRAY_CONSTRUCT('config-only.example'),
+      ARRAY_CONSTRUCT('CONFIG_ONLY_PRODUCT')
+    ) AS fallback_result
+  FROM fallback_detected
 ),
 checks AS (
   SELECT
@@ -85,7 +125,7 @@ checks AS (
       AS detected_validated_test_card,
     COALESCE(indicators:counts:email::NUMBER, 0) = 1
       AS detected_synthetic_email,
-    build_result:input_method_version::STRING = 'evidence_windows_v1'
+    build_result:input_method_version::STRING = 'evidence_windows_v2'
       AS used_evidence_window_method,
     build_result:fallback_used::BOOLEAN = FALSE AS avoided_fallback,
     (
@@ -102,6 +142,63 @@ checks AS (
       'MIDDLE_EVIDENCE_BEGIN'
     ) AS included_middle_evidence,
     CONTAINS(
+      build_result:evidence_input::STRING,
+      'MIDDLE_EVIDENCE_BEGIN'
+    ) AS evidence_input_included_middle_evidence,
+    CONTAINS(
+      build_result:classification_input::STRING,
+      'TARGET PROFILE'
+    ) AS classification_input_has_target_profile,
+    CONTAINS(
+      build_result:classification_input::STRING,
+      'CONFIG_ONLY_PRODUCT'
+    ) AS classification_input_has_config_values,
+    NOT CONTAINS(
+      build_result:evidence_input::STRING,
+      'TARGET PROFILE'
+    )
+      AND NOT CONTAINS(
+        build_result:evidence_input::STRING,
+        'canonical_name='
+      )
+      AND NOT CONTAINS(
+        build_result:evidence_input::STRING,
+        'aliases='
+      )
+      AND NOT CONTAINS(
+        build_result:evidence_input::STRING,
+        'domains='
+      )
+      AND NOT CONTAINS(
+        build_result:evidence_input::STRING,
+        'products='
+      )
+      AND NOT CONTAINS(
+        build_result:evidence_input::STRING,
+        'DETECTED INDICATOR SUMMARY'
+      )
+      AND NOT CONTAINS(
+        build_result:evidence_input::STRING,
+        'CONFIG_ONLY_ALIAS'
+      )
+      AND NOT CONTAINS(
+        build_result:evidence_input::STRING,
+        'CONFIG_ONLY_PRODUCT'
+      ) AS evidence_input_excludes_target_configuration,
+    SUBSTR(
+      build_result:classification_input::STRING,
+      POSITION(
+        'DOCUMENT INTRODUCTION'
+        IN build_result:classification_input::STRING
+      )
+    ) = SUBSTR(
+      build_result:evidence_input::STRING,
+      POSITION(
+        'DOCUMENT INTRODUCTION'
+        IN build_result:evidence_input::STRING
+      )
+    ) AS both_inputs_reuse_same_evidence_body,
+    CONTAINS(
       build_result:classification_input::STRING,
       '[REDACTED_PASSWORD_ASSIGNMENT]'
     ) AS masked_password,
@@ -113,6 +210,18 @@ checks AS (
       build_result:classification_input::STRING,
       '[REDACTED_EMAIL_LOCAL_PART]@paloaltonetworks.com'
     ) AS masked_email_local_part,
+    CONTAINS(
+      build_result:evidence_input::STRING,
+      '[REDACTED_PASSWORD_ASSIGNMENT]'
+    )
+      AND CONTAINS(
+        build_result:evidence_input::STRING,
+        '[REDACTED_VALIDATED_CREDIT_CARD]'
+      )
+      AND CONTAINS(
+        build_result:evidence_input::STRING,
+        '[REDACTED_EMAIL_LOCAL_PART]@paloaltonetworks.com'
+      ) AS evidence_input_masked_sensitive_values,
     NOT CONTAINS(
       build_result:classification_input::STRING,
       'SYNTHETIC_TEST_PASSWORD_DO_NOT_USE'
@@ -123,12 +232,46 @@ checks AS (
     ) AS excluded_raw_test_card,
     build_result:classification_input_length::NUMBER <= 16000
       AS respected_input_length_limit,
+    build_result:evidence_input_length::NUMBER <= 16000
+      AS respected_evidence_input_length_limit,
     build_result:input_truncated::BOOLEAN = TRUE
       AS reported_source_truncation,
+    fallback_result:fallback_used::BOOLEAN = TRUE
+      AS fallback_path_used,
+    (
+      fallback_result:builder_error IS NULL
+      OR COALESCE(IS_NULL_VALUE(fallback_result:builder_error), FALSE)
+    ) AS fallback_builder_completed_without_error,
+    CONTAINS(
+      fallback_result:evidence_input::STRING,
+      '[REDACTED_EMAIL_LOCAL_PART]@example.net'
+    ) AS fallback_evidence_is_masked,
+    NOT CONTAINS(
+      fallback_result:evidence_input::STRING,
+      'TARGET PROFILE'
+    )
+      AND NOT CONTAINS(
+        fallback_result:evidence_input::STRING,
+        'Configuration Only Organization'
+      )
+      AND NOT CONTAINS(
+        fallback_result:evidence_input::STRING,
+        'CONFIG_ONLY_ALIAS'
+      )
+      AND NOT CONTAINS(
+        fallback_result:evidence_input::STRING,
+        'config-only.example'
+      )
+      AND NOT CONTAINS(
+        fallback_result:evidence_input::STRING,
+        'CONFIG_ONLY_PRODUCT'
+      ) AS fallback_evidence_excludes_target_configuration,
     indicators:summary_text::STRING AS indicator_summary,
     build_result:selected_windows AS selected_windows,
-    build_result:classification_input::STRING AS masked_classification_input
+    build_result:classification_input::STRING AS masked_classification_input,
+    build_result:evidence_input::STRING AS masked_evidence_input
   FROM built
+  CROSS JOIN fallback_built
 )
 SELECT
   IFF(
@@ -144,13 +287,24 @@ SELECT
     AND reused_strong_indicator_spans
     AND matched_configured_target_domain
     AND included_middle_evidence
+    AND evidence_input_included_middle_evidence
+    AND classification_input_has_target_profile
+    AND classification_input_has_config_values
+    AND evidence_input_excludes_target_configuration
+    AND both_inputs_reuse_same_evidence_body
     AND masked_password
     AND masked_test_card
     AND masked_email_local_part
+    AND evidence_input_masked_sensitive_values
     AND excluded_raw_password
     AND excluded_raw_test_card
     AND respected_input_length_limit
-    AND reported_source_truncation,
+    AND respected_evidence_input_length_limit
+    AND reported_source_truncation
+    AND fallback_path_used
+    AND fallback_builder_completed_without_error
+    AND fallback_evidence_is_masked
+    AND fallback_evidence_excludes_target_configuration,
     'PASS',
     'FAIL'
   ) AS overall_status,
@@ -166,14 +320,26 @@ SELECT
   reused_strong_indicator_spans,
   matched_configured_target_domain,
   included_middle_evidence,
+  evidence_input_included_middle_evidence,
+  classification_input_has_target_profile,
+  classification_input_has_config_values,
+  evidence_input_excludes_target_configuration,
+  both_inputs_reuse_same_evidence_body,
   masked_password,
   masked_test_card,
   masked_email_local_part,
+  evidence_input_masked_sensitive_values,
   excluded_raw_password,
   excluded_raw_test_card,
   respected_input_length_limit,
+  respected_evidence_input_length_limit,
   reported_source_truncation,
+  fallback_path_used,
+  fallback_builder_completed_without_error,
+  fallback_evidence_is_masked,
+  fallback_evidence_excludes_target_configuration,
   indicator_summary,
   selected_windows,
-  masked_classification_input
+  masked_classification_input,
+  masked_evidence_input
 FROM checks;

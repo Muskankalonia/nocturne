@@ -1,8 +1,9 @@
 -- =============================================================================
 -- Nocturne Pipeline: Step 7 - Materialized L1 Classification Input
 -- =============================================================================
--- Produces one bounded, auditable Cortex input per unique page and enabled
--- monitored organization before any AI function is called.
+-- Produces one bounded, auditable Cortex input per unique page for exactly the
+-- organization assigned by the crawler. No page is evaluated against every
+-- enabled organization.
 --
 -- Two dynamic tables deliberately separate the single prompt-builder invocation
 -- from projection of its returned fields. This guarantees the JavaScript UDF is
@@ -19,8 +20,8 @@ USE SCHEMA NOCTURNE.RAW;
 ALTER TABLE NOCTURNE.CONFIG.MONITORED_ORGANIZATIONS
   SET CHANGE_TRACKING = TRUE;
 
--- Select one stable representative for each content-based dedupe key, join every
--- enabled monitored organization, and invoke the input builder exactly once.
+-- Select one stable representative within each organization, join only its
+-- configured target profile, and invoke the input builder exactly once.
 CREATE OR REPLACE DYNAMIC TABLE NOCTURNE.RAW.DT_L1_INPUT_BUILD
   WAREHOUSE = COMPUTE_WH
   TARGET_LAG = DOWNSTREAM
@@ -29,6 +30,7 @@ CREATE OR REPLACE DYNAMIC TABLE NOCTURNE.RAW.DT_L1_INPUT_BUILD
 AS
   WITH DEDUPED_PAGES AS (
     SELECT
+      ORG_ID,
       DOC_ID,
       DEDUPE_KEY,
       RUN_ID,
@@ -44,16 +46,18 @@ AS
       CONTENT_SHA256,
       RAW_TEXT,
       SCHEMA_VERSION,
+      _PATH_ORG_ID,
       _SOURCE_FILE,
       _INGESTED_AT,
       INDICATORS_FOUND
     FROM NOCTURNE.RAW.DT_REGEX_INDICATORS
     QUALIFY ROW_NUMBER() OVER (
-      PARTITION BY DEDUPE_KEY
+      PARTITION BY ORG_ID, DEDUPE_KEY
       ORDER BY FETCHED_AT ASC, _INGESTED_AT ASC, DOC_ID ASC
     ) = 1
   )
   SELECT
+    PAGE.ORG_ID,
     PAGE.DOC_ID,
     PAGE.DEDUPE_KEY,
     PAGE.RUN_ID,
@@ -68,9 +72,9 @@ AS
     PAGE.CONTENT_LENGTH,
     PAGE.CONTENT_SHA256,
     PAGE.SCHEMA_VERSION,
+    PAGE._PATH_ORG_ID,
     PAGE._SOURCE_FILE,
     PAGE._INGESTED_AT,
-    ORGANIZATION.ORG_ID,
     ORGANIZATION.CANONICAL_NAME,
     ORGANIZATION.ALIASES,
     ORGANIZATION.DOMAINS,
@@ -91,8 +95,9 @@ AS
       ORGANIZATION.PRODUCTS
     ) AS INPUT_BUILD_RESULT
   FROM DEDUPED_PAGES AS PAGE
-  CROSS JOIN NOCTURNE.CONFIG.MONITORED_ORGANIZATIONS AS ORGANIZATION
-  WHERE ORGANIZATION.ENABLED = TRUE;
+  INNER JOIN NOCTURNE.CONFIG.MONITORED_ORGANIZATIONS AS ORGANIZATION
+    ON ORGANIZATION.ORG_ID = PAGE.ORG_ID
+    AND ORGANIZATION.ENABLED = TRUE;
 
 -- Project the stored builder result into typed, queryable columns. This table is
 -- what the relationship classifier consumes; it never needs RAW_TEXT.
@@ -103,6 +108,7 @@ CREATE OR REPLACE DYNAMIC TABLE NOCTURNE.RAW.DT_L1_CLASSIFICATION_INPUT
   INITIALIZE = ON_CREATE
 AS
   SELECT
+    ORG_ID,
     DOC_ID,
     DEDUPE_KEY,
     RUN_ID,
@@ -117,9 +123,9 @@ AS
     CONTENT_LENGTH,
     CONTENT_SHA256,
     SCHEMA_VERSION,
+    _PATH_ORG_ID,
     _SOURCE_FILE,
     _INGESTED_AT,
-    ORG_ID,
     CANONICAL_NAME,
     ALIASES,
     DOMAINS,
@@ -134,6 +140,12 @@ AS
       AS CLASSIFICATION_INPUT,
     INPUT_BUILD_RESULT:classification_input_length::NUMBER
       AS CLASSIFICATION_INPUT_LENGTH,
+    INPUT_BUILD_RESULT:evidence_input::STRING
+      AS EVIDENCE_INPUT,
+    INPUT_BUILD_RESULT:evidence_input_length::NUMBER
+      AS EVIDENCE_INPUT_LENGTH,
+    INPUT_BUILD_RESULT:evidence_input_truncated::BOOLEAN
+      AS EVIDENCE_INPUT_TRUNCATED,
     INPUT_BUILD_RESULT:source_text_length::NUMBER
       AS SOURCE_TEXT_LENGTH,
     INPUT_BUILD_RESULT:input_truncated::BOOLEAN
@@ -182,6 +194,7 @@ AS
 --   FALLBACK_USED,
 --   COUNT(*) AS PAGE_COUNT,
 --   MAX(CLASSIFICATION_INPUT_LENGTH) AS MAX_INPUT_LENGTH,
+--   MAX(EVIDENCE_INPUT_LENGTH) AS MAX_EVIDENCE_INPUT_LENGTH,
 --   COUNT_IF(BUILDER_ERROR IS NOT NULL) AS BUILDER_ERROR_COUNT
 -- FROM NOCTURNE.RAW.DT_L1_CLASSIFICATION_INPUT
 -- GROUP BY INPUT_METHOD_VERSION, FALLBACK_USED;

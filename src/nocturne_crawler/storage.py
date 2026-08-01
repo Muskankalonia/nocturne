@@ -40,6 +40,18 @@ def _safe_path_component(value: str) -> str:
     return cleaned.strip("-.") or "unknown"
 
 
+def _validated_org_id(value: str) -> str:
+    org_id = value.strip()
+    if not org_id:
+        raise ValueError("org_id is required for GCS output")
+    if not re.fullmatch(r"[a-z0-9]+(?:_[a-z0-9]+)*", org_id):
+        raise ValueError(
+            "org_id must be a lowercase slug containing letters, numbers, "
+            "and single underscores"
+        )
+    return org_id
+
+
 def _local_run_id(now: datetime) -> str:
     timestamp = now.strftime("%Y%m%dT%H%M%SZ")
     return f"local-{timestamp}-{uuid.uuid4().hex[:8]}"
@@ -122,6 +134,7 @@ class GcsJsonlSink:
     def __init__(
         self,
         bucket_name: str,
+        org_id: str,
         prefix: str = "raw/crawls",
         max_documents: int = DEFAULT_BATCH_DOCUMENTS,
         max_bytes: int = DEFAULT_BATCH_BYTES,
@@ -142,6 +155,7 @@ class GcsJsonlSink:
             raise ValueError("started_at must include timezone information")
 
         self.bucket_name = bucket_name
+        self.org_id = _validated_org_id(org_id)
         self.prefix = prefix.strip("/")
         self.run_id = _safe_path_component(
             run_id
@@ -157,6 +171,7 @@ class GcsJsonlSink:
 
         path_parts = [
             self.prefix,
+            f"org_id={self.org_id}",
             f"crawl_date={self.started_at.date().isoformat()}",
             f"run_id={self.run_id}",
             f"task={self.task_index}",
@@ -209,7 +224,8 @@ class GcsJsonlSink:
         blob.content_encoding = "gzip"
         blob.metadata = {
             "document-count": str(document_count),
-            "schema-version": "1",
+            "schema-version": "2",
+            "org-id": self.org_id,
         }
         blob.upload_from_string(
             payload,
@@ -242,6 +258,7 @@ class GcsJsonlSink:
         completed_manifest["storage"] = {
             "backend": "gcs",
             "bucket": self.bucket_name,
+            "org_id": self.org_id,
             "prefix": self.object_base,
             "objects": [asdict(stored) for stored in self._objects],
         }
@@ -251,7 +268,10 @@ class GcsJsonlSink:
             f"gs://{self.bucket_name}/{manifest_name}"
         )
         manifest_blob = self._bucket.blob(manifest_name)
-        manifest_blob.metadata = {"schema-version": "1"}
+        manifest_blob.metadata = {
+            "schema-version": "2",
+            "org-id": self.org_id,
+        }
         manifest_blob.upload_from_string(
             json.dumps(completed_manifest, indent=2, ensure_ascii=False).encode("utf-8"),
             content_type="application/json",
@@ -265,6 +285,7 @@ class GcsJsonlSink:
 def create_output_sink(
     output_dir: str | Path,
     *,
+    org_id: str | None = None,
     environ: Mapping[str, str] | None = None,
     client: Any | None = None,
 ) -> OutputSink:
@@ -279,9 +300,11 @@ def create_output_sink(
     bucket_name = env.get("GCS_BUCKET", "").strip()
     if not bucket_name:
         raise ValueError("GCS_BUCKET is required when OUTPUT_BACKEND=gcs")
+    resolved_org_id = org_id or env.get("ORG_ID", "")
 
     return GcsJsonlSink(
         bucket_name=bucket_name,
+        org_id=resolved_org_id,
         prefix=env.get("GCS_PREFIX", "raw/crawls"),
         max_documents=_positive_int(
             env.get("GCS_BATCH_MAX_DOCUMENTS", DEFAULT_BATCH_DOCUMENTS),
