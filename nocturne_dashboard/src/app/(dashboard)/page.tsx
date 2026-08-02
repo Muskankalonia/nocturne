@@ -5,8 +5,10 @@ import { Box, Button, Stack, Typography, alpha } from "@mui/material";
 import { useAuth } from "@/contexts/AuthContext";
 import { Panel } from "@/components/ui/Panel";
 import { Cascade } from "@/components/ui/Cascade";
+import { PostureFlow } from "@/components/ui/PostureFlow";
 import { SeverityChip } from "@/components/ui/SeverityChip";
 import { colors, fonts, severityColor } from "@/theme/tokens";
+import { hostOf } from "@/lib/format";
 import type { CommandCenterResponse } from "@/types/dashboard";
 
 const configuredRefreshMs = Number(
@@ -118,6 +120,23 @@ export default function CommandCenterPage() {
     [scored],
   );
 
+  // Every incident in the visible scope. Kept as a hook above the loading gate
+  // below — a `useMemo` after a conditional return breaks the rules of hooks.
+  const incidentsInScope = useMemo(
+    () => visibleData?.incidents ?? [],
+    [visibleData],
+  );
+
+  // The onion hosts this scope actually saw, ranked by how much they produced.
+  const sourceRank = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const incident of incidentsInScope) {
+      const host = hostOf(incident.topUrl);
+      counts.set(host, (counts.get(host) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  }, [incidentsInScope]);
+
   const organizationName = isFleetScope
     ? "Fleet"
     : visibleData?.organizations[0]?.organizationName
@@ -161,8 +180,42 @@ export default function CommandCenterPage() {
   const topImpact = metrics.topImpactSeverityScore;
   const topImpactBand = metrics.topImpactSeverityBand;
   const criticals = metrics.incidentsByBand.critical;
-  const extractedCount = cascade.find((stage) => stage.id === "extracted")?.count ?? 0;
-  const relevanceCount = cascade.find((stage) => stage.id === "relevance")?.count ?? 0;
+  const stageCount = (id: string) => cascade.find((stage) => stage.id === id)?.count ?? 0;
+  const extractedCount = stageCount("extracted");
+  const relevanceCount = stageCount("relevance");
+
+  /* ── hero flow inputs ────────────────────────────────────────────────────── */
+
+  const maxSource = sourceRank[0]?.[1] ?? 1;
+  const flowSources = sourceRank.slice(0, 7).map(([label, count]) => ({
+    label,
+    weight: count / maxSource,
+  }));
+
+  // The hero's arithmetic has to close: the incidents node is the population,
+  // and every downstream branch is a partition of it. Pipeline volumes on the
+  // left are last-24h throughput; these are the incidents actually in scope.
+  const confirmedIncidents = incidentsInScope.filter(
+    (incident) => incident.route === "target_confirmed",
+  );
+  const confirmed = confirmedIncidents.length;
+  const unconfirmed = incidentsInScope.length - confirmed;
+  const openConfirmed = confirmedIncidents.filter(
+    (incident) =>
+      incident.remediationStatus !== "resolved" &&
+      incident.remediationStatus !== "contained",
+  );
+  const openNow = openConfirmed.length;
+  const resolved = confirmed - openNow;
+
+  // Derived from the same rows as `openNow` rather than from the server's
+  // aggregate, so the chips always sum to the number they sit beside.
+  const flowBands = (["critical", "high", "medium", "low", "informational"] as const).map(
+    (band) => ({
+      band,
+      count: openConfirmed.filter((incident) => incident.impactSeverityBand === band).length,
+    }),
+  );
 
   return (
     <Stack gap={2}>
@@ -193,6 +246,26 @@ export default function CommandCenterPage() {
           Refresh failed: {error}. Displaying the last successful response.
         </Box>
       )}
+
+      {/* hero — the whole pipeline as one left-to-right statement */}
+      <Panel padded={false}>
+        <Box sx={{ px: { xs: 1.5, md: 2.5 }, pt: 2.5, pb: 1 }}>
+          <PostureFlow
+            sources={flowSources}
+            extraSourceCount={Math.max(0, sourceRank.length - flowSources.length)}
+            collected={stageCount("collected")}
+            relevant={stageCount("relevance")}
+            deepAnalysis={stageCount("extracted")}
+            incidents={incidentsInScope.length}
+            confirmed={confirmed}
+            needsReview={unconfirmed}
+            resolved={resolved}
+            open={openNow}
+            bands={flowBands}
+            groundingRate={stats.rate}
+          />
+        </Box>
+      </Panel>
 
       {/* KPI row */}
       <Box
@@ -248,7 +321,7 @@ export default function CommandCenterPage() {
         />
       </Box>
 
-      {/* cascade */}
+      {/* cascade + severity split */}
       <Box
         sx={{
           display: "grid",
