@@ -5,7 +5,7 @@ Deploys the Snowflake classification pipeline by executing SQL files in order.
 Handles multi-statement SQL files, logs progress, and verifies each step.
 
 Usage:
-    # Existing storage integration/IAM: deploy and go live with steps 02-15
+    # Existing storage integration/IAM: deploy and go live with steps 02-16
     python deploy_pipeline.py
 
     # Fresh environment: also create step 01's storage integration
@@ -77,6 +77,7 @@ DEPLOY_STEPS = {
     13: "13_dt_l4_severity.sql",
     14: "14_ai_incident_insights.sql",
     15: "15_seed_validate_golive.sql",
+    16: "16_dashboard_interface.sql",
 }
 
 STEP_TITLES = {
@@ -95,6 +96,7 @@ STEP_TITLES = {
     13: "L4 impact, confidence, and triage priority",
     14: "Cached per-incident AI insights",
     15: "Seed, validate, and go live",
+    16: "Organization-scoped dashboard interface",
 }
 
 RELATIONSHIP_LABELS = (
@@ -106,8 +108,8 @@ RELATIONSHIP_LABELS = (
 
 # Replacing a configured storage integration can change its Snowflake-generated
 # GCS identity and invalidate the bucket IAM grant. Existing environments only
-# need steps 02-15, so step 01 requires an explicit CLI option.
-DEFAULT_DEPLOY_STEPS = tuple(range(2, 16))
+# need steps 02-16, so step 01 requires an explicit CLI option.
+DEFAULT_DEPLOY_STEPS = tuple(range(2, 17))
 
 AI_STAGES = {
     "relationship": {
@@ -399,6 +401,34 @@ def _statement_messages(
             f"missing={row.get('MISSING_CANDIDATE_COUNT')}."
             for row in rows
         ] or ["No missing AI candidates before go-live."]
+
+    if (
+        "FROM NOCTURNE.INFORMATION_SCHEMA.VIEWS" in normalized
+        and "TABLE_SCHEMA = 'DASHBOARD'" in normalized
+    ):
+        view_names = ", ".join(
+            str(row.get("TABLE_NAME"))
+            for row in rows
+            if row.get("TABLE_NAME")
+        )
+        return [
+            f"Dashboard interface views available: {view_names}."
+            if view_names
+            else "Dashboard interface has no views."
+        ]
+
+    if "FROM NOCTURNE.DASHBOARD.VW_COMMAND_CENTER" in normalized:
+        return [
+            "Dashboard organization: "
+            f"{row.get('ORGANIZATION_NAME')} "
+            f"(org_id={row.get('ORG_ID')}, "
+            f"collected={row.get('PAGES_COLLECTED')}, "
+            f"L1={row.get('PAGES_RELEVANCE_CHECKED')}, "
+            f"L2={row.get('PAGES_EVIDENCE_EXTRACTED')}, "
+            f"confirmed={row.get('PAGES_OWNERSHIP_VERIFIED')}, "
+            f"incidents={row.get('INCIDENTS_RAISED')})."
+            for row in rows
+        ] or ["Dashboard interface contains no enabled organizations."]
 
     if (
         "RELATIONSHIP_AI_STATUS" in normalized
@@ -1643,7 +1673,7 @@ def main():
         "--step",
         type=int,
         choices=DEPLOY_STEPS,
-        help="Run only the SQL file with this step number (1-15)",
+        help="Run only the SQL file with this step number (1-16)",
     )
     deployment_scope.add_argument(
         "--include-storage-integration",
@@ -1779,7 +1809,7 @@ def main():
             conn,
             affected_since=deployment_started_at,
             include_all_details=(
-                args.step is not None and args.step in range(5, 16)
+                args.step is not None and args.step in range(5, 17)
             ),
             log_ai_inputs=args.log_ai_inputs,
         )
