@@ -1,0 +1,340 @@
+import type {
+  CostBreakdown,
+  FleetSummary,
+  OrgPosture,
+  PipelineHealth,
+  RejectionReason,
+  TaskHealth,
+  TenantCost,
+  VersionDrift,
+} from "@/types";
+
+/** SQL: VW_L4_ORG_POSTURE, one row per tenant. */
+export const orgPostures: OrgPosture[] = [
+  {
+    orgId: "att",
+    canonicalName: "AT&T",
+    topImpactSeverityScore: 93,
+    topImpactSeverityBand: "critical",
+    topTriagePriorityScore: 92,
+    topTriagePriorityBand: "critical",
+    incidentCount: 31,
+    criticalIncidents: 6,
+    highIncidents: 9,
+    distinctActors: 14,
+    totalSightings: 47,
+    totalMirrorSightings: 12,
+    lastActivity: "2026-08-01T16:01:00Z",
+    trend: [61, 63, 68, 66, 74, 79, 86, 92],
+    groundingRate: 96,
+  },
+  {
+    orgId: "palo_alto_networks",
+    canonicalName: "Palo Alto Networks",
+    topImpactSeverityScore: 96,
+    topImpactSeverityBand: "critical",
+    topTriagePriorityScore: 94,
+    topTriagePriorityBand: "critical",
+    incidentCount: 23,
+    criticalIncidents: 4,
+    highIncidents: 7,
+    distinctActors: 11,
+    totalSightings: 34,
+    totalMirrorSightings: 8,
+    lastActivity: "2026-08-01T16:03:00Z",
+    trend: [82, 86, 80, 84, 82, 87, 85, 94],
+    groundingRate: 94,
+  },
+  {
+    orgId: "bank_of_baroda",
+    canonicalName: "Bank of Baroda",
+    topImpactSeverityScore: 74,
+    topImpactSeverityBand: "high",
+    topTriagePriorityScore: 73,
+    topTriagePriorityBand: "high",
+    incidentCount: 18,
+    criticalIncidents: 3,
+    highIncidents: 5,
+    distinctActors: 9,
+    totalSightings: 26,
+    totalMirrorSightings: 6,
+    lastActivity: "2026-08-01T15:54:00Z",
+    trend: [88, 85, 86, 79, 74, 76, 70, 68],
+    groundingRate: 92,
+  },
+  {
+    orgId: "contoso_logistics",
+    canonicalName: "Contoso Logistics",
+    topImpactSeverityScore: 51,
+    topImpactSeverityBand: "medium",
+    topTriagePriorityScore: 52,
+    topTriagePriorityBand: "medium",
+    incidentCount: 12,
+    criticalIncidents: 2,
+    highIncidents: 2,
+    distinctActors: 5,
+    totalSightings: 15,
+    totalMirrorSightings: 3,
+    lastActivity: "2026-08-01T15:59:00Z",
+    trend: [49, 51, 48, 52, 50, 51, 52, 51],
+    groundingRate: 89,
+  },
+  {
+    orgId: "northwind_traders",
+    canonicalName: "Northwind Traders",
+    topImpactSeverityScore: 38,
+    topImpactSeverityBand: "low",
+    topTriagePriorityScore: 38,
+    topTriagePriorityBand: "low",
+    incidentCount: 5,
+    criticalIncidents: 2,
+    highIncidents: 0,
+    distinctActors: 2,
+    totalSightings: 6,
+    totalMirrorSightings: 1,
+    lastActivity: "2026-08-01T13:05:00Z",
+    trend: [36, 37, 36, 38, 37, 36, 38, 38],
+    groundingRate: 88,
+  },
+];
+
+export const fleetSummary: FleetSummary = {
+  tenantCount: 5,
+  totalIncidents: 89,
+  criticalIncidents: 17,
+  fleetGroundingRate: 93.1,
+  crossTenantActorCount: 3,
+  totalActorCount: 41,
+  spendUsd30d: 14.2,
+  pagesProcessed30d: 34610,
+};
+
+/** SQL: derived from DT_L2_* validation reasons + task/COPY history. */
+export const pipelineHealthByTenant: PipelineHealth[] = [
+  {
+    orgId: "att",
+    organizationName: "AT&T",
+    lastIngestAt: "2026-08-01T16:01:00Z",
+    groundingRate: 96,
+    exactGroundingRate: 84,
+    normalizedGroundingRate: 12,
+    quarantinedCount: 18,
+    totalExtractedCount: 452,
+    aiErrorCount: 0,
+    backlogCount: 0,
+    status: "healthy",
+  },
+  {
+    orgId: "palo_alto_networks",
+    organizationName: "Palo Alto Networks",
+    lastIngestAt: "2026-08-01T16:03:00Z",
+    groundingRate: 94.2,
+    exactGroundingRate: 81.4,
+    normalizedGroundingRate: 12.8,
+    quarantinedCount: 79,
+    totalExtractedCount: 1363,
+    aiErrorCount: 2,
+    backlogCount: 0,
+    status: "healthy",
+  },
+  {
+    orgId: "bank_of_baroda",
+    organizationName: "Bank of Baroda",
+    lastIngestAt: "2026-08-01T15:54:00Z",
+    groundingRate: 92,
+    exactGroundingRate: 78,
+    normalizedGroundingRate: 14,
+    quarantinedCount: 44,
+    totalExtractedCount: 551,
+    aiErrorCount: 0,
+    backlogCount: 0,
+    status: "healthy",
+  },
+  {
+    orgId: "contoso_logistics",
+    organizationName: "Contoso Logistics",
+    lastIngestAt: "2026-08-01T15:59:00Z",
+    groundingRate: 89,
+    exactGroundingRate: 74,
+    normalizedGroundingRate: 15,
+    quarantinedCount: 31,
+    totalExtractedCount: 282,
+    aiErrorCount: 0,
+    backlogCount: 0,
+    status: "healthy",
+  },
+  {
+    orgId: "northwind_traders",
+    organizationName: "Northwind Traders",
+    lastIngestAt: "2026-08-01T13:05:00Z",
+    groundingRate: 88,
+    exactGroundingRate: 71,
+    normalizedGroundingRate: 17,
+    quarantinedCount: 9,
+    totalExtractedCount: 76,
+    aiErrorCount: 0,
+    backlogCount: 14,
+    status: "lagging",
+  },
+];
+
+/**
+ * SQL: VALIDATION_REASON across DT_L2_CLAIMS / DT_L2_ENTITIES / DT_L2_EDGES.
+ * This is a chart of the model trying to invent evidence and being caught.
+ */
+export const rejectionReasons: RejectionReason[] = [
+  { reason: "unmatched_evidence", label: "Quote not found in source", count: 41, severity: "critical" },
+  { reason: "invalid_endpoint_combination", label: "Edge shape not allowed", count: 17, severity: "high" },
+  { reason: "missing_target_endpoint", label: "Edge points at nothing", count: 11, severity: "high" },
+  { reason: "duplicate_claim_id", label: "Duplicate claim id", count: 6, severity: "medium" },
+  { reason: "entity_cap_exceeded", label: "Over the per-page entity cap", count: 4, severity: "low" },
+];
+
+/** SQL: SHOW TASKS / TASK_HISTORY. Two scheduled, four stream-triggered. */
+export const tasks: TaskHealth[] = [
+  {
+    taskName: "CRAWL_INGEST_TASK",
+    trigger: "schedule",
+    scheduleLabel: "5 min",
+    state: "running",
+    lastRunAt: "2026-08-01T16:05:00Z",
+    pendingCandidates: null,
+    errorCount: 0,
+  },
+  {
+    taskName: "RELATIONSHIP_AI_TASK",
+    trigger: "stream",
+    scheduleLabel: null,
+    state: "idle",
+    lastRunAt: "2026-08-01T15:58:00Z",
+    pendingCandidates: 0,
+    errorCount: 0,
+  },
+  {
+    taskName: "L2_EXTRACTION_AI_TASK",
+    trigger: "stream",
+    scheduleLabel: null,
+    state: "idle",
+    lastRunAt: "2026-08-01T16:01:00Z",
+    pendingCandidates: 0,
+    errorCount: 2,
+  },
+  {
+    taskName: "LEAK_TYPE_AI_TASK",
+    trigger: "stream",
+    scheduleLabel: null,
+    state: "idle",
+    lastRunAt: "2026-08-01T16:02:00Z",
+    pendingCandidates: 0,
+    errorCount: 0,
+  },
+  {
+    taskName: "INCIDENT_INSIGHT_CANDIDATE_DISCOVERY_TASK",
+    trigger: "schedule",
+    scheduleLabel: "5 min",
+    state: "running",
+    lastRunAt: "2026-08-01T16:05:00Z",
+    pendingCandidates: 1,
+    errorCount: 0,
+  },
+  {
+    taskName: "INCIDENT_INSIGHT_AI_TASK",
+    trigger: "stream",
+    scheduleLabel: null,
+    state: "queued",
+    lastRunAt: "2026-08-01T15:47:00Z",
+    pendingCandidates: 1,
+    errorCount: 0,
+  },
+];
+
+/** Version columns the pipeline already stamps on every row. */
+export const versionDrift: VersionDrift[] = [
+  {
+    stage: "Relevance prompt",
+    baselineVersion: "ai_classify_relationship_v1",
+    currentVersion: "ai_classify_relationship_v2",
+    rowsBehind: 0,
+  },
+  {
+    stage: "Extraction prompt",
+    baselineVersion: "ai_complete_extraction_v1",
+    currentVersion: "ai_complete_extraction_v2",
+    rowsBehind: 0,
+  },
+  {
+    stage: "Score method",
+    baselineVersion: "impact_confidence_priority_v2",
+    currentVersion: "impact_confidence_priority_v3",
+    rowsBehind: 14,
+  },
+  {
+    stage: "Input builder",
+    baselineVersion: "evidence_windows_v1",
+    currentVersion: "evidence_windows_v2",
+    rowsBehind: 0,
+  },
+  {
+    stage: "Grounding method",
+    baselineVersion: "conservative_grounding_v1",
+    currentVersion: "conservative_grounding_v2",
+    rowsBehind: 0,
+  },
+  {
+    stage: "Extraction model",
+    baselineVersion: null,
+    currentVersion: "claude-sonnet-4-5",
+    rowsBehind: 0,
+  },
+];
+
+/** SQL: CORTEX_FUNCTIONS_USAGE_HISTORY grouped by QUERY_TAG. */
+export const costByStage: CostBreakdown[] = [
+  {
+    stage: "l2_extraction",
+    label: "Evidence extraction",
+    queryTag: "NOCTURNE_L2_EXTRACTION_AI",
+    spendUsd: 8.4,
+    callCount: 1418,
+  },
+  {
+    stage: "relationship",
+    label: "Relevance check",
+    queryTag: "NOCTURNE_RELATIONSHIP_AI",
+    spendUsd: 3.95,
+    callCount: 22184,
+  },
+  {
+    stage: "leak_type",
+    label: "Data classification",
+    queryTag: "NOCTURNE_LEAK_TYPE_AI",
+    spendUsd: 1.2,
+    callCount: 271,
+  },
+  {
+    stage: "incident_insight",
+    label: "Incident narratives",
+    queryTag: "NOCTURNE_L4_INCIDENT_INSIGHT_AI",
+    spendUsd: 0.65,
+    callCount: 89,
+  },
+];
+
+export const costByTenant: TenantCost[] = [
+  { orgId: "att", organizationName: "AT&T", pagesProcessed: 11204, deepAnalyses: 462, spendUsd: 4.9, costPerIncidentUsd: 0.16 },
+  { orgId: "palo_alto_networks", organizationName: "Palo Alto Networks", pagesProcessed: 9847, deepAnalyses: 418, spendUsd: 4.1, costPerIncidentUsd: 0.18 },
+  { orgId: "bank_of_baroda", organizationName: "Bank of Baroda", pagesProcessed: 7318, deepAnalyses: 301, spendUsd: 3.05, costPerIncidentUsd: 0.17 },
+  { orgId: "contoso_logistics", organizationName: "Contoso Logistics", pagesProcessed: 4102, deepAnalyses: 164, spendUsd: 1.6, costPerIncidentUsd: 0.13 },
+  { orgId: "northwind_traders", organizationName: "Northwind Traders", pagesProcessed: 2139, deepAnalyses: 73, spendUsd: 0.55, costPerIncidentUsd: 0.11 },
+];
+
+export const cacheSavings = { callsAvoided: 21608, usdAvoided: 61 };
+
+/** Exposure heatmap: tenant × leak type. */
+export const exposureMatrix: { orgId: string; label: string; counts: Record<string, number> }[] = [
+  { orgId: "att", label: "AT&T", counts: { credential: 14, corporate_data: 9, pii: 11, financial: 5, malware_exploit: 2 } },
+  { orgId: "palo_alto_networks", label: "Palo Alto", counts: { credential: 12, corporate_data: 7, pii: 6, financial: 8, malware_exploit: 3 } },
+  { orgId: "bank_of_baroda", label: "B. Baroda", counts: { credential: 6, corporate_data: 2, pii: 7, financial: 9, malware_exploit: 0 } },
+  { orgId: "contoso_logistics", label: "Contoso", counts: { credential: 3, corporate_data: 4, pii: 5, financial: 1, malware_exploit: 0 } },
+  { orgId: "northwind_traders", label: "Northwind", counts: { credential: 1, corporate_data: 2, pii: 0, financial: 1, malware_exploit: 1 } },
+];

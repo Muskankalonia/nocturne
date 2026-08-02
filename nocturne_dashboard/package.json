@@ -1,0 +1,38 @@
+{
+  "name": "nocturne-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Nocturne Console — dark-web breach intelligence dashboard",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "test:click": "node scripts/clicktest.cjs",
+    "shot": "node scripts/shot.cjs"
+  },
+  "dependencies": {
+    "@antv/g6": "^5.0.60",
+    "@emotion/cache": "^11.14.0",
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.0",
+    "@mui/material": "^6.3.1",
+    "@mui/material-nextjs": "^6.3.1",
+    "ag-grid-community": "^32.3.3",
+    "ag-grid-react": "^32.3.3",
+    "apexcharts": "^4.3.0",
+    "lucide-react": "^0.469.0",
+    "next": "^15.1.4",
+    "react": "^19.0.0",
+    "react-apexcharts": "^1.7.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/react": "^19.0.4",
+    "@types/react-dom": "^19.0.2",
+    "puppeteer": "^25.4.0",
+    "typescript": "^5.7.3"
+  }
+}
