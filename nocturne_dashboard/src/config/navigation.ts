@@ -102,7 +102,20 @@ export const navigation: NavItem[] = [
 ];
 
 export function navigationForRole(isSuperAdmin: boolean): NavItem[] {
-  return navigation.filter((item) => !item.adminOnly || isSuperAdmin);
+  return navigation
+    .filter((item) => !item.adminOnly || isSuperAdmin)
+    .map((item) => {
+      if (isSuperAdmin || item.id !== "breaches" || !item.children) {
+        return item;
+      }
+
+      return {
+        ...item,
+        children: item.children.filter(
+          (child) => child.href !== "/leaks?status=other",
+        ),
+      };
+    });
 }
 
 /** Section render order. */

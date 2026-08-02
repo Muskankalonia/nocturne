@@ -9,7 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { organizations, users } from "@/mocks/organizations";
+import { organizations } from "@/mocks/organizations";
 import type { DataScope, Organization, Session, User } from "@/types";
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -19,19 +19,14 @@ import type { DataScope, Organization, Session, User } from "@/types";
  * or the literal "admin". This is a hackathon convenience and must be replaced
  * before anyone real signs in.
  *
- * More importantly, and independent of the credential scheme: **tenant
- * isolation is not a client concern.** The hidden Fleet menu and the locked org
- * badge below are conveniences, not controls. The server must pin the org scope
- * onto the session and filter every query by it. If an API route ever accepts an
- * orgId from the request body or a query string, any tenant can read any other
- * tenant's breaches by editing one value.
+ * More importantly, and independent of the credential scheme: tenant isolation
+ * is enforced by the signed HttpOnly server session. The client scope below is
+ * presentation state; API routes verify the signed role and organization again.
  *
  * The contract that has to hold server-side:
  *   ORG_USER    → scope is forced to their own orgId, ignoring any client input
  *   SUPER_ADMIN → may pass an orgId to narrow, or omit it for fleet scope
  * ──────────────────────────────────────────────────────────────────────────── */
-
-const SESSION_STORAGE_KEY = "nocturne.session";
 
 export interface AuthContextValue {
   session: Session | null;
@@ -47,7 +42,7 @@ export interface AuthContextValue {
   switchableOrgs: Organization[];
 
   login: (username: string, password: string) => Promise<LoginResult>;
-  logout: () => void;
+  logout: () => Promise<void>;
   /** Super admin only; a no-op for an ORG_USER. */
   setScope: (scope: DataScope) => void;
 }
@@ -58,10 +53,9 @@ export type LoginResult =
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-function scopeForUser(user: User): DataScope {
-  return user.role === "SUPER_ADMIN"
-    ? { kind: "fleet" }
-    : { kind: "org", orgId: user.orgId! };
+interface SessionApiResponse {
+  session?: Session;
+  error?: string;
 }
 
 /**
@@ -76,83 +70,80 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Restore an existing session. Re-validating the username against the known
-  // user list means a hand-edited localStorage entry cannot invent a role.
+  // Restore only from the server-verified HttpOnly cookie. No identity, role,
+  // organization scope, or signing material is stored in localStorage.
   useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as Session;
-        const known = users.find((u) => u.username === parsed.user?.username);
-        if (known) {
-          const restoredScope =
-            known.role === "SUPER_ADMIN" ? parsed.scope : scopeForUser(known);
-          setSession({ user: known, scope: restoredScope, issuedAt: parsed.issuedAt });
-        } else {
-          window.localStorage.removeItem(SESSION_STORAGE_KEY);
+    const controller = new AbortController();
+    const restore = async () => {
+      try {
+        const response = await fetch("/api/auth/session", {
+          cache: "no-store",
+          credentials: "same-origin",
+          signal: controller.signal,
+        });
+        const body = (await response.json()) as SessionApiResponse;
+        if (!controller.signal.aborted) {
+          setSession(response.ok && body.session ? body.session : null);
         }
+      } catch {
+        if (!controller.signal.aborted) setSession(null);
+      } finally {
+        if (!controller.signal.aborted) setIsLoading(false);
       }
-    } catch {
-      window.localStorage.removeItem(SESSION_STORAGE_KEY);
-    }
-    setIsLoading(false);
-  }, []);
-
-  const persist = useCallback((next: Session | null) => {
-    setSession(next);
-    if (next) {
-      window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(next));
-    } else {
-      window.localStorage.removeItem(SESSION_STORAGE_KEY);
-    }
+    };
+    void restore();
+    return () => controller.abort();
   }, []);
 
   const login = useCallback(
     async (username: string, password: string): Promise<LoginResult> => {
-      const normalized = username.trim().toLowerCase();
-      const user = users.find((u) => u.username === normalized);
-
-      // One message for both failure modes — never reveal which usernames exist.
-      const rejection: LoginResult = {
-        ok: false,
-        error: "That username and password combination was not recognized.",
-      };
-      if (!user) return rejection;
-      if (password !== normalized) return rejection;
-
-      if (user.role === "ORG_USER") {
-        const org = organizations.find((o) => o.orgId === user.orgId);
-        if (!org) {
-          return { ok: false, error: "This organization is no longer configured." };
-        }
-        if (!org.enabled) {
+      try {
+        const response = await fetch("/api/auth/session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          cache: "no-store",
+          body: JSON.stringify({ username, password }),
+        });
+        const body = (await response.json()) as SessionApiResponse;
+        if (!response.ok || !body.session) {
           return {
             ok: false,
-            error: `Monitoring is paused for ${org.canonicalName}. Contact your administrator to re-enable it.`,
+            error: body.error ?? "Unable to create a session.",
           };
         }
+        setSession(body.session);
+        return { ok: true, user: body.session.user };
+      } catch {
+        return {
+          ok: false,
+          error: "The session service is unavailable. Please try again.",
+        };
       }
-
-      persist({
-        user,
-        scope: scopeForUser(user),
-        issuedAt: new Date().toISOString(),
-      });
-      return { ok: true, user };
     },
-    [persist],
+    [],
   );
 
-  const logout = useCallback(() => persist(null), [persist]);
+  const logout = useCallback(async () => {
+    try {
+      await fetch("/api/auth/session", {
+        method: "DELETE",
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+    } finally {
+      setSession(null);
+    }
+  }, []);
 
   const setScope = useCallback(
     (scope: DataScope) => {
-      if (!session) return;
-      // An ORG_USER cannot change scope. Enforced again on the server.
-      if (session.user.role !== "SUPER_ADMIN") return;
-      persist({ ...session, scope });
+      setSession((current) => {
+        if (!current || current.user.role !== "SUPER_ADMIN") return current;
+        return { ...current, scope };
+      });
     },
-    [session, persist],
+    [],
   );
 
   const value = useMemo<AuthContextValue>(() => {

@@ -1,11 +1,10 @@
 "use client";
 
-import { use } from "react";
+import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Box, Button, Divider, Stack, Typography, alpha } from "@mui/material";
 import { ArrowLeft } from "lucide-react";
 import { scopeOrgId, useAuth } from "@/contexts/AuthContext";
-import { groundedClaims, incidents, indicatorSummaries, insights } from "@/mocks/incidents";
 import { Panel } from "@/components/ui/Panel";
 import { SeverityChip } from "@/components/ui/SeverityChip";
 import { ScoreRadar } from "@/components/ui/ScoreRadar";
@@ -21,7 +20,7 @@ import {
   scoreReasonLabel,
   shortHash,
 } from "@/lib/format";
-import type { BreachRecord } from "@/types";
+import type { IncidentDetailResponse } from "@/types/dashboard";
 
 export default function IncidentDetailPage({
   params,
@@ -31,20 +30,86 @@ export default function IncidentDetailPage({
   const { incidentKey } = use(params);
   const router = useRouter();
   const { session } = useAuth();
+  const [detail, setDetail] = useState<IncidentDetailResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const incident = incidents.find((i) => i.incidentKey === incidentKey);
+  useEffect(() => {
+    if (!session) {
+      setDetail(null);
+      setIsLoading(false);
+      return;
+    }
 
-  // Tenant isolation, enforced again at render. In the live build the API
-  // returns 403 for this case; the UI must not depend on that being the only check.
+    const controller = new AbortController();
+    setDetail(null);
+    setError(null);
+    setIsLoading(true);
+
+    void fetch(`/api/incidents/${encodeURIComponent(incidentKey)}`, {
+      cache: "no-store",
+      credentials: "same-origin",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const body = (await response.json()) as
+          | IncidentDetailResponse
+          | { error?: string };
+        if (!response.ok || !("incident" in body)) {
+          throw new Error(
+            "error" in body && body.error
+              ? body.error
+              : "Unable to load live incident data.",
+          );
+        }
+        setDetail(body);
+      })
+      .catch((loadError: unknown) => {
+        if (loadError instanceof DOMException && loadError.name === "AbortError") {
+          return;
+        }
+        setError(
+          loadError instanceof Error
+            ? loadError.message
+            : "Unable to load live incident data.",
+        );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setIsLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [incidentKey, session]);
+
+  // The API enforces tenancy. Retain a render-time check so a stale response is
+  // never shown while the user switches organization scope in the dashboard.
   const allowedOrg = session ? scopeOrgId(session.scope) : null;
-  const permitted = incident && (allowedOrg === null || incident.orgId === allowedOrg);
+  const permittedDetail = detail && (
+    allowedOrg === null || detail.incident.orgId === allowedOrg
+  ) ? detail : null;
 
-  if (!incident || !permitted) {
+  if (isLoading) {
+    return (
+      <Stack gap={2}>
+        <PageHeader
+          title="Loading incident"
+          subtitle="Retrieving cached insight and grounded evidence from Snowflake."
+        />
+        <Panel>
+          <Typography sx={{ py: 4, textAlign: "center", color: colors.text2 }}>
+            Loading live incident data…
+          </Typography>
+        </Panel>
+      </Stack>
+    );
+  }
+
+  if (!permittedDetail) {
     return (
       <Stack gap={2}>
         <PageHeader
           title="Incident not available"
-          subtitle="It may have been removed, or it belongs to another organization."
+          subtitle={error ?? "It may have been removed, or it belongs to another organization."}
         />
         <Button
           variant="outlined"
@@ -58,18 +123,8 @@ export default function IncidentDetailPage({
     );
   }
 
-  const insight = insights.find((i) => i.incidentKey === incidentKey);
-  const claims = groundedClaims.filter((c) => c.incidentKey === incidentKey);
-  const indicators = indicatorSummaries[incidentKey] ?? [];
-
-  // A page the pipeline declined to confirm. This is the most instructive view
-  // in the product — it shows the gate working, so it gets a real explanation
-  // rather than a detail page full of dashes.
-  if (incident.route !== "target_confirmed") {
-    return (
-      <UnconfirmedIncident incident={incident} onBack={() => router.push("/leaks")} />
-    );
-  }
+  const { incident, claims, indicatorCounts: indicators } = permittedDetail;
+  const insight = incident.insight;
 
   return (
     <Stack gap={2}>
@@ -92,15 +147,29 @@ export default function IncidentDetailPage({
 
       <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", lg: "1.55fr 1fr" } }}>
         {/* narrative */}
-        <Panel title="AI incident narrative" meta={`CACHED · ${insight?.modelName ?? "—"}`}>
+        <Panel
+          title="AI incident narrative"
+          meta={`${insight.status.toUpperCase()} · ${insight.modelName ?? "—"}`}
+        >
           <Typography sx={{ fontSize: 15.5, fontWeight: 600, lineHeight: 1.35, mb: 1.2 }}>
-            {insight?.headline ?? incident.topTitle}
+            {insight.headline ?? incident.topTitle}
           </Typography>
           <Typography sx={{ fontSize: 12.5, lineHeight: 1.75, color: colors.text2 }}>
-            {insight?.whatHappened ?? insight?.executiveSummary ?? "No narrative generated yet."}
+            {insight.executiveSummary ?? "No narrative generated yet."}
           </Typography>
 
-          {insight?.businessImpact && (
+          {insight.whatHappened && (
+            <>
+              <Typography variant="overline" sx={{ display: "block", mt: 2.2, mb: 0.8 }}>
+                What happened
+              </Typography>
+              <Typography sx={{ fontSize: 12.5, lineHeight: 1.75, color: colors.text2 }}>
+                {insight.whatHappened}
+              </Typography>
+            </>
+          )}
+
+          {insight.businessImpact && (
             <>
               <Typography variant="overline" sx={{ display: "block", mt: 2.2, mb: 0.8 }}>
                 Business impact
@@ -111,7 +180,7 @@ export default function IncidentDetailPage({
             </>
           )}
 
-          {insight?.recommendedActions?.length ? (
+          {insight.recommendedActions.length ? (
             <>
               <Typography variant="overline" sx={{ display: "block", mt: 2.2, mb: 0.8 }}>
                 Recommended actions
@@ -129,6 +198,17 @@ export default function IncidentDetailPage({
               </Stack>
             </>
           ) : null}
+
+          {insight.confidenceAssessment && (
+            <>
+              <Typography variant="overline" sx={{ display: "block", mt: 2.2, mb: 0.8 }}>
+                Confidence assessment
+              </Typography>
+              <Typography sx={{ fontSize: 12.5, lineHeight: 1.75, color: colors.text2 }}>
+                {insight.confidenceAssessment}
+              </Typography>
+            </>
+          )}
 
           <Stack direction="row" gap={1} flexWrap="wrap" sx={{ mt: 2.2 }}>
             {incident.scoreReasons.map((r) => (
@@ -180,9 +260,7 @@ export default function IncidentDetailPage({
                 {claim.statement}
               </Typography>
               <EvidenceQuote
-                before="…archive index continues. "
-                highlight={claim.evidenceText}
-                after=". Contact via the channel below for escrow…"
+                highlight={claim.maskedEvidenceText}
                 start={claim.evidenceStart}
                 end={claim.evidenceEnd}
                 windowId={claim.selectedWindowId}
@@ -195,7 +273,8 @@ export default function IncidentDetailPage({
                     : claim.claimStatusExtracted}
                 </Tag>
                 <Tag>records claimed {formatCount(claim.quantityClaimed)}</Tag>
-                <Tag tone="ok">ownership → exact domain match</Tag>
+                <Tag tone="ok">grounding → {claim.groundingLevel}</Tag>
+                <Tag>corroboration {claim.corroborationCount}</Tag>
               </Stack>
             </Box>
           ))}
@@ -211,6 +290,7 @@ export default function IncidentDetailPage({
             <Kv k="Source" v={incident.source} color={colors.ion} />
             <Kv k="Host" v={hostOf(incident.topUrl)} />
             <Kv k="First seen" v={formatDateTime(incident.firstSeen)} />
+            <Kv k="Last seen" v={formatDateTime(incident.lastSeen)} />
             <Kv k="Sightings" v={`${incident.sightingCount} (${incident.mirrorSightingCount} reposts)`} />
             <Kv k="Independent sources" v={String(incident.corroborationCount)} />
             <Kv k="Actor" v={incident.actorName ?? "unattributed"} color={incident.actorName ? colors.ion : undefined} />
@@ -225,10 +305,10 @@ export default function IncidentDetailPage({
             )}
             {indicators.map((ind) => (
               <Tag
-                key={ind.type}
-                tone={ind.strength === "strong" ? "critical" : ind.strength === "medium" ? "medium" : "neutral"}
+                key={ind.indicatorType}
+                tone={indicatorTone(ind.indicatorType)}
               >
-                {ind.type} {ind.count}
+                {humanize(ind.indicatorType)} {ind.indicatorCount}
               </Tag>
             ))}
           </Stack>
@@ -236,7 +316,7 @@ export default function IncidentDetailPage({
             Counts only. Exact matched values are never sent to the browser or written to logs.
           </Typography>
 
-          {insight?.caveats?.length ? (
+          {insight.caveats.length ? (
             <>
               <Typography variant="overline" sx={{ display: "block", mt: 2.4, mb: 1 }}>
                 Caveats
@@ -286,115 +366,36 @@ export default function IncidentDetailPage({
   );
 }
 
-/** Explains, in plain language, why a page never became a confirmed incident. */
-function UnconfirmedIncident({
-  incident,
-  onBack,
-}: {
-  incident: BreachRecord;
-  onBack: () => void;
-}) {
-  const explanation: Record<string, { title: string; body: string; next: string }> = {
-    ambiguous: {
-      title: "Your organization was named, but ownership was never proven",
-      body:
-        "The page mentions your organization or a product, and the model extracted claims from it — but no grounded claim connected to your organization by an accepted ownership relationship. A name appearing on a page is not evidence that the leaked data is yours.",
-      next: "Add a missing domain or alias in Monitored Assets if this really is you, then the page is re-matched for free.",
-    },
-    other_organization_confirmed: {
-      title: "This leak belongs to a different organization",
-      body:
-        "A grounded ownership relationship was accepted, but it points at a different company. The page is kept because it is useful context — the same actor leaking someone else's data is how you see them before they reach you.",
-      next: "No action needed. It is excluded from your severity scores and alerts.",
-    },
-    not_relevant: {
-      title: "No connection to your organization was found",
-      body: "Neither a deterministic anchor nor a grounded entity tied this page to you.",
-      next: "No action needed.",
-    },
-    extraction_error: {
-      title: "Evidence extraction failed for this page",
-      body:
-        "The extraction step returned an error or an unusable response, so no claims could be verified. Errors are stored rather than retried automatically, so nothing is silently reprocessed.",
-      next: "Re-run extraction for this page from the pipeline tools if it looks important.",
-    },
-  };
+const strongIndicatorTypes = new Set([
+  "validated_credit_card",
+  "private_key_marker",
+  "github_token",
+  "aws_secret_access_key",
+  "password_assignment",
+]);
 
-  const info = explanation[incident.route] ?? explanation.ambiguous!;
+const mediumIndicatorTypes = new Set([
+  "ssn",
+  "bitcoin_wallet",
+  "ethereum_wallet",
+  "monero_wallet",
+  "cve",
+  "md5_hash",
+  "sha1_hash",
+  "sha256_hash",
+  "jwt",
+  "aws_access_key_id",
+  "token_assignment",
+]);
 
-  return (
-    <Stack gap={2}>
-      <Stack direction="row" alignItems="center" gap={1.5} flexWrap="wrap">
-        <Button size="small" startIcon={<ArrowLeft size={14} />} onClick={onBack} sx={{ color: colors.text2 }}>
-          Breach Monitor
-        </Button>
-        <Typography sx={{ fontFamily: fonts.mono, fontSize: 11, color: colors.text3 }}>
-          {shortHash(incident.incidentKey, 10, 8)}
-        </Typography>
-        <Box sx={{ ml: "auto" }}>
-          <Tag tone={incident.route === "other_organization_confirmed" ? "neutral" : "medium"}>
-            {routeLabel[incident.route]}
-          </Tag>
-        </Box>
-      </Stack>
+function indicatorTone(type: string): "critical" | "medium" | "neutral" {
+  if (strongIndicatorTypes.has(type)) return "critical";
+  if (mediumIndicatorTypes.has(type)) return "medium";
+  return "neutral";
+}
 
-      <Panel title="Why this is not a confirmed incident" meta={incident.route}>
-        <Typography sx={{ fontSize: 15.5, fontWeight: 600, lineHeight: 1.35, mb: 1.2 }}>
-          {info.title}
-        </Typography>
-        <Typography sx={{ fontSize: 12.5, lineHeight: 1.75, color: colors.text2 }}>
-          {info.body}
-        </Typography>
-        <Box
-          sx={{
-            mt: 2,
-            px: 1.6,
-            py: 1.2,
-            borderRadius: "8px",
-            border: `1px dashed ${alpha(colors.ion, 0.35)}`,
-            backgroundColor: alpha(colors.ion, 0.05),
-            fontSize: 12,
-            color: colors.text2,
-            lineHeight: 1.65,
-          }}
-        >
-          <b style={{ color: colors.text1 }}>What to do:</b> {info.next}
-        </Box>
-      </Panel>
-
-      <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", lg: "1fr 1fr" } }}>
-        <Panel title="Routing decision">
-          <Stack gap={1}>
-            <Kv k="Page title" v={incident.topTitle} />
-            <Kv k="Host" v={hostOf(incident.topUrl)} />
-            <Kv k="Relevance verdict" v={incident.relationshipLabel} />
-            <Kv k="Routing outcome" v={incident.route} color={colors.medium} />
-            <Kv k="Reason code" v={incident.routingReason} />
-            <Kv k="First seen" v={formatDateTime(incident.firstSeen)} />
-          </Stack>
-        </Panel>
-
-        <Panel title="What is deliberately absent">
-          <Stack gap={1.2}>
-            {[
-              ["Severity scores", "Only a confirmed target incident is scored."],
-              ["Leak types", "Data classification runs after ownership is proven."],
-              ["Graph promotion", "Nothing from this page enters the knowledge graph."],
-              ["Alerts", "This page can never raise a target alert."],
-            ].map(([k, v]) => (
-              <Stack key={k} direction="row" gap={1.2} alignItems="flex-start">
-                <Box sx={{ color: colors.text3, fontFamily: fonts.mono, fontSize: 12, mt: 0.1 }}>—</Box>
-                <Box>
-                  <Typography sx={{ fontSize: 12.5, color: colors.text1 }}>{k}</Typography>
-                  <Typography sx={{ fontSize: 11.5, color: colors.text3, lineHeight: 1.55 }}>{v}</Typography>
-                </Box>
-              </Stack>
-            ))}
-          </Stack>
-        </Panel>
-      </Box>
-    </Stack>
-  );
+function humanize(value: string): string {
+  return value.replaceAll("_", " ");
 }
 
 function ScoreStat({ label, value, color }: { label: string; value: number | null; color: string }) {

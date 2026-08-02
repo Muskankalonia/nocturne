@@ -3,11 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Box, Button, Stack, Typography, alpha } from "@mui/material";
-import { Download } from "lucide-react";
+import { Download, RefreshCw } from "lucide-react";
 import type { AgGridReact } from "ag-grid-react";
 import type { ColDef, ICellRendererParams, RowClassParams } from "ag-grid-community";
-import { scopeOrgId, useAuth } from "@/contexts/AuthContext";
-import { incidents } from "@/mocks/incidents";
+import { useAuth } from "@/contexts/AuthContext";
 import { DataTable } from "@/components/ui/DataTable";
 import { Panel } from "@/components/ui/Panel";
 import { SeverityChip } from "@/components/ui/SeverityChip";
@@ -19,20 +18,91 @@ import {
   leakTypeLabel,
   remediationLabel,
   remediationTone,
-  routeLabel,
-  routeTone,
 } from "@/lib/format";
-import type { BreachRecord } from "@/types";
+import type {
+  BreachMonitorRecord,
+  BreachMonitorResponse,
+  BreachMonitorStatus,
+} from "@/types/dashboard";
 
 type StatusFilter = "all" | "confirmed" | "ambiguous" | "other";
+
+const monitorStatusLabel: Record<BreachMonitorStatus, string> = {
+  confirmed_yours: "Confirmed yours",
+  needs_review: "Needs review",
+  another_company: "Another company",
+};
+
+const monitorStatusTone: Record<
+  BreachMonitorStatus,
+  "ok" | "medium" | "neutral"
+> = {
+  confirmed_yours: "ok",
+  needs_review: "medium",
+  another_company: "neutral",
+};
+
+const configuredRefreshMs = Number(
+  process.env.NEXT_PUBLIC_DASHBOARD_REFRESH_MS ?? "300000",
+);
+const refreshIntervalMs =
+  Number.isFinite(configuredRefreshMs) && configuredRefreshMs >= 30_000
+    ? configuredRefreshMs
+    : 300_000;
 
 export default function BreachMonitorPage() {
   const router = useRouter();
   const params = useSearchParams();
-  const gridRef = useRef<AgGridReact<BreachRecord>>(null);
+  const gridRef = useRef<AgGridReact<BreachMonitorRecord>>(null);
   const { session, isFleetScope } = useAuth();
+  const canViewExternalContext = session?.user.role === "SUPER_ADMIN";
 
   const [status, setStatus] = useState<StatusFilter>("all");
+  const [data, setData] = useState<BreachMonitorResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async (signal?: AbortSignal, background = false) => {
+    if (!session) return;
+    if (background) setIsRefreshing(true);
+    const query = new URLSearchParams();
+    if (session.user.role === "SUPER_ADMIN" && session.scope.kind === "org") {
+      query.set("orgId", session.scope.orgId);
+    }
+    const url = query.size
+      ? `/api/breach-monitor?${query.toString()}`
+      : "/api/breach-monitor";
+
+    try {
+      const response = await fetch(url, {
+        cache: "no-store",
+        credentials: "same-origin",
+        signal,
+      });
+      const body = (await response.json()) as
+        | BreachMonitorResponse
+        | { error?: string };
+      if (!response.ok || !("rows" in body)) {
+        throw new Error(
+          "error" in body && body.error
+            ? body.error
+            : "Unable to load live breach-monitor data.",
+        );
+      }
+      setData(body);
+      setError(null);
+    } catch (loadError) {
+      if (loadError instanceof DOMException && loadError.name === "AbortError") return;
+      setError(
+        loadError instanceof Error
+          ? loadError.message
+          : "Unable to load live breach-monitor data.",
+      );
+    } finally {
+      if (background) setIsRefreshing(false);
+    }
+  }, [session]);
 
   // The page is statically prerendered, so `useSearchParams()` is empty on the
   // first render and a useState initializer would capture "all" forever. Sync
@@ -40,44 +110,151 @@ export default function BreachMonitorPage() {
   // on their filter.
   useEffect(() => {
     const next = params.get("status");
-    if (next === "confirmed" || next === "ambiguous" || next === "other") {
+    if (
+      next === "confirmed"
+      || next === "ambiguous"
+      || (next === "other" && canViewExternalContext)
+    ) {
       setStatus(next);
     } else {
       setStatus("all");
     }
-  }, [params]);
+  }, [canViewExternalContext, params]);
 
-  const scoped = useMemo(() => {
-    if (!session) return [];
-    const orgId = scopeOrgId(session.scope);
-    return orgId === null ? incidents : incidents.filter((i) => i.orgId === orgId);
-  }, [session]);
+  useEffect(() => {
+    if (!session) {
+      setData(null);
+      setIsLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setData(null);
+    setError(null);
+    setIsLoading(true);
+    void load(controller.signal).finally(() => {
+      if (!controller.signal.aborted) setIsLoading(false);
+    });
+
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") {
+        void load(controller.signal, true);
+      }
+    };
+    const interval = window.setInterval(refreshWhenVisible, refreshIntervalMs);
+    window.addEventListener("focus", refreshWhenVisible);
+
+    return () => {
+      controller.abort();
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refreshWhenVisible);
+    };
+  }, [load, session]);
+
+  const visibleData = data && session && (
+    data.scope.kind === session.scope.kind
+    && (
+      data.scope.kind === "fleet"
+      || (
+        session.scope.kind === "org"
+        && data.scope.orgId === session.scope.orgId
+      )
+    )
+  ) ? data : null;
+
+  const scoped = visibleData?.rows ?? [];
 
   const rows = useMemo(() => {
     switch (status) {
       case "confirmed":
-        return scoped.filter((i) => i.route === "target_confirmed");
+        return scoped.filter((row) => row.monitorStatus === "confirmed_yours");
       case "ambiguous":
-        return scoped.filter((i) => i.route === "ambiguous");
+        return scoped.filter((row) => row.monitorStatus === "needs_review");
       case "other":
-        return scoped.filter((i) => i.route === "other_organization_confirmed");
+        return canViewExternalContext
+          ? scoped.filter((row) => row.monitorStatus === "another_company")
+          : scoped;
       default:
         return scoped;
     }
-  }, [scoped, status]);
+  }, [canViewExternalContext, scoped, status]);
 
-  const confirmed = scoped.filter((i) => i.route === "target_confirmed");
-  const totalRecords = confirmed.reduce((s, i) => s + (i.quantityClaimed ?? 0), 0);
-  const dataClasses = new Set(confirmed.flatMap((i) => i.leakTypes)).size;
-  const awaitingTriage = confirmed.filter((i) => i.remediationStatus === "new").length;
+  const tabs = useMemo<[StatusFilter, string][]>(() => {
+    const permittedTabs: [StatusFilter, string][] = [
+      ["all", "All"],
+      ["confirmed", "Confirmed Breach"],
+      ["ambiguous", "Needs Review"],
+    ];
+    if (canViewExternalContext) {
+      permittedTabs.push(["other", "Other Company Breach"]);
+    }
+    return permittedTabs;
+  }, [canViewExternalContext]);
 
-  const columns = useMemo<ColDef<BreachRecord>[]>(() => {
-    const orgCol: ColDef<BreachRecord> = {
+  const selectedMetrics = useMemo(() => {
+    const confirmed = rows.filter(
+      (row) => row.monitorStatus === "confirmed_yours",
+    );
+    const needsReview = rows.filter(
+      (row) => row.monitorStatus === "needs_review",
+    );
+    const exposedDataClasses = new Set(
+      confirmed.flatMap((row) => row.leakTypes),
+    ).size;
+    const recordsClaimed = confirmed.reduce(
+      (total, row) => total + (row.quantityClaimed ?? 0),
+      0,
+    );
+
+    if (status === "ambiguous") {
+      return {
+        primaryLabel: "Needs-review rows",
+        primaryValue: needsReview.length,
+        primaryAccent: severityColor.high,
+        fourthLabel: "Stopped before incident",
+        fourthValue: rows.filter((row) => !row.detailAvailable).length,
+        fourthAccent: severityColor.high,
+        recordsClaimed,
+        exposedDataClasses,
+      };
+    }
+
+    if (status === "other") {
+      return {
+        primaryLabel: "External-context rows",
+        primaryValue: rows.length,
+        primaryAccent: colors.text2,
+        fourthLabel: "Excluded from target alerts",
+        fourthValue: rows.length,
+        fourthAccent: colors.text2,
+        recordsClaimed,
+        exposedDataClasses,
+      };
+    }
+
+    return {
+      primaryLabel: "Confirmed leaks",
+      primaryValue: confirmed.length,
+      primaryAccent: severityColor.critical,
+      fourthLabel: status === "confirmed" ? "Detail ready" : "Needs review",
+      fourthValue: status === "confirmed"
+        ? confirmed.filter((row) => row.detailAvailable).length
+        : needsReview.length,
+      fourthAccent: status === "confirmed"
+        ? colors.verified
+        : severityColor.high,
+      recordsClaimed,
+      exposedDataClasses,
+    };
+  }, [rows, status]);
+
+  const columns = useMemo<ColDef<BreachMonitorRecord>[]>(() => {
+    const orgCol: ColDef<BreachMonitorRecord> = {
       headerName: "Organization",
       field: "organizationName",
       minWidth: 170,
       flex: 1.2,
-      cellRenderer: (p: ICellRendererParams<BreachRecord>) => (
+      cellRenderer: (p: ICellRendererParams<BreachMonitorRecord>) => (
         <Stack sx={{ lineHeight: 1.35 }}>
           <Box sx={{ fontWeight: 600, fontSize: 12.5 }}>{p.data?.organizationName}</Box>
           <Box sx={{ color: colors.text3, fontFamily: fonts.mono, fontSize: 10.5 }}>
@@ -87,13 +264,13 @@ export default function BreachMonitorPage() {
       ),
     };
 
-    const rest: ColDef<BreachRecord>[] = [
+    const rest: ColDef<BreachMonitorRecord>[] = [
       {
         headerName: "Incident",
-        field: "topTitle",
+        field: "title",
         minWidth: 260,
         flex: 2,
-        cellRenderer: (p: ICellRendererParams<BreachRecord>) => (
+        cellRenderer: (p: ICellRendererParams<BreachMonitorRecord>) => (
           <Stack sx={{ lineHeight: 1.35, minWidth: 0 }}>
             <Box
               sx={{
@@ -104,17 +281,17 @@ export default function BreachMonitorPage() {
                 whiteSpace: "nowrap",
               }}
             >
-              {p.data?.topTitle}
+              {p.data?.title}
             </Box>
             <Box sx={{ color: colors.text3, fontFamily: fonts.mono, fontSize: 10.5 }}>
-              {p.data ? hostOf(p.data.topUrl) : ""}
+              {p.data ? hostOf(p.data.url) : ""}
             </Box>
           </Stack>
         ),
       },
       {
         headerName: "Discovered",
-        field: "firstSeen",
+        field: "discoveredAt",
         minWidth: 118,
         maxWidth: 132,
         valueFormatter: (p) => (p.value ? String(p.value).slice(0, 10) : ""),
@@ -122,10 +299,16 @@ export default function BreachMonitorPage() {
       },
       {
         headerName: "Status",
-        field: "route",
+        field: "monitorStatus",
         minWidth: 148,
-        cellRenderer: (p: ICellRendererParams<BreachRecord>) =>
-          p.data ? <Tag tone={routeTone[p.data.route]}>{routeLabel[p.data.route]}</Tag> : null,
+        cellRenderer: (p: ICellRendererParams<BreachMonitorRecord>) =>
+          p.data ? (
+            <Box title={humanize(p.data.routingReason)}>
+              <Tag tone={monitorStatusTone[p.data.monitorStatus]}>
+                {monitorStatusLabel[p.data.monitorStatus]}
+              </Tag>
+            </Box>
+          ) : null,
       },
       {
         headerName: "Exposed data",
@@ -133,7 +316,7 @@ export default function BreachMonitorPage() {
         minWidth: 190,
         flex: 1.3,
         sortable: false,
-        cellRenderer: (p: ICellRendererParams<BreachRecord>) => {
+        cellRenderer: (p: ICellRendererParams<BreachMonitorRecord>) => {
           const types = p.data?.leakTypes ?? [];
           if (!types.length)
             return <Box sx={{ color: colors.text3, fontSize: 11 }}>none extracted</Box>;
@@ -154,7 +337,7 @@ export default function BreachMonitorPage() {
         field: "quantityClaimed",
         minWidth: 108,
         maxWidth: 128,
-        cellRenderer: (p: ICellRendererParams<BreachRecord>) => (
+        cellRenderer: (p: ICellRendererParams<BreachMonitorRecord>) => (
           <Box
             sx={{
               fontFamily: fonts.mono,
@@ -171,7 +354,7 @@ export default function BreachMonitorPage() {
         field: "impactSeverityScore",
         minWidth: 104,
         maxWidth: 120,
-        cellRenderer: (p: ICellRendererParams<BreachRecord>) => (
+        cellRenderer: (p: ICellRendererParams<BreachMonitorRecord>) => (
           <SeverityChip band={p.data?.impactSeverityBand ?? null} score={p.value as number} />
         ),
       },
@@ -180,7 +363,7 @@ export default function BreachMonitorPage() {
         field: "evidenceConfidenceScore",
         minWidth: 104,
         maxWidth: 122,
-        cellRenderer: (p: ICellRendererParams<BreachRecord>) => (
+        cellRenderer: (p: ICellRendererParams<BreachMonitorRecord>) => (
           <Box
             sx={{
               fontFamily: fonts.mono,
@@ -196,7 +379,7 @@ export default function BreachMonitorPage() {
         headerName: "Actor",
         field: "actorName",
         minWidth: 118,
-        cellRenderer: (p: ICellRendererParams<BreachRecord>) => (
+        cellRenderer: (p: ICellRendererParams<BreachMonitorRecord>) => (
           <Box
             sx={{
               fontFamily: fonts.mono,
@@ -212,7 +395,7 @@ export default function BreachMonitorPage() {
         headerName: "Workflow",
         field: "remediationStatus",
         minWidth: 130,
-        cellRenderer: (p: ICellRendererParams<BreachRecord>) =>
+        cellRenderer: (p: ICellRendererParams<BreachMonitorRecord>) =>
           p.data ? (
             <Tag tone={remediationTone[p.data.remediationStatus]}>
               {remediationLabel[p.data.remediationStatus]}
@@ -224,10 +407,38 @@ export default function BreachMonitorPage() {
     return isFleetScope ? [orgCol, ...rest] : rest;
   }, [isFleetScope]);
 
-  const getRowClass = useCallback((p: RowClassParams<BreachRecord>) => {
+  const getRowClass = useCallback((p: RowClassParams<BreachMonitorRecord>) => {
     const band = p.data?.impactSeverityBand;
     return band ? `row-${band}` : "row-informational";
   }, []);
+
+  if (!visibleData) {
+    return (
+      <Stack gap={2}>
+        <PageHeader
+          title="Breach Monitor"
+          subtitle="Confirmed leaks, plus the pages we refused to confirm and why."
+        />
+        <Panel>
+          <Stack alignItems="center" gap={1.5} sx={{ py: 6 }}>
+            <Typography sx={{ color: colors.text1 }}>
+              {isLoading ? "Loading live Snowflake breach data…" : "Breach Monitor unavailable"}
+            </Typography>
+            {error && (
+              <Typography sx={{ color: colors.critical, fontSize: 12 }}>
+                {error}
+              </Typography>
+            )}
+            {!isLoading && (
+              <Button size="small" onClick={() => void load(undefined, true)}>
+                Retry
+              </Button>
+            )}
+          </Stack>
+        </Panel>
+      </Stack>
+    );
+  }
 
   return (
     <Stack gap={2}>
@@ -235,31 +446,65 @@ export default function BreachMonitorPage() {
         title="Breach Monitor"
         subtitle={
           isFleetScope
-            ? "Confirmed leaks across every tenant."
+            ? "Confirmed leaks and stopped candidates across every permitted organization."
             : "Confirmed leaks, plus the pages we refused to confirm and why."
         }
         right={
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={<Download size={14} />}
-            onClick={() => gridRef.current?.api.exportDataAsCsv({ fileName: "nocturne-leaks.csv" })}
-            sx={{ borderColor: colors.edgeHi, color: colors.ion }}
-          >
-            Export CSV
-          </Button>
+          <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
+            <Typography sx={{ fontFamily: fonts.mono, fontSize: 9.5, color: colors.verified }}>
+              LIVE SNOWFLAKE · {formatTimestamp(visibleData.lastUpdatedAt)}
+            </Typography>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<RefreshCw size={13} />}
+              disabled={isRefreshing}
+              onClick={() => void load(undefined, true)}
+            >
+              {isRefreshing ? "Refreshing…" : "Refresh"}
+            </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<Download size={14} />}
+              onClick={() => gridRef.current?.api.exportDataAsCsv({ fileName: "nocturne-leaks.csv" })}
+              sx={{ borderColor: colors.edgeHi, color: colors.ion }}
+            >
+              Export CSV
+            </Button>
+          </Stack>
         }
       />
 
+      {error && (
+        <Box sx={{ color: colors.critical, fontSize: 11.5 }}>
+          Refresh failed: {error}. Displaying the last successful response.
+        </Box>
+      )}
+
       <StatGrid>
-        <StatCard label="Confirmed leaks" value={String(confirmed.length)} accent={severityColor.critical} />
-        <StatCard label="Records claimed" value={totalRecords ? totalRecords.toLocaleString() : "—"} />
-        <StatCard label="Exposed data classes" value={`${dataClasses}/5`} />
         <StatCard
-          label="Awaiting triage"
-          value={String(awaitingTriage)}
-          accent={severityColor.high}
-          valueColor={awaitingTriage ? severityColor.high : undefined}
+          label={selectedMetrics.primaryLabel}
+          value={String(selectedMetrics.primaryValue)}
+          accent={selectedMetrics.primaryAccent}
+        />
+        <StatCard
+          label="Records claimed"
+          value={selectedMetrics.recordsClaimed
+            ? selectedMetrics.recordsClaimed.toLocaleString()
+            : "—"}
+        />
+        <StatCard
+          label="Exposed data classes"
+          value={`${selectedMetrics.exposedDataClasses}/5`}
+        />
+        <StatCard
+          label={selectedMetrics.fourthLabel}
+          value={String(selectedMetrics.fourthValue)}
+          accent={selectedMetrics.fourthAccent}
+          valueColor={selectedMetrics.fourthValue
+            ? selectedMetrics.fourthAccent
+            : undefined}
         />
       </StatGrid>
 
@@ -271,14 +516,7 @@ export default function BreachMonitorPage() {
           alignItems="center"
           sx={{ px: 2, py: 1.6, borderBottom: `1px solid ${colors.edge}` }}
         >
-          {(
-            [
-              ["all", "All"],
-              ["confirmed", "Confirmed Breach"],
-              ["ambiguous", "Needs Review"],
-              ["other", "Other Company Breach"],
-            ] as [StatusFilter, string][]
-          ).map(([key, label]) => (
+          {tabs.map(([key, label]) => (
             <Box
               key={key}
               component="button"
@@ -308,20 +546,21 @@ export default function BreachMonitorPage() {
         </Stack>
 
         <Box sx={{ p: 2 }}>
-          <DataTable<BreachRecord>
+          <DataTable<BreachMonitorRecord>
             gridRef={gridRef}
             rowData={rows}
             columnDefs={columns}
             getRowClass={getRowClass}
-            getRowId={(p) => p.data.incidentKey}
-            // Every row opens its detail page. Unconfirmed rows are the most
-            // useful ones to inspect — the detail view explains why the
-            // pipeline refused to confirm them.
+            getRowId={(p) => p.data.monitorKey}
             onRowClicked={(e) => {
-              if (e.data) router.push(`/leaks/${e.data.incidentKey}`);
+              if (e.data?.detailAvailable && e.data.incidentKey) {
+                router.push(`/leaks/${e.data.incidentKey}`);
+              }
             }}
             searchPlaceholder="Filter by organization, actor, host…"
-            rowStyle={{ cursor: "pointer" }}
+            getRowStyle={(p) => ({
+              cursor: p.data?.detailAvailable ? "pointer" : "default",
+            })}
             pagination
             paginationPageSize={20}
             height={520}
@@ -343,4 +582,20 @@ export default function BreachMonitorPage() {
       </Panel>
     </Stack>
   );
+}
+
+function humanize(value: string): string {
+  return value.replaceAll("_", " ");
+}
+
+function formatTimestamp(value: string | null): string {
+  if (!value) return "not available";
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(timestamp);
 }

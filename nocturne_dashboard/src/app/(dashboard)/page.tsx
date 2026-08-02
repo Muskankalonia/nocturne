@@ -1,51 +1,198 @@
 "use client";
 
-import { useMemo } from "react";
-import { Box, Stack, Typography, alpha } from "@mui/material";
-import { scopeOrgId, useAuth } from "@/contexts/AuthContext";
-import { incidents } from "@/mocks/incidents";
-import { cascadeForScope, groundingStats } from "@/mocks/pipeline";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Box, Button, Stack, Typography, alpha } from "@mui/material";
+import { useAuth } from "@/contexts/AuthContext";
 import { Panel } from "@/components/ui/Panel";
 import { Cascade } from "@/components/ui/Cascade";
 import { SeverityChip } from "@/components/ui/SeverityChip";
 import { colors, fonts, severityColor } from "@/theme/tokens";
+import type { CommandCenterResponse } from "@/types/dashboard";
+
+const configuredRefreshMs = Number(
+  process.env.NEXT_PUBLIC_DASHBOARD_REFRESH_MS ?? "300000",
+);
+const refreshIntervalMs =
+  Number.isFinite(configuredRefreshMs) && configuredRefreshMs >= 30_000
+    ? configuredRefreshMs
+    : 300_000;
 
 export default function CommandCenterPage() {
   const { session, isFleetScope, activeOrg, switchableOrgs } = useAuth();
+  const [data, setData] = useState<CommandCenterResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const scoped = useMemo(() => {
-    if (!session) return [];
-    const orgId = scopeOrgId(session.scope);
-    return orgId === null ? incidents : incidents.filter((i) => i.orgId === orgId);
+  const load = useCallback(async (signal?: AbortSignal, background = false) => {
+    if (!session) return;
+    if (background) setIsRefreshing(true);
+    const params = new URLSearchParams();
+    if (session.user.role === "SUPER_ADMIN" && session.scope.kind === "org") {
+      params.set("orgId", session.scope.orgId);
+    }
+    const url = params.size
+      ? `/api/command-center?${params.toString()}`
+      : "/api/command-center";
+
+    try {
+      const response = await fetch(url, {
+        cache: "no-store",
+        credentials: "same-origin",
+        signal,
+      });
+      const body = (await response.json()) as
+        | CommandCenterResponse
+        | { error?: string };
+      if (!response.ok || !("totals" in body)) {
+        throw new Error(
+          "error" in body && body.error
+            ? body.error
+            : "Unable to load live dashboard data.",
+        );
+      }
+      setData(body);
+      setError(null);
+    } catch (loadError) {
+      if (loadError instanceof DOMException && loadError.name === "AbortError") return;
+      setError(
+        loadError instanceof Error
+          ? loadError.message
+          : "Unable to load live dashboard data.",
+      );
+    } finally {
+      if (background) setIsRefreshing(false);
+    }
   }, [session]);
 
-  const scored = scoped.filter((i) => i.triagePriorityScore !== null);
-  const stats = isFleetScope ? groundingStats.fleet : groundingStats.org;
+  useEffect(() => {
+    if (!session) {
+      setData(null);
+      setIsLoading(false);
+      return;
+    }
 
-  const topImpact = scored.reduce((m, i) => Math.max(m, i.impactSeverityScore ?? 0), 0);
-  const criticals = scored.filter((i) => i.impactSeverityBand === "critical").length;
-  const distinctActors = new Set(
-    scored.map((i) => i.actorName).filter(Boolean),
-  ).size;
+    const controller = new AbortController();
+    setData(null);
+    setError(null);
+    setIsLoading(true);
+    void load(controller.signal).finally(() => {
+      if (!controller.signal.aborted) setIsLoading(false);
+    });
 
-  const cascade = session ? cascadeForScope(session.scope) : [];
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") {
+        void load(controller.signal, true);
+      }
+    };
+    const interval = window.setInterval(refreshWhenVisible, refreshIntervalMs);
+    window.addEventListener("focus", refreshWhenVisible);
 
-  const queue = [...scored].sort(
-    (a, b) => (b.triagePriorityScore ?? 0) - (a.triagePriorityScore ?? 0),
+    return () => {
+      controller.abort();
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refreshWhenVisible);
+    };
+  }, [load, session]);
+
+  const visibleData = data && session && (
+    data.scope.kind === session.scope.kind
+    && (
+      data.scope.kind === "fleet"
+      || (
+        session.scope.kind === "org"
+        && data.scope.orgId === session.scope.orgId
+      )
+    )
+  ) ? data : null;
+
+  const scored = visibleData?.incidents.filter(
+    (incident) => incident.triagePriorityScore !== null,
+  ) ?? [];
+  const cascade = visibleData?.cascade ?? [];
+
+  const queue = useMemo(
+    () => [...scored].sort(
+      (a, b) => (b.triagePriorityScore ?? 0) - (a.triagePriorityScore ?? 0),
+    ),
+    [scored],
   );
+
+  const organizationName = isFleetScope
+    ? "Fleet"
+    : visibleData?.organizations[0]?.organizationName
+      ?? activeOrg?.canonicalName
+      ?? "Organization";
+
+  if (!visibleData) {
+    return (
+      <Stack gap={2}>
+        <PageHeading
+          title={`${organizationName} posture`}
+          subtitle={
+            isFleetScope
+              ? `Aggregated across ${switchableOrgs.length} organizations.`
+              : "What of yours was exposed, how badly, and what to do about it."
+          }
+        />
+        <Panel>
+          <Stack alignItems="center" gap={1.5} sx={{ py: 6 }}>
+            <Typography sx={{ color: colors.text1 }}>
+              {isLoading ? "Loading live Snowflake posture…" : "Live posture unavailable"}
+            </Typography>
+            {error && (
+              <Typography sx={{ color: colors.critical, fontSize: 12 }}>
+                {error}
+              </Typography>
+            )}
+            {!isLoading && (
+              <Button size="small" onClick={() => void load(undefined, true)}>
+                Retry
+              </Button>
+            )}
+          </Stack>
+        </Panel>
+      </Stack>
+    );
+  }
+
+  const metrics = visibleData.totals;
+  const stats = metrics.grounding;
+  const topImpact = metrics.topImpactSeverityScore;
+  const topImpactBand = metrics.topImpactSeverityBand;
+  const criticals = metrics.incidentsByBand.critical;
+  const extractedCount = cascade.find((stage) => stage.id === "extracted")?.count ?? 0;
+  const relevanceCount = cascade.find((stage) => stage.id === "relevance")?.count ?? 0;
 
   return (
     <Stack gap={2}>
-      <Box>
-        <Typography variant="h2">
-          {isFleetScope ? "Fleet posture" : `${activeOrg?.canonicalName} posture`}
-        </Typography>
-        <Typography sx={{ color: colors.text2, fontSize: 13, mt: 0.3 }}>
-          {isFleetScope
-            ? `Aggregated across ${switchableOrgs.length} organizations.`
-            : "What of yours was exposed, how badly, and what to do about it."}
-        </Typography>
-      </Box>
+      <PageHeading
+        title={`${organizationName} posture`}
+        subtitle={
+          isFleetScope
+            ? `Aggregated across ${visibleData.organizations.length} organizations.`
+            : "What of yours was exposed, how badly, and what to do about it."
+        }
+        lastUpdatedAt={visibleData.lastUpdatedAt}
+        isRefreshing={isRefreshing}
+        onRefresh={() => void load(undefined, true)}
+      />
+
+      {error && (
+        <Box
+          sx={{
+            border: `1px solid ${alpha(colors.critical, 0.35)}`,
+            backgroundColor: alpha(colors.critical, 0.06),
+            borderRadius: "6px",
+            px: 1.5,
+            py: 1,
+            color: colors.text2,
+            fontSize: 11.5,
+          }}
+        >
+          Refresh failed: {error}. Displaying the last successful response.
+        </Box>
+      )}
 
       {/* KPI row */}
       <Box
@@ -58,25 +205,27 @@ export default function CommandCenterPage() {
         {isFleetScope ? (
           <Kpi
             label="Tenants monitored"
-            value={String(switchableOrgs.length)}
-            sub="all ingesting"
+            value={String(visibleData.organizations.length)}
+            sub="enabled in Snowflake"
             accent={colors.ion}
           />
         ) : (
           <Kpi
             label="Top impact severity"
-            value={topImpact ? String(topImpact) : "—"}
-            sub={<SeverityChip band={topImpact >= 80 ? "critical" : topImpact >= 60 ? "high" : "medium"} />}
-            accent={severityColor.critical}
-            valueColor={severityColor.critical}
+            value={topImpact === null ? "—" : String(topImpact)}
+            sub={<SeverityChip band={topImpactBand} />}
+            accent={severityColor[topImpactBand ?? "informational"]}
+            valueColor={
+              topImpactBand ? severityColor[topImpactBand] : colors.text1
+            }
           />
         )}
         <Kpi
           label={isFleetScope ? "Critical · fleet" : "Open incidents"}
-          value={String(isFleetScope ? criticals : scored.length)}
+          value={String(isFleetScope ? criticals : metrics.openIncidentCount)}
           sub={
             isFleetScope ? (
-              `of ${scored.length} open`
+              `of ${metrics.openIncidentCount} open`
             ) : (
               <span style={{ color: severityColor.critical }}>{criticals} critical</span>
             )
@@ -87,14 +236,14 @@ export default function CommandCenterPage() {
         <Kpi
           label="Evidence grounding rate"
           value={`${stats.rate}%`}
-          sub={`${stats.verified.toLocaleString()} verbatim · ${stats.quarantined} quarantined`}
+          sub={`${stats.verifiedCount.toLocaleString()} grounded claims · ${stats.quarantinedCount.toLocaleString()} ungrounded claims`}
           accent={colors.verified}
           valueColor={colors.verified}
         />
         <Kpi
           label="Distinct threat actors"
-          value={String(distinctActors)}
-          sub={isFleetScope ? "3 hitting 2+ tenants" : "across 3 marketplaces"}
+          value={String(metrics.distinctThreatActorCount)}
+          sub="identified in confirmed incidents"
           accent={colors.ion}
         />
       </Box>
@@ -127,8 +276,7 @@ export default function CommandCenterPage() {
           >
             Expensive extraction ran on{" "}
             <Box component="b" sx={{ color: colors.critical, fontFamily: fonts.mono }}>
-              {cascade.find((s) => s.id === "extracted")?.count.toLocaleString()} /{" "}
-              {cascade.find((s) => s.id === "relevance")?.count.toLocaleString()}
+              {extractedCount.toLocaleString()} / {relevanceCount.toLocaleString()}
             </Box>{" "}
             pages. A send-everything baseline would have run the expensive model on all of them.
           </Box>
@@ -137,8 +285,10 @@ export default function CommandCenterPage() {
         <Panel title="Incidents by band">
           <Stack gap={1.4}>
             {(["critical", "high", "medium", "low", "informational"] as const).map((band) => {
-              const n = scored.filter((i) => i.impactSeverityBand === band).length;
-              const pct = scored.length ? (n / scored.length) * 100 : 0;
+              const n = metrics.incidentsByBand[band];
+              const pct = metrics.openIncidentCount
+                ? (n / metrics.openIncidentCount) * 100
+                : 0;
               return (
                 <Box key={band}>
                   <Stack direction="row" alignItems="center" gap={1}>
@@ -180,7 +330,10 @@ export default function CommandCenterPage() {
       </Box>
 
       {/* priority queue */}
-      <Panel title="Priority queue — ranked by triage score" meta="LAST UPDATED 04:05 PM">
+      <Panel
+        title="Priority queue — ranked by triage score"
+        meta={`LAST UPDATED ${formatTimestamp(visibleData.lastUpdatedAt)}`}
+      >
         <Box sx={{ overflowX: "auto" }}>
           <Box component="table" sx={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
             <Box component="thead">
@@ -216,6 +369,17 @@ export default function CommandCenterPage() {
               </Box>
             </Box>
             <Box component="tbody">
+              {queue.length === 0 && (
+                <Box component="tr">
+                  <Box
+                    component="td"
+                    colSpan={isFleetScope ? 7 : 6}
+                    sx={{ py: 4, textAlign: "center", color: colors.text3 }}
+                  >
+                    No confirmed target incidents are available for this scope.
+                  </Box>
+                </Box>
+              )}
               {queue.map((row) => (
                 <Box
                   component="tr"
@@ -234,9 +398,29 @@ export default function CommandCenterPage() {
                   )}
                   <Td stripe={isFleetScope ? null : row.impactSeverityBand}>
                     <Stack>
-                      <Box sx={{ fontWeight: 600, fontSize: 12.5 }}>{row.topTitle}</Box>
+                      {row.insight.status === "success" && row.insight.headline && (
+                        <Box
+                          sx={{
+                            color: colors.verified,
+                            fontFamily: fonts.mono,
+                            fontSize: 8.5,
+                            letterSpacing: "0.1em",
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          AI insight
+                        </Box>
+                      )}
+                      <Box sx={{ fontWeight: 600, fontSize: 12.5 }}>
+                        {row.insight.headline ?? row.topTitle}
+                      </Box>
+                      {row.insight.headline && row.insight.headline !== row.topTitle && (
+                        <Box sx={{ color: colors.text2, fontSize: 10.5 }}>
+                          {row.topTitle}
+                        </Box>
+                      )}
                       <Box sx={{ color: colors.text3, fontFamily: fonts.mono, fontSize: 10.5 }}>
-                        {new URL(row.topUrl).hostname}
+                        {hostname(row.topUrl)}
                       </Box>
                     </Stack>
                   </Td>
@@ -296,6 +480,79 @@ export default function CommandCenterPage() {
       </Panel>
     </Stack>
   );
+}
+
+function PageHeading({
+  title,
+  subtitle,
+  lastUpdatedAt,
+  isRefreshing = false,
+  onRefresh,
+}: {
+  title: string;
+  subtitle: string;
+  lastUpdatedAt?: string | null;
+  isRefreshing?: boolean;
+  onRefresh?: () => void;
+}) {
+  return (
+    <Stack
+      direction={{ xs: "column", sm: "row" }}
+      alignItems={{ xs: "flex-start", sm: "center" }}
+      justifyContent="space-between"
+      gap={1.5}
+    >
+      <Box>
+        <Typography variant="h2">{title}</Typography>
+        <Typography sx={{ color: colors.text2, fontSize: 13, mt: 0.3 }}>
+          {subtitle}
+        </Typography>
+      </Box>
+      {onRefresh && (
+        <Stack alignItems={{ xs: "flex-start", sm: "flex-end" }} gap={0.6}>
+          <Typography
+            sx={{
+              color: colors.verified,
+              fontFamily: fonts.mono,
+              fontSize: 9.5,
+              letterSpacing: "0.1em",
+              textTransform: "uppercase",
+            }}
+          >
+            Live Snowflake · updated {formatTimestamp(lastUpdatedAt ?? null)}
+          </Typography>
+          <Button
+            size="small"
+            variant="outlined"
+            disabled={isRefreshing}
+            onClick={onRefresh}
+          >
+            {isRefreshing ? "Refreshing…" : "Refresh"}
+          </Button>
+        </Stack>
+      )}
+    </Stack>
+  );
+}
+
+function formatTimestamp(value: string | null): string {
+  if (!value) return "not available";
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(timestamp);
+}
+
+function hostname(value: string): string {
+  try {
+    return new URL(value).hostname;
+  } catch {
+    return value;
+  }
 }
 
 function Td({
