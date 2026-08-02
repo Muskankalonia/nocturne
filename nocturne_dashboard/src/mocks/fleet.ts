@@ -183,11 +183,11 @@ export const pipelineHealthByTenant: PipelineHealth[] = [
  * This is a chart of the model trying to invent evidence and being caught.
  */
 export const rejectionReasons: RejectionReason[] = [
-  { reason: "unmatched_evidence", label: "Quote not found in source", count: 41, severity: "critical" },
-  { reason: "invalid_endpoint_combination", label: "Edge shape not allowed", count: 17, severity: "high" },
-  { reason: "missing_target_endpoint", label: "Edge points at nothing", count: 11, severity: "high" },
-  { reason: "duplicate_claim_id", label: "Duplicate claim id", count: 6, severity: "medium" },
-  { reason: "entity_cap_exceeded", label: "Over the per-page entity cap", count: 4, severity: "low" },
+  { reason: "unmatched_evidence", label: "Quote Not Found in Source", count: 41, severity: "critical" },
+  { reason: "invalid_endpoint_combination", label: "Edge Shape Not Allowed", count: 17, severity: "high" },
+  { reason: "missing_target_endpoint", label: "Edge Points at Nothing", count: 11, severity: "high" },
+  { reason: "duplicate_claim_id", label: "Duplicate Claim ID", count: 6, severity: "medium" },
+  { reason: "entity_cap_exceeded", label: "Over the Per-Page Entity Cap", count: 4, severity: "low" },
 ];
 
 /** SQL: SHOW TASKS / TASK_HISTORY. Two scheduled, four stream-triggered. */
@@ -251,37 +251,37 @@ export const tasks: TaskHealth[] = [
 /** Version columns the pipeline already stamps on every row. */
 export const versionDrift: VersionDrift[] = [
   {
-    stage: "Relevance prompt",
+    stage: "Relevance Prompt",
     baselineVersion: "ai_classify_relationship_v1",
     currentVersion: "ai_classify_relationship_v2",
     rowsBehind: 0,
   },
   {
-    stage: "Extraction prompt",
+    stage: "Extraction Prompt",
     baselineVersion: "ai_complete_extraction_v1",
     currentVersion: "ai_complete_extraction_v2",
     rowsBehind: 0,
   },
   {
-    stage: "Score method",
+    stage: "Score Method",
     baselineVersion: "impact_confidence_priority_v2",
     currentVersion: "impact_confidence_priority_v3",
     rowsBehind: 14,
   },
   {
-    stage: "Input builder",
+    stage: "Input Builder",
     baselineVersion: "evidence_windows_v1",
     currentVersion: "evidence_windows_v2",
     rowsBehind: 0,
   },
   {
-    stage: "Grounding method",
+    stage: "Grounding Method",
     baselineVersion: "conservative_grounding_v1",
     currentVersion: "conservative_grounding_v2",
     rowsBehind: 0,
   },
   {
-    stage: "Extraction model",
+    stage: "Extraction Model",
     baselineVersion: null,
     currentVersion: "claude-sonnet-4-5",
     rowsBehind: 0,
@@ -292,28 +292,28 @@ export const versionDrift: VersionDrift[] = [
 export const costByStage: CostBreakdown[] = [
   {
     stage: "l2_extraction",
-    label: "Evidence extraction",
+    label: "Evidence Extraction",
     queryTag: "NOCTURNE_L2_EXTRACTION_AI",
     spendUsd: 8.4,
     callCount: 1418,
   },
   {
     stage: "relationship",
-    label: "Relevance check",
+    label: "Relevance Check",
     queryTag: "NOCTURNE_RELATIONSHIP_AI",
     spendUsd: 3.95,
     callCount: 22184,
   },
   {
     stage: "leak_type",
-    label: "Data classification",
+    label: "Data Classification",
     queryTag: "NOCTURNE_LEAK_TYPE_AI",
     spendUsd: 1.2,
     callCount: 271,
   },
   {
     stage: "incident_insight",
-    label: "Incident narratives",
+    label: "Incident Narratives",
     queryTag: "NOCTURNE_L4_INCIDENT_INSIGHT_AI",
     spendUsd: 0.65,
     callCount: 89,

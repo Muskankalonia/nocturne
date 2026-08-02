@@ -29,9 +29,9 @@ export const navigation: NavItem[] = [
     adminOnly: true,
     section: "fleet",
     children: [
-      { label: "Tenant leaderboard", href: "/admin/fleet" },
-      { label: "Cross-tenant actors", href: "/admin/fleet/actors" },
-      { label: "Fleet cost & usage", href: "/admin/fleet/cost" },
+      { label: "Tenant Leaderboard", href: "/admin/fleet" },
+      { label: "Cross-Tenant Actors", href: "/admin/fleet/actors" },
+      { label: "Fleet Cost & Usage", href: "/admin/fleet/cost" },
     ],
   },
   {
@@ -59,9 +59,9 @@ export const navigation: NavItem[] = [
     section: "intel",
     badgeKey: "openCritical",
     children: [
-      { label: "Confirmed yours", href: "/leaks?status=confirmed" },
-      { label: "Needs review", href: "/leaks?status=ambiguous" },
-      { label: "Another company", href: "/leaks?status=other" },
+      { label: "Confirmed Breach", href: "/leaks?status=confirmed" },
+      { label: "Needs Review", href: "/leaks?status=ambiguous" },
+      { label: "Other Company Breach", href: "/leaks?status=other" },
     ],
   },
   {
@@ -70,8 +70,8 @@ export const navigation: NavItem[] = [
     icon: "Share2",
     section: "intel",
     children: [
-      { label: "Incident graph", href: "/graph" },
-      { label: "Actor network", href: "/graph?view=actors" },
+      { label: "Incident Graph", href: "/graph" },
+      { label: "Actor Network", href: "/graph?view=actors" },
     ],
   },
   {
@@ -87,9 +87,9 @@ export const navigation: NavItem[] = [
     icon: "Activity",
     section: "ops",
     children: [
-      { label: "Detection cascade", href: "/pipeline" },
-      { label: "Evidence quality", href: "/pipeline?tab=quality" },
-      { label: "Processing health", href: "/pipeline?tab=health" },
+      { label: "Detection Cascade", href: "/pipeline" },
+      { label: "Evidence Quality", href: "/pipeline?tab=quality" },
+      { label: "Processing Health", href: "/pipeline?tab=health" },
     ],
   },
   {

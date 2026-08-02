@@ -8,11 +8,11 @@ import type { L2Route, LeakType, RemediationStatus } from "@/types";
  */
 
 export const routeLabel: Record<L2Route, string> = {
-  target_confirmed: "Confirmed yours",
-  other_organization_confirmed: "Another company",
-  ambiguous: "Needs review",
-  not_relevant: "Not relevant",
-  extraction_error: "Processing failed",
+  target_confirmed: "Confirmed Breach",
+  other_organization_confirmed: "Other Company Breach",
+  ambiguous: "Needs Review",
+  not_relevant: "Not Relevant",
+  extraction_error: "Processing Failed",
 };
 
 export const routeTone: Record<L2Route, "ok" | "neutral" | "medium" | "critical"> = {
@@ -25,10 +25,10 @@ export const routeTone: Record<L2Route, "ok" | "neutral" | "medium" | "critical"
 
 export const leakTypeLabel: Record<LeakType, string> = {
   credential: "Credentials",
-  corporate_data: "Corporate data",
-  pii: "Personal data",
+  corporate_data: "Corporate Data",
+  pii: "Personal Data",
   financial: "Financial",
-  malware_exploit: "Malware / exploit",
+  malware_exploit: "Malware / Exploit",
 };
 
 /** The two classes that most often mean immediate, actionable harm. */
@@ -39,9 +39,9 @@ export const remediationLabel: Record<RemediationStatus, string> = {
   investigating: "Investigating",
   contained: "Contained",
   resolved: "Resolved",
-  false_positive: "False positive",
+  false_positive: "False Positive",
   suppressed: "Suppressed",
-  context_only: "Context only",
+  context_only: "Context Only",
 };
 
 export const remediationTone: Record<

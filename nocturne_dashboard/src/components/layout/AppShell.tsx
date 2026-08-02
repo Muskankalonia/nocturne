@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Box, CircularProgress, Stack } from "@mui/material";
 import { scopeOrgId, useAuth } from "@/contexts/AuthContext";
 import { incidents } from "@/mocks/incidents";
-import { colors } from "@/theme/tokens";
+import { colors, layout } from "@/theme/tokens";
 import Header from "./Header";
 import Sidebar from "./Sidebar";
 
@@ -49,7 +49,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   return (
-    <Box sx={{ display: "flex", minHeight: "100vh", backgroundColor: colors.void }}>
+    <Box sx={{ display: "flex", minHeight: "100vh" }}>
       <Sidebar badges={badges} />
       <Box sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
         <Header />
@@ -57,12 +57,15 @@ export function AppShell({ children }: { children: ReactNode }) {
           component="main"
           sx={{
             flex: 1,
-            p: 2.4,
+            px: `${layout.gutter}px`,
+            py: `${layout.gutter - 4}px`,
             minWidth: 0,
-            // Faint dot grid — the texture that makes it read "operations console".
+            // Faint dot grid — the texture that makes it read "operations
+            // console". Kept well below the panel fills so it reads as paper
+            // grain rather than as content.
             backgroundImage:
-              "radial-gradient(circle, rgba(140,180,255,0.13) 1px, transparent 1px)",
-            backgroundSize: "32px 32px",
+              "radial-gradient(circle, rgba(140,180,255,0.075) 1px, transparent 1px)",
+            backgroundSize: "34px 34px",
           }}
         >
           {children}

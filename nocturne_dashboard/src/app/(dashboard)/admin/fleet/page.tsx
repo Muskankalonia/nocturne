@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { Box, Stack, Typography } from "@mui/material";
+import { Box, Stack, Typography, alpha } from "@mui/material";
 import { useAuth } from "@/contexts/AuthContext";
 import { exposureMatrix, fleetSummary, orgPostures } from "@/mocks/fleet";
 import { Panel } from "@/components/ui/Panel";
@@ -92,9 +92,9 @@ export default function FleetCommandPage() {
                         cursor: "pointer",
                         background:
                           band === "critical"
-                            ? "linear-gradient(90deg, rgba(255,59,92,0.09), transparent 42%)"
+                            ? `linear-gradient(90deg, ${alpha(colors.critical,0.09)}, transparent 42%)`
                             : "none",
-                        "&:hover": { backgroundColor: "rgba(122,164,255,0.06)" },
+                        "&:hover": { backgroundColor: alpha(colors.ion, 0.06) },
                       }}
                     >
                       <Td stripe={band}>
@@ -181,12 +181,12 @@ export default function FleetCommandPage() {
                       const intensity = v / maxCell;
                       const bg =
                         intensity > 0.6
-                          ? `rgba(255,59,92,${0.35 + intensity * 0.4})`
+                          ? alpha(colors.critical, 0.35 + intensity * 0.4)
                           : intensity > 0.3
-                            ? `rgba(255,138,61,${0.25 + intensity * 0.4})`
+                            ? alpha(colors.high, 0.25 + intensity * 0.4)
                             : intensity > 0
-                              ? `rgba(255,197,61,${0.15 + intensity * 0.3})`
-                              : "rgba(90,107,133,0.18)";
+                              ? alpha(colors.medium, 0.15 + intensity * 0.3)
+                              : alpha(colors.informational, 0.18);
                       return (
                         <Td key={t}>
                           <Box

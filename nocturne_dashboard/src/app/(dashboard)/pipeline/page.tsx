@@ -83,11 +83,11 @@ export default function PipelinePage() {
       </StatGrid>
 
       <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", lg: "1.55fr 1fr" } }}>
-        <Panel title="Detection cascade" meta="RED = BILLED STAGE">
+        <Panel title="Detection Cascade" meta="RED = BILLED STAGE">
           <Cascade stages={cascade} />
         </Panel>
 
-        <Panel title="Quarantined extractions" meta="WHY THEY WERE REJECTED">
+        <Panel title="Quarantined Extractions" meta="WHY THEY WERE REJECTED">
           <BarList
             data={rejectionReasons.map((r) => ({
               label: (
@@ -202,7 +202,7 @@ export default function PipelinePage() {
                   </Td>
                   <Td>
                     <Tag tone={h.status === "healthy" ? "ok" : "medium"}>
-                      {h.status === "healthy" ? "Healthy" : "Ingest lagging"}
+                      {h.status === "healthy" ? "Healthy" : "Ingest Lagging"}
                     </Tag>
                   </Td>
                 </Box>

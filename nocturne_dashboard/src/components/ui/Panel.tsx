@@ -14,14 +14,37 @@ export interface PanelProps {
 }
 
 export function Panel({ title, layerTag, meta, children, padded = true }: PanelProps) {
+  const pad = `${layout.panelPad}px`;
   return (
-    <Paper sx={{ borderRadius: `${layout.radius}px`, p: padded ? 2 : 0, minWidth: 0 }}>
+    <Paper
+      sx={{
+        borderRadius: `${layout.radius}px`,
+        p: padded ? pad : 0,
+        minWidth: 0,
+        // A hairline of light along the top edge — the cheapest way to make a
+        // flat fill read as a physical surface.
+        position: "relative",
+        "&::before": {
+          content: '""',
+          position: "absolute",
+          inset: "0 12px auto 12px",
+          height: "1px",
+          background: `linear-gradient(90deg, transparent, ${colors.edgeHi}, transparent)`,
+          pointerEvents: "none",
+        },
+      }}
+    >
       {(title || meta) && (
         <Stack
           direction="row"
           alignItems="center"
-          gap={1.2}
-          sx={{ mb: 1.5, px: padded ? 0 : 2, pt: padded ? 0 : 2 }}
+          gap={1.1}
+          sx={{
+            mb: 1.6,
+            px: padded ? 0 : pad,
+            pt: padded ? 0 : pad,
+            minHeight: 18,
+          }}
         >
           {title && (
             <Typography variant="overline" sx={{ color: colors.text2 }}>
@@ -30,7 +53,7 @@ export function Panel({ title, layerTag, meta, children, padded = true }: PanelP
           )}
           {layerTag && <LayerTag>{layerTag}</LayerTag>}
           {meta && (
-            <Box sx={{ ml: "auto", fontFamily: fonts.mono, fontSize: 10.5, color: colors.text3 }}>
+            <Box sx={{ ml: "auto", fontFamily: fonts.mono, fontSize: 10, color: colors.text3 }}>
               {meta}
             </Box>
           )}

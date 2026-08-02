@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import NextLink from "next/link";
 import {
   Box,
@@ -31,8 +31,8 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { navigationForRole, sectionLabels, sectionOrder } from "@/config/navigation";
-import { colors, fonts, layout } from "@/theme/tokens";
-import type { NavItem, NavSection } from "@/types";
+import { colors, fonts, gradients, layout } from "@/theme/tokens";
+import type { NavChild, NavItem, NavSection } from "@/types";
 
 const icons: Record<string, LucideIcon> = {
   LayoutDashboard,
@@ -55,6 +55,7 @@ export interface SidebarProps {
 
 export function Sidebar({ badges }: SidebarProps) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const router = useRouter();
   const { isSuperAdmin, session, logout, isFleetScope, activeOrg, switchableOrgs } =
     useAuth();
@@ -79,10 +80,46 @@ export function Sidebar({ badges }: SidebarProps) {
   const expanded = pinned || hovered;
   const items = useMemo(() => navigationForRole(isSuperAdmin), [isSuperAdmin]);
 
+  /**
+   * Sub-menu items under one parent frequently share a path and differ only by
+   * query string (`/leaks?status=confirmed` vs `?status=ambiguous`), so
+   * comparing paths alone lights up every sibling at once. A child is active
+   * when the path matches *and* every parameter it pins matches the current
+   * URL.
+   *
+   * `siblings` handles the default-view case: a bare `/graph` sits beside
+   * `/graph?view=actors`, and pinning no parameters would otherwise make it
+   * match everywhere. It stays inactive while any parameter its siblings use
+   * is present.
+   */
+  const isChildHrefActive = useCallback(
+    (href: string, siblings: NavChild[] = []) => {
+      const [path, query = ""] = href.split("?");
+      if (pathname !== path) return false;
+
+      const required = new URLSearchParams(query);
+      for (const [key, value] of required.entries()) {
+        if (searchParams.get(key) !== value) return false;
+      }
+
+      if ([...required.keys()].length === 0) {
+        for (const sibling of siblings) {
+          const siblingQuery = sibling.href.split("?")[1];
+          if (!siblingQuery) continue;
+          for (const key of new URLSearchParams(siblingQuery).keys()) {
+            if (searchParams.has(key)) return false;
+          }
+        }
+      }
+      return true;
+    },
+    [pathname, searchParams],
+  );
+
   const isChildActive = useCallback(
     (item: NavItem) =>
-      Boolean(item.children?.some((c) => pathname === c.href.split("?")[0])),
-    [pathname],
+      Boolean(item.children?.some((c) => isChildHrefActive(c.href, item.children))),
+    [isChildHrefActive],
   );
 
   // Auto-open the group containing the current route.
@@ -127,8 +164,8 @@ export function Sidebar({ badges }: SidebarProps) {
         width: expanded ? layout.railExpanded : layout.railCollapsed,
         flexShrink: 0,
         borderRight: `1px solid ${colors.edge}`,
-        backgroundColor: "rgba(7,12,22,0.82)",
-        backdropFilter: "blur(18px)",
+        backgroundImage: gradients.chrome,
+        backdropFilter: "blur(20px)",
         display: "flex",
         flexDirection: "column",
         transition: "width 180ms ease",
@@ -148,22 +185,17 @@ export function Sidebar({ badges }: SidebarProps) {
         sx={{ px: 1.4, height: layout.headerHeight, flexShrink: 0 }}
       >
         <Box
+          component="img"
+          src="/nocturne-mark.png"
+          alt="Nocturne"
+          width={24}
+          height={24}
           sx={{
-            width: 22,
-            height: 22,
             flexShrink: 0,
-            border: `1.5px solid ${colors.ion}`,
-            borderRadius: "4px",
-            boxShadow: `0 0 14px ${alpha(colors.ion, 0.45)}, inset 0 0 8px ${alpha(colors.ion, 0.2)}`,
-            position: "relative",
-            "&::after": {
-              content: '""',
-              position: "absolute",
-              inset: 5,
-              background: colors.ion,
-              borderRadius: "1px",
-              opacity: 0.85,
-            },
+            display: "block",
+            // The rail is the one place the mark appears without the wordmark,
+            // so it keeps the accent glow the old chrome had.
+            filter: `drop-shadow(0 0 10px ${alpha(colors.ion, 0.45)})`,
           }}
         />
         {expanded && (
@@ -207,7 +239,7 @@ export function Sidebar({ badges }: SidebarProps) {
           </Typography>
           <Typography sx={{ fontSize: 12, mt: 0.2, whiteSpace: "nowrap" }}>
             {isFleetScope
-              ? `All organizations · ${switchableOrgs.length}`
+              ? `All Organizations · ${switchableOrgs.length}`
               : activeOrg?.canonicalName}
           </Typography>
         </Box>
@@ -339,7 +371,7 @@ export function Sidebar({ badges }: SidebarProps) {
                         }}
                       >
                         {item.children.map((child) => {
-                          const childActive = pathname === child.href.split("?")[0];
+                          const childActive = isChildHrefActive(child.href, item.children);
                           return (
                             <Box
                               key={child.href}
@@ -410,9 +442,10 @@ export function Sidebar({ badges }: SidebarProps) {
               fontWeight: 600,
               border: `1px solid ${colors.edgeHi}`,
               background: isSuperAdmin
-                ? "linear-gradient(135deg, #5B2340, #B8365C)"
-                : "linear-gradient(135deg, #1D4E63, #2A7F8F)",
-              color: isSuperAdmin ? "#FFD3DC" : "#BFEFF8",
+                ? "linear-gradient(135deg, #4A2440, #9C3A63)"
+                : "linear-gradient(135deg, #16305C, #2F6BC4)",
+              color: isSuperAdmin ? "#FFD7E3" : "#D6E6FF",
+              letterSpacing: "0.02em",
             }}
           >
             {session?.user.initials}
@@ -449,15 +482,22 @@ export function Sidebar({ badges }: SidebarProps) {
               justifyContent: "center",
               gap: 1,
               px: 1.25,
-              py: 1,
+              py: 0.85,
               cursor: "pointer",
-              borderRadius: "8px",
+              borderRadius: `${layout.radiusSm}px`,
               font: "inherit",
-              fontSize: 12,
-              color: colors.critical,
-              border: `1px solid ${alpha(colors.critical, 0.28)}`,
-              backgroundColor: alpha(colors.critical, 0.07),
-              "&:hover": { backgroundColor: alpha(colors.critical, 0.14) },
+              fontSize: 11.5,
+              // Neutral at rest — red is reserved for severity, and a
+              // permanently-red control in the chrome dilutes it.
+              color: colors.text2,
+              border: `1px solid ${colors.edge}`,
+              backgroundColor: "transparent",
+              transition: "color 120ms ease, border-color 120ms ease, background-color 120ms ease",
+              "&:hover": {
+                color: colors.critical,
+                borderColor: alpha(colors.critical, 0.35),
+                backgroundColor: alpha(colors.critical, 0.09),
+              },
               "&:focus-visible": {
                 outline: `2px solid ${alpha(colors.critical, 0.7)}`,
                 outlineOffset: 2,
@@ -465,7 +505,7 @@ export function Sidebar({ badges }: SidebarProps) {
             }}
           >
             <LogOut size={14} style={{ flexShrink: 0 }} />
-            {expanded && "Sign out"}
+            {expanded && "Sign Out"}
           </Box>
         </Tooltip>
       </Box>

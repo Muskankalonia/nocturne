@@ -19,11 +19,13 @@ export function Cascade({ stages }: { stages: CascadeStage[] }) {
     <Stack gap={0.9}>
       {stages.map((stage) => {
         const pct = (stage.count / max) * 100;
+        // Billed stages carry the cost warning; unbilled stages stay in the
+        // blue-black chrome so the expensive steps are the only thing that pops.
         const fill = stage.isBilled
           ? stage.costTier === 3
-            ? "linear-gradient(90deg,#7A1E38,#FF3B5C)"
-            : "linear-gradient(90deg,#5B2340,#B8365C)"
-          : "linear-gradient(90deg,#1E3A5F,#2C5580)";
+            ? `linear-gradient(90deg, #6E1B32, ${colors.critical})`
+            : `linear-gradient(90deg, #55223C, #B8365C)`
+          : `linear-gradient(90deg, #16294A, #2E5C96)`;
 
         return (
           <Box

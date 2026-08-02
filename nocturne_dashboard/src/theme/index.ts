@@ -1,7 +1,7 @@
 "use client";
 
 import { createTheme, alpha } from "@mui/material/styles";
-import { colors, fonts, layout } from "./tokens";
+import { colors, fonts, gradients, layout, shadows } from "./tokens";
 
 declare module "@mui/material/styles" {
   interface Palette {
@@ -34,7 +34,7 @@ export const theme = createTheme({
   cssVariables: true,
   palette: {
     mode: "dark",
-    primary: { main: colors.ion, dark: colors.ionDim, contrastText: "#04222B" },
+    primary: { main: colors.ion, dark: colors.ionDim, contrastText: "#04101F" },
     secondary: { main: colors.verified, contrastText: "#052E14" },
     error: { main: colors.critical },
     warning: { main: colors.high },
@@ -62,19 +62,22 @@ export const theme = createTheme({
   shape: { borderRadius: layout.radius },
   typography: {
     fontFamily: fonts.sans,
-    h1: { fontSize: 30, fontWeight: 600, letterSpacing: "-0.025em" },
-    h2: { fontSize: 24, fontWeight: 600, letterSpacing: "-0.02em" },
-    h3: { fontSize: 19, fontWeight: 600, letterSpacing: "-0.015em" },
-    h4: { fontSize: 16, fontWeight: 600 },
-    body1: { fontSize: 13.5, lineHeight: 1.65 },
-    body2: { fontSize: 12.5, lineHeight: 1.6 },
-    caption: { fontSize: 11, color: colors.text3 },
-    button: { textTransform: "none", fontWeight: 600, fontSize: 13 },
-    // Uppercase section labels — 10.5px, wide tracking, tertiary colour.
+    // A tight, deliberate scale. Page titles are the largest thing on screen and
+    // they are still only 22px — density is the point, not scale.
+    h1: { fontSize: 26, fontWeight: 650, letterSpacing: "-0.022em", lineHeight: 1.2 },
+    h2: { fontSize: 21, fontWeight: 640, letterSpacing: "-0.019em", lineHeight: 1.25 },
+    h3: { fontSize: 17, fontWeight: 620, letterSpacing: "-0.015em", lineHeight: 1.3 },
+    h4: { fontSize: 14.5, fontWeight: 620, letterSpacing: "-0.008em", lineHeight: 1.35 },
+    body1: { fontSize: 13, lineHeight: 1.6, letterSpacing: "-0.003em" },
+    body2: { fontSize: 12, lineHeight: 1.55, letterSpacing: "-0.002em" },
+    caption: { fontSize: 11, color: colors.text3, letterSpacing: 0 },
+    button: { textTransform: "none", fontWeight: 600, fontSize: 12.5, letterSpacing: "-0.002em" },
+    // Uppercase section labels — small, wide tracking, tertiary colour.
     overline: {
       fontFamily: fonts.mono,
-      fontSize: 10.5,
-      letterSpacing: "0.14em",
+      fontSize: 10,
+      fontWeight: 500,
+      letterSpacing: "0.15em",
       textTransform: "uppercase",
       color: colors.text3,
       lineHeight: 1.6,
@@ -83,23 +86,24 @@ export const theme = createTheme({
   components: {
     MuiCssBaseline: {
       styleOverrides: {
+        html: { WebkitFontSmoothing: "antialiased", MozOsxFontSmoothing: "grayscale" },
         body: {
-          backgroundColor: colors.void,
-          backgroundImage: [
-            `radial-gradient(1200px 700px at 12% -8%, ${alpha(colors.ion, 0.055)}, transparent 60%)`,
-            `radial-gradient(900px 600px at 92% 4%, ${alpha(colors.critical, 0.045)}, transparent 60%)`,
-          ].join(","),
+          backgroundColor: colors.abyss,
+          backgroundImage: gradients.page,
           backgroundAttachment: "fixed",
           // Tabular figures everywhere digits line up in columns.
           fontVariantNumeric: "tabular-nums",
+          // Inter's optical-size + contextual alternates; cheap polish.
+          fontFeatureSettings: '"cv05" 1, "cv08" 1, "ss01" 1',
         },
-        "*::-webkit-scrollbar": { width: 9, height: 9 },
+        "*::-webkit-scrollbar": { width: 8, height: 8 },
         "*::-webkit-scrollbar-track": { background: "transparent" },
         "*::-webkit-scrollbar-thumb": {
           background: colors.edgeHi,
-          borderRadius: 6,
+          borderRadius: 5,
         },
-        "*::-webkit-scrollbar-thumb:hover": { background: alpha(colors.ion, 0.4) },
+        "*::-webkit-scrollbar-thumb:hover": { background: alpha(colors.ion, 0.45) },
+        "::selection": { background: alpha(colors.ion, 0.3) },
       },
     },
     MuiPaper: {
@@ -107,21 +111,35 @@ export const theme = createTheme({
       styleOverrides: {
         root: {
           backgroundColor: colors.glass,
-          backdropFilter: "blur(18px)",
+          backgroundImage: gradients.panel,
+          backdropFilter: "blur(20px)",
           border: `1px solid ${colors.edge}`,
-          backgroundImage: "none",
+          boxShadow: shadows.panel,
         },
       },
     },
     MuiButton: {
       defaultProps: { disableElevation: true },
       styleOverrides: {
-        root: { borderRadius: layout.radiusSm },
+        root: {
+          borderRadius: layout.radiusSm,
+          paddingInline: 14,
+          minHeight: 34,
+        },
+        sizeSmall: { minHeight: 28, paddingInline: 10, fontSize: 11.5 },
         containedPrimary: {
-          background: `linear-gradient(180deg, ${colors.ion}, ${colors.ionDim})`,
-          boxShadow: `0 0 26px -8px ${alpha(colors.ion, 0.85)}`,
+          background: gradients.action,
+          boxShadow: `0 1px 0 ${alpha("#FFFFFF", 0.14)} inset, 0 8px 22px -12px ${alpha(colors.ion, 0.9)}`,
+          color: "#FFFFFF",
           "&:hover": {
-            background: `linear-gradient(180deg, ${colors.ion}, ${colors.ion})`,
+            background: `linear-gradient(180deg, ${colors.ionBright} 0%, ${colors.ion} 100%)`,
+          },
+        },
+        outlined: {
+          borderColor: colors.edgeHi,
+          "&:hover": {
+            borderColor: alpha(colors.ion, 0.5),
+            backgroundColor: alpha(colors.ion, 0.07),
           },
         },
       },
@@ -131,51 +149,68 @@ export const theme = createTheme({
         root: {
           fontFamily: fonts.mono,
           fontSize: 10,
-          height: 22,
-          borderRadius: 5,
+          fontWeight: 500,
+          height: 20,
+          borderRadius: 4,
         },
+        label: { paddingInline: 7 },
       },
     },
     MuiTooltip: {
       styleOverrides: {
         tooltip: {
-          backgroundColor: "#0B1322",
+          backgroundColor: colors.hullHi,
           border: `1px solid ${colors.edgeHi}`,
+          boxShadow: shadows.menu,
           fontSize: 11.5,
           fontFamily: fonts.sans,
-          padding: "7px 10px",
+          padding: "6px 9px",
+          borderRadius: layout.radiusSm,
         },
       },
     },
     MuiOutlinedInput: {
       styleOverrides: {
         root: {
-          backgroundColor: "rgba(6,11,20,0.85)",
+          backgroundColor: alpha(colors.abyss, 0.7),
           fontFamily: fonts.mono,
-          fontSize: 13,
+          fontSize: 12.5,
+          borderRadius: layout.radiusSm,
           "& fieldset": { borderColor: colors.edge },
           "&:hover fieldset": { borderColor: colors.edgeHi },
           "&.Mui-focused fieldset": {
-            borderColor: alpha(colors.ion, 0.55),
+            borderColor: alpha(colors.ion, 0.6),
             borderWidth: 1,
           },
           "&.Mui-focused": {
-            boxShadow: `0 0 0 3px ${alpha(colors.ion, 0.11)}, 0 0 20px -6px ${alpha(colors.ion, 0.6)}`,
+            boxShadow: `0 0 0 3px ${alpha(colors.ion, 0.14)}`,
           },
         },
+        input: { paddingBlock: 9 },
       },
     },
     MuiInputLabel: {
       styleOverrides: {
         root: {
           fontFamily: fonts.mono,
-          fontSize: 11,
-          letterSpacing: "0.1em",
+          fontSize: 10,
+          fontWeight: 500,
+          letterSpacing: "0.13em",
           textTransform: "uppercase",
           color: colors.text3,
         },
       },
     },
+    MuiMenu: {
+      styleOverrides: {
+        paper: {
+          backgroundImage: gradients.chrome,
+          border: `1px solid ${colors.edgeHi}`,
+          boxShadow: shadows.menu,
+        },
+      },
+    },
+    MuiDivider: { styleOverrides: { root: { borderColor: colors.edge } } },
     // Keyboard focus must always be visible.
     MuiButtonBase: {
       styleOverrides: {

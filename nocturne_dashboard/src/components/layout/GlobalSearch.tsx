@@ -8,7 +8,7 @@ import { scopeOrgId, useAuth } from "@/contexts/AuthContext";
 import { incidents } from "@/mocks/incidents";
 import { actors } from "@/mocks/actors";
 import { organizations } from "@/mocks/organizations";
-import { colors, fonts, layout, severityColor } from "@/theme/tokens";
+import { colors, fonts, layout, severityColor, shadows } from "@/theme/tokens";
 import { hostOf, routeLabel, shortHash } from "@/lib/format";
 
 type Hit = {
@@ -133,7 +133,7 @@ export function GlobalSearch() {
           py: 0.75,
           borderRadius: `${layout.radiusSm}px`,
           border: `1px solid ${colors.edge}`,
-          backgroundColor: "rgba(6,11,20,0.8)",
+          backgroundColor: alpha(colors.abyss, 0.7),
           "&:focus-within": {
             borderColor: alpha(colors.ion, 0.5),
             boxShadow: `0 0 0 3px ${alpha(colors.ion, 0.1)}`,
@@ -224,9 +224,9 @@ export function GlobalSearch() {
             width: anchorRef.current?.clientWidth ?? 380,
             maxHeight: 420,
             overflowY: "auto",
-            backgroundColor: "#0B1322",
+            backgroundColor: colors.hullHi,
             border: `1px solid ${colors.edgeHi}`,
-            boxShadow: "0 24px 60px -18px rgba(0,0,0,0.95)",
+            boxShadow: shadows.menu,
             p: 0.7,
           }}
         >

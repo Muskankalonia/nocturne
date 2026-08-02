@@ -14,7 +14,7 @@ import {
 import { BarChart3, Building2, ChevronDown, Lock } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import GlobalSearch from "./GlobalSearch";
-import { colors, fonts, layout, severityColor } from "@/theme/tokens";
+import { colors, fonts, gradients, layout, severityColor, shadows } from "@/theme/tokens";
 import { incidents } from "@/mocks/incidents";
 import type { SeverityBand } from "@/types";
 
@@ -55,11 +55,11 @@ export function Header({ lastUpdated = "04:05 PM" }: HeaderProps) {
       gap={2}
       sx={{
         height: layout.headerHeight,
-        px: 2.2,
+        px: `${layout.gutter}px`,
         flexShrink: 0,
         borderBottom: `1px solid ${colors.edge}`,
-        backgroundColor: "rgba(8,14,26,0.9)",
-        backdropFilter: "blur(18px)",
+        backgroundImage: gradients.chrome,
+        backdropFilter: "blur(20px)",
         position: "sticky",
         top: 0,
         zIndex: 15,
@@ -146,7 +146,7 @@ export function Header({ lastUpdated = "04:05 PM" }: HeaderProps) {
               <Building2 size={13} color={colors.ion} />
             )}
             <Box component="span" sx={{ fontWeight: 600, whiteSpace: "nowrap" }}>
-              {isFleetScope ? "All organizations" : activeOrg?.canonicalName}
+              {isFleetScope ? "All Organizations" : activeOrg?.canonicalName}
             </Box>
             <ChevronDown size={12} />
           </Stack>
@@ -162,9 +162,9 @@ export function Header({ lastUpdated = "04:05 PM" }: HeaderProps) {
                 sx: {
                   mt: 1,
                   width: 280,
-                  backgroundColor: "#0B1322",
+                  backgroundColor: colors.hullHi,
                   border: `1px solid ${colors.edgeHi}`,
-                  boxShadow: "0 24px 60px -18px rgba(0,0,0,0.95)",
+                  boxShadow: shadows.menu,
                 },
               },
             }}
@@ -178,7 +178,7 @@ export function Header({ lastUpdated = "04:05 PM" }: HeaderProps) {
               sx={{ gap: 1.3, fontSize: 12, borderRadius: "7px", mx: 0.5 }}
             >
               <BarChart3 size={14} />
-              All organizations
+              All Organizations
               <Typography
                 sx={{ ml: "auto", fontFamily: fonts.mono, fontSize: 10.5, color: colors.text3 }}
               >

@@ -7,7 +7,7 @@ import { AgGridReact, type AgGridReactProps } from "ag-grid-react";
 import type { ColDef, GridReadyEvent, SelectionChangedEvent } from "ag-grid-community";
 import "ag-grid-community/styles/ag-grid.css";
 import "ag-grid-community/styles/ag-theme-quartz.css";
-import { colors, fonts } from "@/theme/tokens";
+import { colors, fonts, shadows } from "@/theme/tokens";
 
 export const defaultColDef: ColDef = {
   sortable: true,
@@ -229,11 +229,11 @@ export function DataTable<T>({
           "--ag-background-color": "transparent",
           "--ag-foreground-color": colors.text1,
           "--ag-header-foreground-color": colors.text3,
-          "--ag-header-background-color": "rgba(255,255,255,0.02)",
+          "--ag-header-background-color": alpha(colors.ion, 0.04),
           "--ag-border-color": colors.edge,
-          "--ag-row-border-color": "rgba(122,164,255,0.07)",
-          "--ag-row-hover-color": "rgba(122,164,255,0.06)",
-          "--ag-selected-row-background-color": "rgba(34,211,238,0.12)",
+          "--ag-row-border-color": alpha(colors.ion, 0.08),
+          "--ag-row-hover-color": alpha(colors.ion, 0.06),
+          "--ag-selected-row-background-color": alpha(colors.ion, 0.14),
           "--ag-odd-row-background-color": "transparent",
           "--ag-font-family": fonts.sans,
           "--ag-font-size": "12px",
@@ -241,11 +241,11 @@ export function DataTable<T>({
           "--ag-cell-horizontal-padding": "12px",
           "--ag-borders": "none",
           "--ag-input-focus-border-color": colors.ion,
-          "--ag-control-panel-background-color": "#0B1322",
-          "--ag-menu-background-color": "#0B1322",
+          "--ag-control-panel-background-color": colors.hullHi,
+          "--ag-menu-background-color": colors.hullHi,
           "--ag-checkbox-checked-color": colors.ion,
           "--ag-checkbox-unchecked-color": colors.text3,
-          "--ag-popup-shadow": "0 24px 60px -18px rgba(0,0,0,0.95)",
+          "--ag-popup-shadow": shadows.menu,
           "& .ag-header-cell-text": {
             fontFamily: fonts.mono,
             fontSize: 9.5,
@@ -253,6 +253,30 @@ export function DataTable<T>({
             textTransform: "uppercase",
           },
           "& .ag-cell": { display: "flex", alignItems: "center" },
+          // The selection column is a fixed 46px of pure control — the grid's
+          // 12px text padding would shove the checkbox off-centre, so drop it
+          // and centre the box in the column instead. Applies to the header's
+          // select-all as well, so the two stay on one axis.
+          '& .ag-cell[col-id="__select"], & .ag-header-cell[col-id="__select"]': {
+            paddingLeft: 0,
+            paddingRight: 0,
+            justifyContent: "center",
+          },
+          // The header cell lays out the select-all checkbox and an empty
+          // label/sort wrapper as two equal flex children, which centres the
+          // checkbox in the left half rather than in the column. This column
+          // has no header text and is not sortable, filterable or resizable,
+          // so that wrapper renders nothing — collapse it and let the checkbox
+          // span the full width.
+          '& .ag-header-cell[col-id="__select"] .ag-header-cell-comp-wrapper': {
+            display: "none",
+          },
+          '& .ag-header-cell[col-id="__select"] .ag-header-select-all': {
+            flex: 1,
+            justifyContent: "center",
+            marginRight: 0,
+          },
+          '& .ag-cell[col-id="__select"] .ag-selection-checkbox': { marginRight: 0 },
           "& .row-critical .ag-cell:first-of-type": { boxShadow: `inset 2px 0 0 ${colors.critical}` },
           "& .row-high .ag-cell:first-of-type": { boxShadow: `inset 2px 0 0 ${colors.high}` },
           "& .row-medium .ag-cell:first-of-type": { boxShadow: `inset 2px 0 0 ${colors.medium}` },

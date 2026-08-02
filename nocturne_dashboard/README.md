@@ -14,11 +14,11 @@ npm run dev          # http://localhost:3000
 
 Demo scheme: **username is the organization, password is the same string**.
 
-| Username | Password | Lands on |
-| --- | --- | --- |
+| Username             | Password             | Lands on                         |
+| -------------------- | -------------------- | -------------------------------- |
 | `palo_alto_networks` | `palo_alto_networks` | `/` scoped to Palo Alto Networks |
-| `att` | `att` | `/` scoped to AT&T |
-| `admin` | `admin` | `/admin/fleet`, all tenants |
+| `att`                | `att`                | `/` scoped to AT&T               |
+| `admin`              | `admin`              | `/admin/fleet`, all tenants      |
 
 `northwind_traders` exists but is disabled, so it demonstrates the
 monitoring-paused rejection path.
@@ -38,11 +38,11 @@ Incident Detail radar agrees with its own headline numbers.
 
 Three modes, in the order we intend to adopt them:
 
-| Mode | How | Read cost |
-| --- | --- | --- |
-| **A** static mocks | `src/mocks/*` imported at build time | none |
-| **B** live query | route handler → `snowflake-sdk` → the views, per request | ⚠️ warehouse-seconds on every page load |
-| **C** snapshot export ✅ | a job writes JSON snapshots; route handlers serve those | none |
+| Mode                     | How                                                      | Read cost                               |
+| ------------------------ | -------------------------------------------------------- | --------------------------------------- |
+| **A** static mocks       | `src/mocks/*` imported at build time                     | none                                    |
+| **B** live query         | route handler → `snowflake-sdk` → the views, per request | ⚠️ warehouse-seconds on every page load |
+| **C** snapshot export ✅ | a job writes JSON snapshots; route handlers serve those  | none                                    |
 
 Mode B has a trap: Snowflake bills by warehouse-second and `COMPUTE_WH` cold
 starts. A reviewer clicking around a live-query dashboard costs money and waits
@@ -89,7 +89,7 @@ instead of an instrument:
 1. **Cyan means interactive or selected.** Nothing else.
 2. **Green means grounded / verified verbatim.** Nothing else.
 
-Severity is never colour alone — always a stripe *plus* a labelled chip *plus* a
+Severity is never colour alone — always a stripe _plus_ a labelled chip _plus_ a
 number, so it survives greyscale, colour-blind viewing, and a screenshot pasted
 into a ticket.
 
@@ -104,16 +104,16 @@ feature.
 The UI never says "L0" or "target_confirmed". Plain English is primary; the
 engineering token survives as a small muted tag so analysts keep the mapping.
 
-| Internal | Shown |
-| --- | --- |
-| L0 indicators | Screened for signals |
-| L1 relationship AI | Checked for relevance |
-| L2 extraction AI | Evidence extracted |
-| `target_confirmed` | Confirmed yours |
-| `ambiguous` | Needs review |
-| `other_organization_confirmed` | Another company |
-| `exact` / `normalized` | Verified quote / Verified · reformatted |
-| `unmatched` | Unverified — quarantined |
+| Internal                       | Shown                                   |
+| ------------------------------ | --------------------------------------- |
+| L0 indicators                  | Screened for signals                    |
+| L1 relationship AI             | Checked for relevance                   |
+| L2 extraction AI               | Evidence extracted                      |
+| `target_confirmed`             | Confirmed Breach                        |
+| `ambiguous`                    | Needs Review                            |
+| `other_organization_confirmed` | Other Company Breach                    |
+| `exact` / `normalized`         | Verified quote / Verified · reformatted |
+| `unmatched`                    | Unverified — quarantined                |
 
 ## Status
 

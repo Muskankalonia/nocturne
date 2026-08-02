@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { Box, Stack, Typography, alpha } from "@mui/material";
-import { colors, fonts, severityColor } from "@/theme/tokens";
+import { colors, fonts, layout, severityColor } from "@/theme/tokens";
 import { Panel } from "./Panel";
 
 /* ── page header ───────────────────────────────────────────────────────────── */
@@ -21,7 +21,9 @@ export function PageHeader({
       <Box sx={{ minWidth: 0 }}>
         <Typography variant="h2">{title}</Typography>
         {subtitle && (
-          <Typography sx={{ color: colors.text2, fontSize: 13, mt: 0.3 }}>{subtitle}</Typography>
+          <Typography sx={{ color: colors.text2, fontSize: 12.5, mt: 0.4, lineHeight: 1.5 }}>
+            {subtitle}
+          </Typography>
         )}
       </Box>
       {right && <Box sx={{ ml: "auto" }}>{right}</Box>}
@@ -47,25 +49,31 @@ export function StatCard({
   return (
     <Panel>
       <Box sx={{ position: "relative", overflow: "hidden" }}>
+        {/* Accent spine, keyed to the tile's semantic colour. Bleeds into the
+            panel padding so it reads as an edge, not a rule. */}
         <Box
           sx={{
             position: "absolute",
-            left: -16,
-            top: -16,
-            bottom: -16,
+            left: -layout.panelPad,
+            top: -layout.panelPad,
+            bottom: -layout.panelPad,
             width: 2,
-            backgroundColor: accent,
-            boxShadow: `0 0 14px ${accent}`,
+            background: `linear-gradient(180deg, ${accent}, ${alpha(accent, 0.15)})`,
+            boxShadow: `0 0 12px -1px ${alpha(accent, 0.75)}`,
           }}
         />
-        <Stack gap={1}>
+        <Stack gap={0.9}>
           <Typography
             sx={{
               fontFamily: fonts.mono,
-              fontSize: 10,
-              letterSpacing: "0.13em",
+              fontSize: 9.5,
+              fontWeight: 500,
+              letterSpacing: "0.14em",
               textTransform: "uppercase",
               color: colors.text3,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
             }}
           >
             {label}
@@ -73,17 +81,26 @@ export function StatCard({
           <Typography
             sx={{
               fontFamily: fonts.mono,
-              fontSize: 30,
+              fontSize: 27,
               fontWeight: 600,
-              lineHeight: 1,
-              letterSpacing: "-0.02em",
+              lineHeight: 1.05,
+              letterSpacing: "-0.03em",
               color: valueColor ?? colors.text1,
             }}
           >
             {value}
           </Typography>
           {sub && (
-            <Box sx={{ fontSize: 11.5, color: colors.text2, display: "flex", gap: 0.8, alignItems: "center" }}>
+            <Box
+              sx={{
+                fontSize: 11,
+                color: colors.text2,
+                display: "flex",
+                gap: 0.7,
+                alignItems: "center",
+                lineHeight: 1.45,
+              }}
+            >
               {sub}
             </Box>
           )}
@@ -98,7 +115,7 @@ export function StatGrid({ children, columns = 4 }: { children: ReactNode; colum
     <Box
       sx={{
         display: "grid",
-        gap: 2,
+        gap: `${layout.gap}px`,
         gridTemplateColumns: {
           xs: "1fr",
           sm: "repeat(2,1fr)",
@@ -136,10 +153,10 @@ export function BarList({ data, max }: { data: BarDatum[]; max?: number }) {
             </Box>
             <Box
               sx={{
-                mt: 0.7,
-                height: 6,
+                mt: 0.65,
+                height: 5,
                 borderRadius: "3px",
-                backgroundColor: "rgba(255,255,255,0.05)",
+                backgroundColor: alpha(colors.text3, 0.16),
                 overflow: "hidden",
               }}
             >
@@ -148,7 +165,8 @@ export function BarList({ data, max }: { data: BarDatum[]; max?: number }) {
                   height: "100%",
                   width: `${(d.value / ceiling) * 100}%`,
                   backgroundColor: d.color ?? colors.ion,
-                  borderRadius: "3px",
+                  // Rounded data-end anchored to the baseline.
+                  borderRadius: "0 3px 3px 0",
                 }}
               />
             </Box>

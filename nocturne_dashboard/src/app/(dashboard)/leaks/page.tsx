@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Box, Button, Stack, Typography } from "@mui/material";
+import { Box, Button, Stack, Typography, alpha } from "@mui/material";
 import { Download } from "lucide-react";
 import type { AgGridReact } from "ag-grid-react";
 import type { ColDef, ICellRendererParams, RowClassParams } from "ag-grid-community";
@@ -12,7 +12,7 @@ import { DataTable } from "@/components/ui/DataTable";
 import { Panel } from "@/components/ui/Panel";
 import { SeverityChip } from "@/components/ui/SeverityChip";
 import { PageHeader, StatCard, StatGrid, Tag } from "@/components/ui/Primitives";
-import { colors, fonts, severityColor } from "@/theme/tokens";
+import { colors, fonts, layout, severityColor } from "@/theme/tokens";
 import {
   formatCount,
   hostOf,
@@ -274,9 +274,9 @@ export default function BreachMonitorPage() {
           {(
             [
               ["all", "All"],
-              ["confirmed", "Confirmed yours"],
-              ["ambiguous", "Needs review"],
-              ["other", "Another company"],
+              ["confirmed", "Confirmed Breach"],
+              ["ambiguous", "Needs Review"],
+              ["other", "Other Company Breach"],
             ] as [StatusFilter, string][]
           ).map(([key, label]) => (
             <Box
@@ -290,10 +290,10 @@ export default function BreachMonitorPage() {
                 cursor: "pointer",
                 font: "inherit",
                 fontSize: 11.5,
-                borderRadius: "6px",
+                borderRadius: `${layout.radiusSm}px`,
                 color: status === key ? colors.ion : colors.text2,
-                border: `1px solid ${status === key ? "rgba(34,211,238,0.35)" : colors.edge}`,
-                backgroundColor: status === key ? "rgba(34,211,238,0.08)" : "transparent",
+                border: `1px solid ${status === key ? alpha(colors.ion, 0.38) : colors.edge}`,
+                backgroundColor: status === key ? alpha(colors.ion, 0.1) : "transparent",
                 "&:hover": { color: colors.text1 },
               }}
             >

@@ -176,7 +176,7 @@ export default function OrganizationsPage() {
           subtitle="Tenant identity and crawl configuration. These values drive ownership matching."
           right={
             <Button variant="contained" size="small" startIcon={<Plus size={14} />}>
-              Add organization
+              Add Organization
             </Button>
           }
         />

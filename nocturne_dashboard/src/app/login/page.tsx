@@ -14,7 +14,7 @@ import {
 } from "@mui/material";
 import { Building2, Lock } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
-import { colors, fonts, layout } from "@/theme/tokens";
+import { colors, fonts, gradients, layout, shadows } from "@/theme/tokens";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -69,27 +69,18 @@ export default function LoginPage() {
       >
           <Stack direction="row" alignItems="center" gap={1.2}>
             <Box
+              component="img"
+              src="/nocturne-mark.png"
+              alt="Nocturne"
+              width={26}
+              height={26}
               sx={{
-                width: 22,
-                height: 22,
-                border: `1.5px solid ${colors.ion}`,
-                borderRadius: "4px",
-                boxShadow: `0 0 14px ${alpha(colors.ion, 0.45)}`,
-                position: "relative",
-                "&::after": {
-                  content: '""',
-                  position: "absolute",
-                  inset: 5,
-                  background: colors.ion,
-                  borderRadius: "1px",
-                },
+                display: "block",
+                filter: `drop-shadow(0 0 12px ${alpha(colors.ion, 0.45)})`,
               }}
             />
             <Typography sx={{ fontWeight: 600, fontSize: 14, letterSpacing: "0.02em" }}>
               NOCTURNE{" "}
-              <Box component="span" sx={{ color: colors.text3, fontWeight: 400 }}>
-                / console
-              </Box>
             </Typography>
           </Stack>
 
@@ -99,13 +90,13 @@ export default function LoginPage() {
               sx={{
                 fontSize: "clamp(26px, 3.4vw, 44px)",
                 lineHeight: 1.14,
-                maxWidth: "17ch",
+                maxWidth: "15ch",
                 textWrap: "balance",
               }}
             >
-              Every alert carries{" "}
+              Every breach alert comes with{" "}
               <Box component="span" sx={{ color: colors.ion }}>
-                the sentence that produced it
+                the receipt
               </Box>
               .
             </Typography>
@@ -155,14 +146,31 @@ export default function LoginPage() {
         onSubmit={handleSubmit}
         justifyContent="center"
         gap={2}
+        alignItems="center"
         sx={{
           flex: { md: 1 },
-          p: { xs: 3.5, sm: 5, md: 7, lg: 9 },
-          // Keep the field column readable on ultra-wide displays instead of
-          // letting inputs stretch across half a 4K screen.
-          "& > *": { width: "100%", maxWidth: 520 },
+          p: { xs: 3, sm: 4, md: 6 },
+          // The form is a defined surface rather than fields floating on the
+          // page — an auth screen should look like a door, not a gap.
+          "& > *": { width: "100%", maxWidth: 400 },
+          backgroundImage: `radial-gradient(680px 520px at 60% 40%, ${alpha(colors.ion, 0.05)}, transparent 70%)`,
         }}
       >
+        <Box
+          sx={{
+            width: "100%",
+            maxWidth: 400,
+            p: { xs: 2.5, sm: 3.5 },
+            borderRadius: `${layout.radius}px`,
+            border: `1px solid ${colors.edge}`,
+            backgroundImage: gradients.panel,
+            backdropFilter: "blur(20px)",
+            boxShadow: shadows.raised,
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+          }}
+        >
           <Box>
             <Typography variant="h3">Sign in</Typography>
             <Typography sx={{ fontSize: 12.5, color: colors.text3, mt: 0.4 }}>
@@ -267,6 +275,7 @@ export default function LoginPage() {
               sending an organization id.
             </Box>
           </Box>
+        </Box>
       </Stack>
     </Stack>
   );

@@ -65,7 +65,7 @@ export default function UsersPage() {
                 minWidth: 180,
                 valueGetter: (p) =>
                   p.data?.role === "SUPER_ADMIN"
-                    ? "All organizations"
+                    ? "All Organizations"
                     : (findOrganization(p.data?.orgId ?? "")?.canonicalName ?? p.data?.orgId ?? ""),
                 cellRenderer: (p: ICellRendererParams<User>) => (
                   <Box

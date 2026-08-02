@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Box, Button, Chip, Divider, Stack, Switch, TextField, Typography } from "@mui/material";
+import { Box, Button, Chip, Divider, Stack, Switch, TextField, Typography, alpha } from "@mui/material";
 import { Plus } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { Panel } from "@/components/ui/Panel";
@@ -12,7 +12,7 @@ import { colors, fonts, severityColor } from "@/theme/tokens";
 /**
  * The most consequential page in the product, and it looks like a boring form.
  * These four arrays are what ownership resolution matches against — adding one
- * domain can flip pages from "Needs review" to "Confirmed yours". The impact
+ * domain can flip pages from "Needs Review" to "Confirmed Breach". The impact
  * preview makes that consequence visible before anyone hits save.
  */
 export default function SettingsPage() {
@@ -79,7 +79,7 @@ export default function SettingsPage() {
                   py: 1.2,
                   borderRadius: "8px",
                   border: `1px solid ${colors.edge}`,
-                  backgroundColor: "rgba(6,11,20,0.85)",
+                  backgroundColor: alpha(colors.abyss, 0.7),
                   fontFamily: fonts.mono,
                   fontSize: 13,
                 }}
@@ -129,13 +129,13 @@ export default function SettingsPage() {
                 color="secondary"
               />
               <Typography sx={{ fontSize: 12.5 }}>
-                Monitoring {enabled ? "enabled" : "paused"}
+                Monitoring {enabled ? "Enabled" : "Paused"}
               </Typography>
             </Stack>
 
             <Stack direction="row" gap={1.2}>
               <Button variant="contained" disabled={!dirty}>
-                Save changes
+                Save Changes
               </Button>
               <Button
                 variant="outlined"
@@ -163,7 +163,7 @@ export default function SettingsPage() {
                   this is a deterministic re-match.
                 </Typography>
                 <Stack gap={1}>
-                  <Kv k="Needs review → yours" v="+3 incidents" color={severityColor.critical} />
+                  <Kv k="Needs Review → yours" v="+3 incidents" color={severityColor.critical} />
                   <Kv k="Pages re-matched" v="47" />
                   <Kv k="New AI calls" v="0" color={colors.verified} />
                   <Kv k="Estimated cost" v="$0.00" color={colors.verified} />
