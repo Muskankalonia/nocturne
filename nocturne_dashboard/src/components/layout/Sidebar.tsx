@@ -60,24 +60,47 @@ export function Sidebar({ badges }: SidebarProps) {
   const { isSuperAdmin, session, logout, isFleetScope, activeOrg, switchableOrgs } =
     useAuth();
 
-  // Pinned state survives reload — a rail that recollapses the moment the
-  // pointer leaves is infuriating when you are cross-referencing pages.
+  // Opening the rail pins it. Nothing closes it except the toggle — a rail that
+  // recollapses the moment the pointer leaves is infuriating when you are
+  // cross-referencing pages. Pinned state survives reload.
   const [pinned, setPinned] = useState(false);
   const [hovered, setHovered] = useState(false);
+  // An explicit collapse has to win even though the pointer is still inside the
+  // rail, or clicking the toggle would do nothing until the mouse moved away.
+  // Cleared as soon as the pointer genuinely leaves.
+  const [hoverSuppressed, setHoverSuppressed] = useState(false);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     setPinned(window.localStorage.getItem(PIN_STORAGE_KEY) === "true");
   }, []);
 
+  const pin = useCallback(() => {
+    window.localStorage.setItem(PIN_STORAGE_KEY, "true");
+    setPinned(true);
+  }, []);
+
   const togglePin = useCallback(() => {
     setPinned((prev) => {
-      window.localStorage.setItem(PIN_STORAGE_KEY, String(!prev));
-      return !prev;
+      const next = !prev;
+      window.localStorage.setItem(PIN_STORAGE_KEY, String(next));
+      // Collapsing while hovering: mute hover until the pointer leaves.
+      setHoverSuppressed(!next);
+      return next;
     });
   }, []);
 
-  const expanded = pinned || hovered;
+  const handleRailEnter = useCallback(() => {
+    setHovered(true);
+    if (!hoverSuppressed) pin();
+  }, [hoverSuppressed, pin]);
+
+  const handleRailLeave = useCallback(() => {
+    setHovered(false);
+    setHoverSuppressed(false);
+  }, []);
+
+  const expanded = pinned || (hovered && !hoverSuppressed);
   const items = useMemo(() => navigationForRole(isSuperAdmin), [isSuperAdmin]);
 
   /**
@@ -136,10 +159,8 @@ export function Sidebar({ badges }: SidebarProps) {
 
   const handleItemClick = (item: NavItem) => {
     if (item.children?.length) {
-      if (!expanded) {
-        setPinned(true);
-        window.localStorage.setItem(PIN_STORAGE_KEY, "true");
-      }
+      // Keyboard users reach a group without ever hovering the rail.
+      if (!expanded) pin();
       setOpenGroups((prev) => ({ ...prev, [item.id]: !prev[item.id] }));
       return;
     }
@@ -158,8 +179,8 @@ export function Sidebar({ badges }: SidebarProps) {
     <Box
       component="nav"
       aria-label="Main navigation"
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      onMouseEnter={handleRailEnter}
+      onMouseLeave={handleRailLeave}
       sx={{
         width: expanded ? layout.railExpanded : layout.railCollapsed,
         flexShrink: 0,
@@ -177,27 +198,54 @@ export function Sidebar({ badges }: SidebarProps) {
         "@media (prefers-reduced-motion: reduce)": { transition: "none" },
       }}
     >
-      {/* brand + collapse toggle */}
+      {/* brand + collapse toggle
+       *
+       * The rail has one horizontal rhythm and the brand row has to sit on it:
+       * the same outer margin as the scope banner and the nav rows, the same
+       * inner padding, and the same icon→label gap. Authoring this row with its
+       * own padding left three different left edges stacked down the rail — the
+       * mark at 11.2px, everything below it at 9.6px, and the nav icons at
+       * 19.6px — and left the mark off-centre in the collapsed rail. */}
       <Stack
         direction="row"
         alignItems="center"
-        gap={1.2}
-        sx={{ px: 1.4, height: layout.headerHeight, flexShrink: 0 }}
+        gap={1.4}
+        sx={{
+          mx: 1.2,
+          px: expanded ? 1.25 : 1.15,
+          gap: 1.4,
+          height: layout.headerHeight,
+          flexShrink: 0,
+          justifyContent: expanded ? "flex-start" : "center",
+        }}
       >
         <Box
-          component="img"
-          src="/nocturne-mark.png"
-          alt="Nocturne"
-          width={24}
-          height={24}
           sx={{
+            // The nav icon column. The mark is larger than a nav icon and
+            // overflows this slot symmetrically, which keeps its optical centre
+            // on the same axis as every icon beneath it.
+            width: 16,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
             flexShrink: 0,
-            display: "block",
-            // The rail is the one place the mark appears without the wordmark,
-            // so it keeps the accent glow the old chrome had.
-            filter: `drop-shadow(0 0 10px ${alpha(colors.ion, 0.45)})`,
           }}
-        />
+        >
+          <Box
+            component="img"
+            src="/nocturne-mark.png"
+            alt="Nocturne"
+            width={24}
+            height={24}
+            sx={{
+              flexShrink: 0,
+              display: "block",
+              // The rail is the one place the mark appears without the wordmark,
+              // so it keeps the accent glow the old chrome had.
+              filter: `drop-shadow(0 0 10px ${alpha(colors.ion, 0.45)})`,
+            }}
+          />
+        </Box>
         {expanded && (
           <>
             <Typography
@@ -206,7 +254,14 @@ export function Sidebar({ badges }: SidebarProps) {
               NOCTURNE
             </Typography>
             <Tooltip title={pinned ? "Unpin sidebar" : "Pin sidebar open"}>
-              <IconButton size="small" onClick={togglePin} sx={{ ml: "auto", color: colors.text3 }}>
+              <IconButton
+                size="small"
+                onClick={togglePin}
+                aria-label={pinned ? "Unpin sidebar" : "Pin sidebar open"}
+                // Cancel the row's inner padding so the toggle finishes flush
+                // with the right edge of the scope banner below it.
+                sx={{ ml: "auto", mr: -1.25, color: colors.text3 }}
+              >
                 <Menu size={15} />
               </IconButton>
             </Tooltip>

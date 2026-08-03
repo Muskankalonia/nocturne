@@ -138,14 +138,32 @@ export interface BarDatum {
   color?: string;
 }
 
-export function BarList({ data, max }: { data: BarDatum[]; max?: number }) {
+export function BarList({
+  data,
+  max,
+  /** Stretch rows to fill the panel. Opt-in — see Cascade for the same reason. */
+  fill = false,
+}: {
+  data: BarDatum[];
+  max?: number;
+  fill?: boolean;
+}) {
   const ceiling = max ?? Math.max(...data.map((d) => d.value), 1);
   return (
-    <Stack gap={1.3}>
+    <Stack
+      gap={1.3}
+      sx={fill ? { flex: 1, minHeight: 0, justifyContent: "space-between" } : undefined}
+    >
       {data.map((d, i) => (
         <Box
           key={i}
-          sx={{ display: "grid", gridTemplateColumns: "1fr 56px", gap: 1.4, alignItems: "center" }}
+          sx={{
+            display: "grid",
+            gridTemplateColumns: "1fr 56px",
+            gap: 1.4,
+            alignItems: "center",
+            ...(fill ? { flex: 1, minHeight: 0 } : null),
+          }}
         >
           <Box>
             <Box sx={{ fontSize: 11.5, color: colors.text2, display: "flex", alignItems: "center", gap: 1 }}>

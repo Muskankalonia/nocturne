@@ -6,6 +6,12 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Panel } from "@/components/ui/Panel";
 import { Cascade } from "@/components/ui/Cascade";
 import { PostureFlow } from "@/components/ui/PostureFlow";
+import {
+  BarListSkeleton,
+  CanvasSkeleton,
+  StatGridSkeleton,
+  TableSkeleton,
+} from "@/components/ui/Skeletons";
 import { SeverityChip } from "@/components/ui/SeverityChip";
 import { colors, fonts, severityColor } from "@/theme/tokens";
 import { hostOf } from "@/lib/format";
@@ -143,6 +149,39 @@ export default function CommandCenterPage() {
       ?? activeOrg?.canonicalName
       ?? "Organization";
 
+  // Loading and failure are different states and must not share a placeholder.
+  // While the fetch is in flight the page shape is already known, so keep the
+  // real heading and skeleton only the boxes that are waiting on Snowflake.
+  if (!visibleData && isLoading) {
+    return (
+      <Stack gap={2}>
+        <PageHeading
+          title={`${organizationName} posture`}
+          subtitle={
+            isFleetScope
+              ? `Aggregated across ${switchableOrgs.length} organizations.`
+              : "What of yours was exposed, how badly, and what to do about it."
+          }
+        />
+        <StatGridSkeleton cards={4} />
+        <Panel padded={false}>
+          <CanvasSkeleton height={300} />
+        </Panel>
+        <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", lg: "1.55fr 1fr" } }}>
+          <Panel title="Detection cascade">
+            <BarListSkeleton rows={9} />
+          </Panel>
+          <Panel title="Incidents by band">
+            <BarListSkeleton rows={5} />
+          </Panel>
+        </Box>
+        <Panel title="Priority queue — ranked by triage score">
+          <TableSkeleton rows={6} columns={6} />
+        </Panel>
+      </Stack>
+    );
+  }
+
   if (!visibleData) {
     return (
       <Stack gap={2}>
@@ -156,19 +195,15 @@ export default function CommandCenterPage() {
         />
         <Panel>
           <Stack alignItems="center" gap={1.5} sx={{ py: 6 }}>
-            <Typography sx={{ color: colors.text1 }}>
-              {isLoading ? "Loading live Snowflake posture…" : "Live posture unavailable"}
-            </Typography>
+            <Typography sx={{ color: colors.text1 }}>Live posture unavailable</Typography>
             {error && (
               <Typography sx={{ color: colors.critical, fontSize: 12 }}>
                 {error}
               </Typography>
             )}
-            {!isLoading && (
-              <Button size="small" onClick={() => void load(undefined, true)}>
-                Retry
-              </Button>
-            )}
+            <Button size="small" onClick={() => void load(undefined, true)}>
+              Retry
+            </Button>
           </Stack>
         </Panel>
       </Stack>

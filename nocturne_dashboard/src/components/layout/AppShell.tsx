@@ -2,10 +2,11 @@
 
 import { useEffect, useMemo, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { Box, CircularProgress, Stack } from "@mui/material";
+import { Box, Skeleton, Stack } from "@mui/material";
 import { scopeOrgId, useAuth } from "@/contexts/AuthContext";
 import { incidents } from "@/mocks/incidents";
-import { colors, layout } from "@/theme/tokens";
+import { colors, gradients, layout } from "@/theme/tokens";
+import { StatGridSkeleton } from "@/components/ui/Skeletons";
 import Header from "./Header";
 import Sidebar from "./Sidebar";
 
@@ -36,15 +37,54 @@ export function AppShell({ children }: { children: ReactNode }) {
     };
   }, [session, isFleetScope]);
 
+  // The one place a whole-page skeleton is honest: until the session resolves we
+  // do not know the role, so we cannot draw the correct navigation. Sketching
+  // the chrome keeps the first paint in the right shape instead of flashing a
+  // centred spinner and then snapping into a full layout.
   if (isLoading || !isAuthenticated) {
     return (
-      <Stack
-        alignItems="center"
-        justifyContent="center"
-        sx={{ minHeight: "100vh", backgroundColor: colors.void }}
-      >
-        <CircularProgress size={26} sx={{ color: colors.ion }} />
-      </Stack>
+      <Box sx={{ display: "flex", minHeight: "100vh", backgroundColor: colors.void }}>
+        <Box
+          sx={{
+            width: layout.railCollapsed,
+            flexShrink: 0,
+            borderRight: `1px solid ${colors.edge}`,
+            backgroundImage: gradients.chrome,
+            p: 1.15,
+          }}
+        >
+          <Stack gap={1.6} alignItems="center">
+            <Skeleton variant="circular" width={24} height={24} sx={{ mt: 0.6 }} />
+            {Array.from({ length: 7 }, (_, i) => (
+              <Skeleton key={i} variant="rounded" width={20} height={20} sx={{ borderRadius: "5px" }} />
+            ))}
+          </Stack>
+        </Box>
+
+        <Box sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+          <Stack
+            direction="row"
+            alignItems="center"
+            gap={2}
+            sx={{
+              height: layout.headerHeight,
+              px: `${layout.gutter}px`,
+              borderBottom: `1px solid ${colors.edge}`,
+              backgroundImage: gradients.chrome,
+            }}
+          >
+            <Skeleton variant="rounded" width={280} height={26} sx={{ borderRadius: "7px" }} />
+            <Skeleton variant="text" width={120} height={12} sx={{ ml: "auto" }} />
+            <Skeleton variant="rounded" width={150} height={26} sx={{ borderRadius: "7px" }} />
+          </Stack>
+
+          <Box sx={{ flex: 1, px: `${layout.gutter}px`, py: `${layout.gutter - 4}px` }}>
+            <Skeleton variant="text" width={240} height={26} />
+            <Skeleton variant="text" width={420} height={13} sx={{ mb: 2.4 }} />
+            <StatGridSkeleton cards={4} />
+          </Box>
+        </Box>
+      </Box>
     );
   }
 

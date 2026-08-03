@@ -90,13 +90,32 @@ export default function CrossTenantActorsPage() {
 
         <Panel padded={false}>
           <Stack direction={{ xs: "column", lg: "row" }}>
-            <Box sx={{ flex: 1, minWidth: 0, borderRight: { lg: `1px solid ${colors.edge}` }, p: 1 }}>
+            {/* The diagram is a fixed 640×470 viewBox. Stretching its box to
+                fill the row only letterboxed it — the drawing scaled to the
+                440px height and sat in the middle of a ~1300px column with dead
+                space either side. Cap the column near the diagram's natural
+                width and let the actor list take the rest. */}
+            <Box
+              sx={{
+                flex: { lg: "0 1 660px" },
+                minWidth: 0,
+                borderRight: { lg: `1px solid ${colors.edge}` },
+                p: 1,
+              }}
+            >
               <Box
                 component="svg"
                 viewBox="0 0 640 470"
                 role="img"
                 aria-label={`${top.actorName} connected to ${top.affectedOrgIds.length} customer organizations`}
-                sx={{ width: "100%", height: 440, display: "block" }}
+                sx={{
+                  width: "100%",
+                  maxWidth: 640,
+                  aspectRatio: "640 / 470",
+                  height: "auto",
+                  mx: "auto",
+                  display: "block",
+                }}
               >
                 <g fill="none">
                   {orgPositions.map((p, i) => (
@@ -177,11 +196,21 @@ export default function CrossTenantActorsPage() {
               </Box>
             </Box>
 
-            <Box sx={{ width: { xs: "100%", lg: 320 }, flexShrink: 0, p: 2 }}>
+            <Box sx={{ flex: { lg: "1 1 480px" }, minWidth: 0, width: { xs: "100%", lg: "auto" }, p: 2 }}>
               <Typography variant="overline" sx={{ display: "block", mb: 1.4 }}>
                 Actors spanning tenants
               </Typography>
-              <Stack gap={1}>
+              {/* On a wide fleet console the list gets a lot of room, so let the
+                  cards flow into columns rather than stretching one card to a
+                  line length nobody can scan. */}
+              <Box
+                sx={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(272px, 1fr))",
+                  gap: 1,
+                  alignItems: "start",
+                }}
+              >
                 {crossTenantActors.map((a, i) => {
                   const band = bandForScore(a.maxCredibility);
                   return (
@@ -219,7 +248,7 @@ export default function CrossTenantActorsPage() {
                     </Box>
                   );
                 })}
-              </Stack>
+              </Box>
 
               <Box sx={{ mt: 2 }}>
                 <Box

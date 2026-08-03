@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Box, Stack, Typography, alpha } from "@mui/material";
 import { scopeOrgId, useAuth } from "@/contexts/AuthContext";
 import { cascadeForScope, groundingStats } from "@/mocks/pipeline";
@@ -22,13 +23,59 @@ import {
   StatGrid,
   Tag,
 } from "@/components/ui/Primitives";
-import { colors, fonts, severityColor } from "@/theme/tokens";
+import { colors, fonts, layout as layoutTokens, severityColor } from "@/theme/tokens";
 import { relativeTime } from "@/lib/format";
 
 const NOW = Date.parse("2026-08-01T16:05:00Z");
 
+/**
+ * The three sidebar links under Pipeline are three different questions for three
+ * different readers — what did the cascade cost, is the evidence trustworthy,
+ * and is the machinery healthy. They share one dataset, so they are tabs on one
+ * route rather than three routes each refetching the same thing.
+ */
+type PipelineTab = "cascade" | "quality" | "health";
+
+const TABS: ReadonlyArray<readonly [PipelineTab, string]> = [
+  ["cascade", "Detection Cascade"],
+  ["quality", "Evidence Quality"],
+  ["health", "Processing Health"],
+];
+
+const TAB_SUBTITLE: Record<PipelineTab, string> = {
+  cascade: "How many pages survived each stage, and which three stages cost money.",
+  quality: "What failed verbatim verification and never reached the graph.",
+  health: "Task state, version drift, and per-tenant ingest health.",
+};
+
+function isPipelineTab(value: string | null): value is PipelineTab {
+  return value === "cascade" || value === "quality" || value === "health";
+}
+
 export default function PipelinePage() {
   const { session, isFleetScope } = useAuth();
+  const router = useRouter();
+  const params = useSearchParams();
+  const [tab, setTab] = useState<PipelineTab>("cascade");
+
+  // Statically prerendered, so `useSearchParams()` is empty on first render and
+  // a useState initializer would pin the tab forever. Sync after hydration so
+  // the sidebar's deep links actually land.
+  useEffect(() => {
+    const next = params.get("tab");
+    setTab(isPipelineTab(next) ? next : "cascade");
+  }, [params]);
+
+  // Keep the URL authoritative so a tab can be linked, bookmarked and shared.
+  const selectTab = useCallback(
+    (next: PipelineTab) => {
+      setTab(next);
+      router.replace(next === "cascade" ? "/pipeline" : `/pipeline?tab=${next}`, {
+        scroll: false,
+      });
+    },
+    [router],
+  );
 
   const stats = isFleetScope ? groundingStats.fleet : groundingStats.org;
   const cascade = session ? cascadeForScope(session.scope) : [];
@@ -47,11 +94,41 @@ export default function PipelinePage() {
   const deepPct = ((extracted / relevance) * 100).toFixed(1);
 
   return (
-    <Stack gap={2}>
-      <PageHeader
-        title="Pipeline"
-        subtitle="How evidence is verified, what gets thrown away, and what it costs."
-      />
+    <Stack
+      gap={2}
+      sx={{
+        minHeight: `calc(100dvh - ${layoutTokens.headerHeight + (layoutTokens.gutter - 4) * 2}px)`,
+      }}
+    >
+      <PageHeader title="Pipeline" subtitle={TAB_SUBTITLE[tab]} />
+
+      <Stack direction="row" gap={1} flexWrap="wrap" role="tablist" aria-label="Pipeline views">
+        {TABS.map(([key, label]) => (
+          <Box
+            key={key}
+            component="button"
+            type="button"
+            role="tab"
+            aria-selected={tab === key}
+            onClick={() => selectTab(key)}
+            sx={{
+              px: 1.4,
+              py: 0.6,
+              cursor: "pointer",
+              font: "inherit",
+              fontSize: 11.5,
+              borderRadius: `${layoutTokens.radiusSm}px`,
+              color: tab === key ? colors.ion : colors.text2,
+              border: `1px solid ${tab === key ? alpha(colors.ion, 0.38) : colors.edge}`,
+              backgroundColor: tab === key ? alpha(colors.ion, 0.1) : "transparent",
+              "&:hover": { color: colors.text1 },
+              "&:focus-visible": { outline: `2px solid ${alpha(colors.ion, 0.7)}`, outlineOffset: 2 },
+            }}
+          >
+            {label}
+          </Box>
+        ))}
+      </Stack>
 
       <StatGrid>
         <StatCard
@@ -82,13 +159,34 @@ export default function PipelinePage() {
         />
       </StatGrid>
 
-      <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", lg: "1.55fr 1fr" } }}>
-        <Panel title="Detection Cascade" meta="RED = BILLED STAGE">
-          <Cascade stages={cascade} />
+      {tab === "cascade" && (
+        <Panel
+          title="Detection Cascade"
+          meta="RED = BILLED STAGE"
+          sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+        >
+          <Cascade stages={cascade} fill />
         </Panel>
+      )}
 
-        <Panel title="Quarantined Extractions" meta="WHY THEY WERE REJECTED">
+      {tab === "quality" && (
+      <Box
+        sx={{
+          display: "grid",
+          gap: 2,
+          gridTemplateColumns: { xs: "1fr", lg: "1.4fr 1fr" },
+          flex: 1,
+          minHeight: 0,
+        }}
+      >
+        <Panel
+          title="Quarantined Extractions"
+          meta="WHY THEY WERE REJECTED"
+          sx={{ display: "flex", flexDirection: "column", minHeight: 0 }}
+        >
+          <Box sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
           <BarList
+            fill
             data={rejectionReasons.map((r) => ({
               label: (
                 <>
@@ -107,11 +205,13 @@ export default function PipelinePage() {
                       : severityColor.low,
             }))}
           />
+          </Box>
           <Box
             sx={{
               mt: 2,
               pt: 1.6,
               borderTop: `1px solid ${colors.edge}`,
+              flexShrink: 0,
               fontSize: 11.5,
               color: colors.text2,
               lineHeight: 1.65,
@@ -124,8 +224,20 @@ export default function PipelinePage() {
             them appear in any score.
           </Box>
         </Panel>
-      </Box>
 
+        <Panel title="Accuracy metrics">
+          <DataGapNote>
+            <b>Precision, recall and calibration are deliberately absent.</b> They need a labelled
+            gold set — roughly 40 hand-reviewed pages — which does not exist yet. Showing an
+            invented accuracy figure would be worse than showing none. Build the gold set and this
+            panel fills itself in.
+          </DataGapNote>
+        </Panel>
+      </Box>
+      )}
+
+      {tab === "health" && (
+      <>
       <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", lg: "1fr 1fr" } }}>
         <Panel title="Version drift" meta="BASELINE VS CURRENT">
           <Box sx={{ overflowX: "auto" }}>
@@ -254,15 +366,8 @@ export default function PipelinePage() {
           so an idle pipeline costs nothing.
         </Typography>
       </Panel>
-
-      <Panel title="Accuracy metrics">
-        <DataGapNote>
-          <b>Precision, recall and calibration are deliberately absent.</b> They need a labelled
-          gold set — roughly 40 hand-reviewed pages — which does not exist yet. Showing an invented
-          accuracy figure would be worse than showing none. Build the gold set and this panel fills
-          itself in.
-        </DataGapNote>
-      </Panel>
+      </>
+      )}
     </Stack>
   );
 }

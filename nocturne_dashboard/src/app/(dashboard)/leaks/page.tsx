@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Box, Button, Stack, Typography, alpha } from "@mui/material";
+import { Box, Button, Skeleton, Stack, Typography, alpha } from "@mui/material";
 import { Download, RefreshCw } from "lucide-react";
 import type { AgGridReact } from "ag-grid-react";
 import type { ColDef, ICellRendererParams, RowClassParams } from "ag-grid-community";
 import { useAuth } from "@/contexts/AuthContext";
 import { DataTable } from "@/components/ui/DataTable";
 import { Panel } from "@/components/ui/Panel";
+import { StatGridSkeleton, TableSkeleton } from "@/components/ui/Skeletons";
 import { SeverityChip } from "@/components/ui/SeverityChip";
 import { PageHeader, StatCard, StatGrid, Tag } from "@/components/ui/Primitives";
 import { colors, fonts, layout, severityColor } from "@/theme/tokens";
@@ -301,6 +302,8 @@ export default function BreachMonitorPage() {
         headerName: "Status",
         field: "monitorStatus",
         minWidth: 148,
+        // Tick "Confirmed yours", not "confirmed_yours".
+        filterParams: { valueLabel: monitorStatusLabel },
         cellRenderer: (p: ICellRendererParams<BreachMonitorRecord>) =>
           p.data ? (
             <Box title={humanize(p.data.routingReason)}>
@@ -316,6 +319,7 @@ export default function BreachMonitorPage() {
         minWidth: 190,
         flex: 1.3,
         sortable: false,
+        filterParams: { valueLabel: leakTypeLabel },
         cellRenderer: (p: ICellRendererParams<BreachMonitorRecord>) => {
           const types = p.data?.leakTypes ?? [];
           if (!types.length)
@@ -412,6 +416,32 @@ export default function BreachMonitorPage() {
     return band ? `row-${band}` : "row-informational";
   }, []);
 
+  // Fleet scope can take ~9s cold, so this placeholder is on screen long enough
+  // to matter. Keep the heading real and mirror the grid's shape underneath.
+  if (!visibleData && isLoading) {
+    return (
+      <Stack gap={2}>
+        <PageHeader
+          title="Breach Monitor"
+          subtitle="Confirmed leaks, plus the pages we refused to confirm and why."
+        />
+        <StatGridSkeleton cards={4} />
+        <Panel padded={false}>
+          <Box sx={{ px: 2, py: 1.6, borderBottom: `1px solid ${colors.edge}` }}>
+            <Stack direction="row" gap={1}>
+              {[92, 118, 104, 140].map((w) => (
+                <Skeleton key={w} variant="rounded" width={w} height={26} sx={{ borderRadius: "6px" }} />
+              ))}
+            </Stack>
+          </Box>
+          <Box sx={{ p: 2 }}>
+            <TableSkeleton rows={8} columns={6} />
+          </Box>
+        </Panel>
+      </Stack>
+    );
+  }
+
   if (!visibleData) {
     return (
       <Stack gap={2}>
@@ -421,19 +451,15 @@ export default function BreachMonitorPage() {
         />
         <Panel>
           <Stack alignItems="center" gap={1.5} sx={{ py: 6 }}>
-            <Typography sx={{ color: colors.text1 }}>
-              {isLoading ? "Loading live Snowflake breach data…" : "Breach Monitor unavailable"}
-            </Typography>
+            <Typography sx={{ color: colors.text1 }}>Breach Monitor unavailable</Typography>
             {error && (
               <Typography sx={{ color: colors.critical, fontSize: 12 }}>
                 {error}
               </Typography>
             )}
-            {!isLoading && (
-              <Button size="small" onClick={() => void load(undefined, true)}>
-                Retry
-              </Button>
-            )}
+            <Button size="small" onClick={() => void load(undefined, true)}>
+              Retry
+            </Button>
           </Stack>
         </Panel>
       </Stack>

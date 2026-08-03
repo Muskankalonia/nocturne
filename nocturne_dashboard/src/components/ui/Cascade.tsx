@@ -12,11 +12,25 @@ const costLabel = ["$0", "$", "$$", "$$$"] as const;
  * three stages cost money. This is the product's argument against the
  * "send every page to an expensive model" baseline, in one chart.
  */
-export function Cascade({ stages }: { stages: CascadeStage[] }) {
+export function Cascade({
+  stages,
+  /**
+   * Stretch the rows to fill the panel instead of stacking at a fixed rhythm.
+   * Opt-in, because on the Command Center the cascade sits beside other panels
+   * and must keep its natural height.
+   */
+  fill = false,
+}: {
+  stages: CascadeStage[];
+  fill?: boolean;
+}) {
   const max = Math.max(...stages.map((s) => s.count), 1);
 
   return (
-    <Stack gap={0.9}>
+    <Stack
+      gap={0.9}
+      sx={fill ? { flex: 1, minHeight: 0, justifyContent: "space-between" } : undefined}
+    >
       {stages.map((stage) => {
         const pct = (stage.count / max) * 100;
         // Billed stages carry the cost warning; unbilled stages stay in the
@@ -35,6 +49,7 @@ export function Cascade({ stages }: { stages: CascadeStage[] }) {
               gridTemplateColumns: { xs: "120px 1fr 64px 44px", md: "200px 1fr 76px 52px" },
               alignItems: "center",
               gap: 1.2,
+              ...(fill ? { flex: 1, minHeight: 0 } : null),
             }}
           >
             <Stack direction="row" alignItems="center" gap={0.7} sx={{ minWidth: 0 }}>

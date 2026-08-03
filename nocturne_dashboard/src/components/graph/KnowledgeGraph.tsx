@@ -16,11 +16,126 @@ const nodeColor: Record<string, string> = {
   location: colors.informational,
 };
 
+export type GraphLayout = "force" | "spine";
+
 export interface KnowledgeGraphProps {
   payload: GraphPayload;
   onSelectNode?: (node: GraphNode | null) => void;
   onSelectEdge?: (edge: GraphEdge | null) => void;
-  height?: number;
+  /** A number is pixels; a string lets the caller flex it, e.g. "100%". */
+  height?: number | string;
+  /**
+   * `spine` ranks the graph left to right along the pipeline's own direction —
+   * actor, claim, then the assets it touches. `force` is the physics layout.
+   */
+  layout?: GraphLayout;
+  /**
+   * ISO cutoff for the discovery replay. Elements first seen after this instant
+   * render as ghosts rather than being removed: dropping them would re-run the
+   * layout on every step and the replay would read as chaos instead of
+   * sequence. `null` shows everything at full strength.
+   */
+  discoveredBefore?: string | null;
+}
+
+type Phase = "discovered" | "arriving" | "unknown";
+
+/**
+ * Where an element sits relative to the replay cutoff. `arriving` is whatever
+ * appeared at exactly this stop — the thing the current step is about.
+ */
+function phaseOf(firstSeen: string, cutoff: string | null | undefined): Phase {
+  if (!cutoff) return "discovered";
+  if (firstSeen === cutoff) return "arriving";
+  return firstSeen < cutoff ? "discovered" : "unknown";
+}
+
+function nodeStyle(node: GraphNode, phase: Phase) {
+  const base = nodeColor[node.nodeType] ?? colors.informational;
+  const size = node.isMonitoredOrg ? 46 : node.nodeType === "actor_alias" ? 42 : 30;
+
+  if (phase === "unknown") {
+    return {
+      size,
+      fill: "transparent",
+      stroke: colors.edgeHi,
+      lineWidth: 1,
+      lineDash: [2, 3],
+      opacity: 0.45,
+      cursor: "default" as const,
+      labelText: "",
+      shadowColor: base,
+      shadowBlur: 0,
+    };
+  }
+
+  const prominent = node.isMonitoredOrg || node.nodeType === "actor_alias";
+  return {
+    size,
+    fill: `${base}33`,
+    stroke: base,
+    lineWidth: phase === "arriving" ? 2.4 : prominent ? 2 : 1.4,
+    lineDash: 0,
+    opacity: 1,
+    cursor: "pointer" as const,
+    labelText: node.displayName,
+    labelFill: phase === "arriving" ? colors.text1 : colors.text2,
+    labelFontSize: 11,
+    labelFontFamily: fonts.mono,
+    labelPlacement: "bottom" as const,
+    labelOffsetY: 6,
+    shadowColor: base,
+    shadowBlur: phase === "arriving" ? 18 : 0,
+  };
+}
+
+function edgeStyle(edge: GraphEdge, phase: Phase, layout: GraphLayout) {
+  const emphasis = edge.edgeType === "ALLEGEDLY_AFFECTS" || edge.edgeType === "MADE_CLAIM";
+  const stroke =
+    edge.edgeType === "ALLEGEDLY_AFFECTS"
+      ? severityColor.critical
+      : edge.edgeType === "MADE_CLAIM"
+        ? colors.ion
+        : "rgba(122,164,255,0.4)";
+
+  if (phase === "unknown") {
+    return {
+      stroke: colors.edgeHi,
+      lineWidth: 1,
+      lineDash: [2, 6],
+      opacity: 0.3,
+      cursor: "default" as const,
+      labelText: "",
+      endArrow: false,
+      shadowColor: colors.ion,
+      shadowBlur: 0,
+    };
+  }
+
+  // On the spine, thickness carries corroboration — the widest band is the
+  // relationship seen on the most mirrors. The force layout keeps the flatter
+  // emphasis rule so it stays readable when nodes overlap.
+  const width = layout === "spine"
+    ? 1 + Math.min(edge.sightingCount, 4) * 0.9
+    : emphasis ? 1.8 : 1.2;
+
+  return {
+    stroke: phase === "arriving" ? colors.ionBright : stroke,
+    lineWidth: phase === "arriving" ? width + 1.4 : width,
+    lineDash: emphasis ? 0 : [3, 4],
+    opacity: 1,
+    cursor: "pointer" as const,
+    // On the spine the supporting edges are already legible from the node types
+    // they connect, so their labels are pure clutter along a diagonal. Keep the
+    // label where the relationship is the point: who claimed it, what it hit.
+    labelText: layout === "spine" && !emphasis ? "" : edge.edgeType,
+    labelFill: colors.text3,
+    labelFontSize: 8.5,
+    labelFontFamily: fonts.mono,
+    endArrow: true,
+    shadowColor: colors.ion,
+    shadowBlur: phase === "arriving" ? 14 : 0,
+  };
 }
 
 /**
@@ -38,10 +153,18 @@ export function KnowledgeGraph({
   onSelectNode,
   onSelectEdge,
   height = 520,
+  layout = "force",
+  discoveredBefore = null,
 }: KnowledgeGraphProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const graphRef = useRef<any>(null);
+
+  // Hold the cutoff in a ref so building the graph does not depend on it. If it
+  // did, every scrubber step would destroy and rebuild the instance, re-running
+  // the layout and throwing away the viewer's pan and zoom.
+  const cutoffRef = useRef<string | null>(discoveredBefore);
+  cutoffRef.current = discoveredBefore;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -58,53 +181,34 @@ export function KnowledgeGraph({
       // Remove anything an aborted previous mount left behind.
       containerRef.current.replaceChildren();
 
+      const cutoff = cutoffRef.current;
+
       instance = new Graph({
         container: containerRef.current,
         autoFit: "view",
+        // The container is now a flex child that changes size with the viewport.
+        autoResize: true,
         data: {
           nodes: payload.nodes.map((n) => ({
             id: n.nodeKey,
             data: { ...n },
-            style: {
-              size: n.isMonitoredOrg ? 46 : n.nodeType === "actor_alias" ? 42 : 30,
-              fill: `${nodeColor[n.nodeType] ?? colors.informational}33`,
-              stroke: nodeColor[n.nodeType] ?? colors.informational,
-              lineWidth: n.isMonitoredOrg || n.nodeType === "actor_alias" ? 2 : 1.4,
-              cursor: "pointer",
-              labelText: n.displayName,
-              labelFill: colors.text1,
-              labelFontSize: 11,
-              labelFontFamily: fonts.mono,
-              labelPlacement: "bottom",
-              labelOffsetY: 6,
-            },
+            style: nodeStyle(n, phaseOf(n.firstSeen, cutoff)),
           })),
           edges: payload.edges.map((e) => ({
             id: e.graphEdgeKey,
             source: e.sourceKey,
             target: e.targetKey,
             data: { ...e },
-            style: {
-              stroke:
-                e.edgeType === "ALLEGEDLY_AFFECTS"
-                  ? severityColor.critical
-                  : e.edgeType === "MADE_CLAIM"
-                    ? colors.ion
-                    : "rgba(122,164,255,0.4)",
-              lineWidth:
-                e.edgeType === "ALLEGEDLY_AFFECTS" || e.edgeType === "MADE_CLAIM" ? 1.8 : 1.2,
-              lineDash:
-                e.edgeType === "ALLEGEDLY_AFFECTS" || e.edgeType === "MADE_CLAIM" ? 0 : [3, 4],
-              cursor: "pointer",
-              labelText: e.edgeType,
-              labelFill: colors.text3,
-              labelFontSize: 8.5,
-              labelFontFamily: fonts.mono,
-              endArrow: true,
-            },
+            style: edgeStyle(e, phaseOf(e.firstSeen, cutoff), layout),
           })),
         },
-        layout: { type: "force", preventOverlap: true, nodeSize: 60, linkDistance: 150 },
+        layout:
+          layout === "spine"
+            ? // Wide rank separation on purpose: the panel is far wider than it
+              // is tall, and a tight dagre graph fits to height and leaves half
+              // the canvas empty.
+              { type: "antv-dagre", rankdir: "LR", nodesep: 36, ranksep: 220 }
+            : { type: "force", preventOverlap: true, nodeSize: 60, linkDistance: 150 },
         behaviors: ["zoom-canvas", "drag-canvas", "drag-element", "click-select", "hover-activate"],
       });
 
@@ -113,13 +217,18 @@ export function KnowledgeGraph({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       instance.on("node:click", (evt: any) => {
         const id = evt?.target?.id;
-        onSelectNode?.(payload.nodes.find((n) => n.nodeKey === id) ?? null);
+        const node = payload.nodes.find((n) => n.nodeKey === id) ?? null;
+        // An undiscovered ghost is not a thing the analyst knows about yet.
+        if (node && phaseOf(node.firstSeen, cutoffRef.current) === "unknown") return;
+        onSelectNode?.(node);
         onSelectEdge?.(null);
       });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       instance.on("edge:click", (evt: any) => {
         const id = evt?.target?.id;
-        onSelectEdge?.(payload.edges.find((e) => e.graphEdgeKey === id) ?? null);
+        const edge = payload.edges.find((e) => e.graphEdgeKey === id) ?? null;
+        if (edge && phaseOf(edge.firstSeen, cutoffRef.current) === "unknown") return;
+        onSelectEdge?.(edge);
         onSelectNode?.(null);
       });
       // Only clear on a genuine empty-canvas click. Element clicks do not reach
@@ -160,9 +269,53 @@ export function KnowledgeGraph({
       container.replaceChildren();
       graphRef.current = null;
     };
-  }, [payload, onSelectNode, onSelectEdge]);
+  }, [payload, layout, onSelectNode, onSelectEdge]);
 
-  return <Box ref={containerRef} sx={{ width: "100%", height, minWidth: 0 }} />;
+  // Restyle in place as the cutoff moves. `draw()` repaints without re-running
+  // the layout, so coordinates stay put and the replay reads as a sequence.
+  useEffect(() => {
+    const instance = graphRef.current;
+    if (!instance) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        instance.updateNodeData(
+          payload.nodes.map((n) => ({
+            id: n.nodeKey,
+            style: nodeStyle(n, phaseOf(n.firstSeen, discoveredBefore)),
+          })),
+        );
+        instance.updateEdgeData(
+          payload.edges.map((e) => ({
+            id: e.graphEdgeKey,
+            style: edgeStyle(e, phaseOf(e.firstSeen, discoveredBefore), layout),
+          })),
+        );
+        if (!cancelled) await instance.draw();
+      } catch {
+        // A draw racing an unmount is not worth surfacing to the analyst.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [discoveredBefore, layout, payload]);
+
+  return (
+    <Box
+      ref={containerRef}
+      sx={{
+        width: "100%",
+        height,
+        minWidth: 0,
+        // A percentage height only resolves if this element is also allowed to
+        // consume the flex line it sits on.
+        ...(height === "100%" ? { flex: 1, minHeight: 0 } : null),
+      }}
+    />
+  );
 }
 
 export default KnowledgeGraph;

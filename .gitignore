@@ -1,6 +1,16 @@
 /output/
 /logs/
 .env
+.env.local
+
+# Scratch files people paste credentials into while setting the project up.
+# Anything matching these has held a live Snowflake token at some point.
+don't_read_it.txt
+temp.txt
+*.env.txt
+
+# Snowflake Node driver connection log — records account, user and role.
+snowflake.log
 .venv/
 __pycache__/
 *.pyc

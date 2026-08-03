@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { Box, Paper, Stack, Typography } from "@mui/material";
+import { Box, Paper, Stack, Typography, type SxProps, type Theme } from "@mui/material";
 import { colors, fonts, layout } from "@/theme/tokens";
 
 export interface PanelProps {
@@ -11,9 +11,11 @@ export interface PanelProps {
   meta?: ReactNode;
   children: ReactNode;
   padded?: boolean;
+  /** Escape hatch for callers that need the panel to flex, e.g. a full-height graph. */
+  sx?: SxProps<Theme>;
 }
 
-export function Panel({ title, layerTag, meta, children, padded = true }: PanelProps) {
+export function Panel({ title, layerTag, meta, children, padded = true, sx }: PanelProps) {
   const pad = `${layout.panelPad}px`;
   return (
     <Paper
@@ -32,6 +34,7 @@ export function Panel({ title, layerTag, meta, children, padded = true }: PanelP
           background: `linear-gradient(90deg, transparent, ${colors.edgeHi}, transparent)`,
           pointerEvents: "none",
         },
+        ...sx,
       }}
     >
       {(title || meta) && (

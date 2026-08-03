@@ -6,6 +6,11 @@ import { Box, Button, Divider, Stack, Typography, alpha } from "@mui/material";
 import { ArrowLeft } from "lucide-react";
 import { scopeOrgId, useAuth } from "@/contexts/AuthContext";
 import { Panel } from "@/components/ui/Panel";
+import {
+  CanvasSkeleton,
+  TableSkeleton,
+  TextBlockSkeleton,
+} from "@/components/ui/Skeletons";
 import { SeverityChip } from "@/components/ui/SeverityChip";
 import { ScoreRadar } from "@/components/ui/ScoreRadar";
 import { EvidenceQuote } from "@/components/ui/EvidenceQuote";
@@ -95,10 +100,19 @@ export default function IncidentDetailPage({
           title="Loading incident"
           subtitle="Retrieving cached insight and grounded evidence from Snowflake."
         />
-        <Panel>
-          <Typography sx={{ py: 4, textAlign: "center", color: colors.text2 }}>
-            Loading live incident data…
-          </Typography>
+        <Panel title="AI incident narrative">
+          <TextBlockSkeleton lines={5} />
+        </Panel>
+        <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", lg: "1fr 1fr" } }}>
+          <Panel title="Score decomposition" meta="8 COMPONENTS">
+            <CanvasSkeleton height={230} />
+          </Panel>
+          <Panel title="Grounded claim · verbatim evidence">
+            <TextBlockSkeleton lines={4} />
+          </Panel>
+        </Box>
+        <Panel title="Provenance">
+          <TableSkeleton rows={4} columns={4} />
         </Panel>
       </Stack>
     );

@@ -3,6 +3,28 @@ import type { GraphEdge, GraphNode, GraphPayload } from "@/types";
 const seen = { first: "2026-08-01T12:00:00Z", last: "2026-08-01T12:00:00Z" };
 
 /**
+ * Discovery timeline for the demo component.
+ *
+ * A real incident is not found all at once: the actor surfaces first, the claim
+ * follows, and the mirrors appear over the following weeks. These stamps drive
+ * the Discovery Scrubber on /graph so the replay has a sequence to walk.
+ *
+ * Live Snowflake data carries whatever FIRST_SEEN the crawler recorded — on a
+ * freshly seeded warehouse that is a single instant, and the scrubber says so
+ * rather than pretending otherwise.
+ */
+const T = {
+  actorSurfaces: "2026-06-14T10:20:00Z",
+  samplePosted: "2026-06-14T13:05:00Z",
+  claimPosted: "2026-06-22T08:41:00Z",
+  domainNamed: "2026-07-03T19:12:00Z",
+  ownershipTied: "2026-07-18T06:58:00Z",
+  mirrorDarkbay: "2026-07-27T22:30:00Z",
+  mirrorGhost: "2026-08-01T09:14:00Z",
+  contactAndProduct: "2026-08-01T12:00:00Z",
+} as const;
+
+/**
  * The promoted component for the Palo Alto incident.
  * SQL: DIM_GRAPH_NODE + FCT_GRAPH_EDGE, scoped to one target_confirmed page.
  *
@@ -165,6 +187,10 @@ const edge = (
   targetType: GraphEdge["targetType"],
   evidence: string,
   start: number | null,
+  /** When this relationship was first observed — drives the discovery replay. */
+  firstSeen: string,
+  /** Corroboration. Spine ribbon thickness reads directly off this. */
+  sightingCount = 1,
   level: GraphEdge["groundingLevel"] = "exact",
 ): GraphEdge => ({
   graphEdgeKey: id,
@@ -180,14 +206,25 @@ const edge = (
   groundingLevel: level,
   evidenceStart: start,
   evidenceEnd: start === null ? null : start + evidence.length,
-  mentionCount: 1,
-  sightingCount: 1,
-  docCount: 1,
-  firstSeen: seen.first,
+  mentionCount: sightingCount,
+  sightingCount,
+  docCount: Math.max(1, sightingCount - 1),
+  firstSeen,
   lastSeen: seen.last,
 });
 
 const panwEdges: GraphEdge[] = [
+  edge(
+    "e-offers-asset",
+    "n-actor-nightfox",
+    "n-asset-vpncreds",
+    "OFFERS_FOR_SALE",
+    "actor_alias",
+    "data_asset",
+    "vpn-creds.csv sample attached",
+    8501,
+    T.samplePosted,
+  ),
   edge(
     "e-made-claim",
     "n-actor-nightfox",
@@ -197,6 +234,8 @@ const panwEdges: GraphEdge[] = [
     "claim",
     "NightFox is offering the following archive",
     8290,
+    T.claimPosted,
+    3,
   ),
   edge(
     "e-affects-domain",
@@ -207,6 +246,8 @@ const panwEdges: GraphEdge[] = [
     "domain",
     "credential set for paloaltonetworks.com including VPN logins",
     8431,
+    T.domainNamed,
+    3,
   ),
   edge(
     "e-affects-org",
@@ -217,6 +258,8 @@ const panwEdges: GraphEdge[] = [
     "organization",
     "employee credential set for paloaltonetworks.com",
     8425,
+    T.ownershipTied,
+    4,
   ),
   edge(
     "e-listed-darkbay",
@@ -227,6 +270,8 @@ const panwEdges: GraphEdge[] = [
     "marketplace",
     "cross-posted on darkbay-market",
     9104,
+    T.mirrorDarkbay,
+    2,
   ),
   edge(
     "e-listed-ghost",
@@ -237,6 +282,8 @@ const panwEdges: GraphEdge[] = [
     "marketplace",
     "also available via ghostforum-7x",
     9160,
+    T.mirrorGhost,
+    2,
   ),
   edge(
     "e-contact",
@@ -247,17 +294,9 @@ const panwEdges: GraphEdge[] = [
     "contact_channel",
     "Contact via the channel below for escrow",
     8552,
+    T.contactAndProduct,
+    1,
     "normalized",
-  ),
-  edge(
-    "e-offers-asset",
-    "n-actor-nightfox",
-    "n-asset-vpncreds",
-    "OFFERS_FOR_SALE",
-    "actor_alias",
-    "data_asset",
-    "vpn-creds.csv sample attached",
-    8501,
   ),
   edge(
     "e-mentions-product",
@@ -268,6 +307,7 @@ const panwEdges: GraphEdge[] = [
     "product",
     "GlobalProtect sessions included",
     8610,
+    T.contactAndProduct,
   ),
 ];
 

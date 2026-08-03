@@ -211,6 +211,23 @@ export const theme = createTheme({
       },
     },
     MuiDivider: { styleOverrides: { root: { borderColor: colors.edge } } },
+    // MUI's default skeleton is a light grey built for a white page and glows
+    // like a light bulb on this ground. Themed once here so every skeleton in
+    // the app reads as "a panel that has not filled in yet".
+    MuiSkeleton: {
+      defaultProps: { animation: "wave" },
+      styleOverrides: {
+        root: {
+          backgroundColor: "rgba(104,146,224,0.09)",
+          "&::after": {
+            background: `linear-gradient(90deg, transparent, ${alpha(colors.ion, 0.10)}, transparent)`,
+          },
+          "@media (prefers-reduced-motion: reduce)": {
+            "&::after": { animation: "none" },
+          },
+        },
+      },
+    },
     // Keyboard focus must always be visible.
     MuiButtonBase: {
       styleOverrides: {

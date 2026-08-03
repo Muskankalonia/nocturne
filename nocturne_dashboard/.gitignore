@@ -10,3 +10,8 @@ next-env.d.ts
 
 # Snapshot exports pulled from Snowflake — may contain page titles and URLs.
 /public/snapshots/
+
+# The Snowflake Node driver writes this on every connection. It records the
+# account identifier, the signed-in user, the role and the warehouse in
+# cleartext, so it must never be committed.
+snowflake.log

@@ -8,10 +8,15 @@ import type { ColDef, GridReadyEvent, SelectionChangedEvent } from "ag-grid-comm
 import "ag-grid-community/styles/ag-grid.css";
 import "ag-grid-community/styles/ag-theme-quartz.css";
 import { colors, fonts, shadows } from "@/theme/tokens";
+import { CheckboxFilter } from "@/components/ui/CheckboxFilter";
 
 export const defaultColDef: ColDef = {
   sortable: true,
-  filter: true,
+  // Every column filters by ticking values rather than typing a substring.
+  // AG Grid's own set filter is Enterprise; CheckboxFilter is the Community
+  // equivalent built on the custom-filter API. A column can still opt back in
+  // to free text with `filter: "agTextColumnFilter"`.
+  filter: CheckboxFilter,
   resizable: true,
   flex: 1,
   minWidth: 110,

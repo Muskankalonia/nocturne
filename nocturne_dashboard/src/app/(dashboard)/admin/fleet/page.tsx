@@ -157,10 +157,12 @@ export default function FleetCommandPage() {
 
         <Panel title="Exposure by data class" meta="TENANT × TYPE">
           <Box sx={{ overflowX: "auto" }}>
-            <Box component="table" sx={{ borderCollapse: "collapse", minWidth: 520 }}>
+            {/* `width: 100%` matters: without it the table sizes to its content
+                and leaves the right half of the panel empty. */}
+            <Box component="table" sx={{ width: "100%", borderCollapse: "collapse", minWidth: 520 }}>
               <Box component="thead">
                 <Box component="tr">
-                  <Box component="th" sx={{ ...thSx, minWidth: 130 }}>
+                  <Box component="th" sx={{ ...thSx, width: "22%", minWidth: 130 }}>
                     Tenant
                   </Box>
                   {LEAK_TYPES.map((t) => (

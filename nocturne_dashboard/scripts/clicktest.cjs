@@ -17,11 +17,35 @@ const log = (name, ok, detail = "") =>
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const bodyText = (page) => page.evaluate(() => document.body.innerText);
 
+/**
+ * Wait for an AG Grid to actually have rows.
+ *
+ * Fixed sleeps were fine when these pages rendered from mocks. /leaks now waits
+ * on a live Snowflake round trip that takes ~9s at fleet scope on a cold
+ * warehouse, so a 1.6s sleep asserted against an empty grid and reported a
+ * working feature as broken.
+ */
+const waitForGrid = (page, timeout = 30000) =>
+  page
+    .waitForFunction(
+      () => document.querySelectorAll(".ag-center-cols-container .ag-row").length > 0,
+      { timeout, polling: 250 },
+    )
+    .then(() => true)
+    .catch(() => false);
+
 async function login(page, user) {
+  // Sessions are a signed HttpOnly cookie, so clearing localStorage does not
+  // sign anyone out — /login would just bounce an authenticated user straight
+  // back to the dashboard and leave no form to fill in.
   await page.goto(`${BASE}/login`, { waitUntil: "networkidle2" });
-  await page.evaluate(() => window.localStorage.clear());
+  await page.evaluate(() =>
+    fetch("/api/auth/session", { method: "DELETE", credentials: "same-origin" }).catch(() => {}),
+  );
   await page.goto(`${BASE}/login`, { waitUntil: "networkidle2" });
+  await page.waitForSelector('button[type="submit"]', { timeout: 15000 });
   const inputs = await page.$$("input");
+  if (inputs.length < 2) throw new Error("login form did not render — still authenticated?");
   await inputs[0].click({ clickCount: 3 });
   await inputs[0].type(user);
   await inputs[1].click({ clickCount: 3 });
@@ -97,7 +121,7 @@ async function clickGraphElement(page) {
 
     /* 3 — grid checkboxes + quick filter */
     await page.goto(`${BASE}/leaks`, { waitUntil: "networkidle2" });
-    await sleep(1600);
+    await waitForGrid(page);
     const boxes = await page.$$(".ag-selection-checkbox, .ag-header-select-all");
     log("grid has selection checkboxes", boxes.length > 0, `${boxes.length} found`);
 
@@ -106,20 +130,28 @@ async function clickGraphElement(page) {
       log("grid quick filter narrows rows", false, "no filter input");
     } else {
       const rowsBefore = (await page.$$(".ag-center-cols-container .ag-row")).length;
+      // Take the search term from the data on screen. Hard-coding "NightFox"
+      // only worked against the mocks — the live seed's actor is different, so
+      // the filter correctly matched nothing and the test blamed the feature.
+      const term = await page.evaluate(() => {
+        const row = document.querySelector(".ag-center-cols-container .ag-row");
+        const words = (row?.innerText || "").split(/[\s,|]+/).filter((w) => /^[A-Za-z]{6,}$/.test(w));
+        return words[words.length - 1] || "";
+      });
       await filterBox.click();
-      await filterBox.type("NightFox");
+      await filterBox.type(term || "zzzz");
       await sleep(900);
       const rowsAfter = (await page.$$(".ag-center-cols-container .ag-row")).length;
       log(
         "grid quick filter narrows rows",
         rowsAfter > 0 && rowsAfter < rowsBefore,
-        `${rowsBefore} -> ${rowsAfter}`,
+        `"${term}": ${rowsBefore} -> ${rowsAfter}`,
       );
     }
 
     /* 4 — row selection via checkbox */
     await page.goto(`${BASE}/leaks`, { waitUntil: "networkidle2" });
-    await sleep(1600);
+    await waitForGrid(page);
     // The checkbox column is pinned left, so it lives in the pinned container.
     const cb = await page.$(".ag-pinned-left-cols-container .ag-selection-checkbox");
     if (cb) {
@@ -132,7 +164,7 @@ async function clickGraphElement(page) {
 
     /* 5 — needs-review row opens an explanation */
     await page.goto(`${BASE}/leaks?status=ambiguous`, { waitUntil: "networkidle2" });
-    await sleep(1700);
+    await waitForGrid(page);
     const reviewRows = await page.$$(".ag-center-cols-container .ag-row");
     if (reviewRows.length) {
       const from = page.url();
@@ -149,11 +181,20 @@ async function clickGraphElement(page) {
 
     /* 6 — confirmed row opens scored detail */
     await page.goto(`${BASE}/leaks?status=confirmed`, { waitUntil: "networkidle2" });
-    await sleep(1700);
+    await waitForGrid(page);
     const rows2 = await page.$$(".ag-center-cols-container .ag-row");
     if (rows2.length) {
       await rows2[0].click();
-      await sleep(1500);
+      // Wait for the destination content, not for the absence of a loading
+      // string: at the instant of the click the old grid is still mounted and
+      // "not loading" is trivially true, so that check passed immediately and
+      // then asserted against a page that had not rendered yet.
+      await page
+        .waitForFunction(() => /score decomposition/i.test(document.body.innerText), {
+          timeout: 30000,
+          polling: 250,
+        })
+        .catch(() => {});
       const t = await bodyText(page);
       log("confirmed row opens scored detail", /score decomposition/i.test(t));
       log("detail shows verbatim evidence", /verbatim evidence|evidence_start/i.test(t));
@@ -161,7 +202,7 @@ async function clickGraphElement(page) {
 
     /* 7 — global search */
     await page.goto(`${BASE}/leaks`, { waitUntil: "networkidle2" });
-    await sleep(1100);
+    await waitForGrid(page);
     const search = await page.$('input[aria-label="Search"]');
     if (!search) {
       log("global search returns results", false, "no search input");
@@ -223,8 +264,20 @@ async function clickGraphElement(page) {
     /* 13 — sign out */
     // The collapsed rail shows only an icon, so match the accessible name.
     const signOut = await page.$('[aria-label="Sign out"]');
-    if (signOut) await signOut.click();
-    await sleep(1400);
+    // Dispatch on the element rather than clicking its coordinates: in dev the
+    // Next.js indicator portal sits over the bottom-left of the collapsed rail
+    // and swallows the pointer event. Real users hit the same overlay, but it
+    // does not exist in a production build.
+    if (signOut) await signOut.evaluate((el) => el.click());
+    // Sign-out now round-trips to DELETE /api/auth/session before the shell can
+    // redirect, so wait for the destination instead of guessing at a delay.
+    await page
+      .waitForFunction(() => location.pathname.startsWith("/login"), {
+        timeout: 15000,
+        polling: 200,
+      })
+      .catch(() => {});
+    await sleep(400);
     log("sign out returns to login", page.url().includes("/login"));
   } catch (err) {
     log("harness", false, err.message);

@@ -1,24 +1,36 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import { Box, CircularProgress, Stack, Typography } from "@mui/material";
+import {
+  Box,
+  Stack,
+  ToggleButton,
+  ToggleButtonGroup,
+  Typography,
+} from "@mui/material";
 import { scopeOrgId, useAuth } from "@/contexts/AuthContext";
 import { graphForOrg, incidentGraph } from "@/mocks/graph";
 import { Panel } from "@/components/ui/Panel";
 import { EvidenceQuote } from "@/components/ui/EvidenceQuote";
 import { DataGapNote, PageHeader, Tag } from "@/components/ui/Primitives";
-import { colors, fonts, severityColor } from "@/theme/tokens";
+import { DiscoveryScrubber } from "@/components/graph/DiscoveryScrubber";
+import { CanvasSkeleton } from "@/components/ui/Skeletons";
+import type { GraphLayout } from "@/components/graph/KnowledgeGraph";
+import {
+  revealedEdgeCount,
+  timelineStops,
+  withDerivedNodeDiscovery,
+} from "@/lib/graph-timeline";
+import { colors, fonts, layout as layoutTokens, severityColor } from "@/theme/tokens";
 import type { GraphEdge, GraphNode } from "@/types";
 
 // G6 reads `window` at module scope, so it cannot be server-rendered.
 const KnowledgeGraph = dynamic(() => import("@/components/graph/KnowledgeGraph"), {
   ssr: false,
-  loading: () => (
-    <Stack alignItems="center" justifyContent="center" sx={{ height: 520 }}>
-      <CircularProgress size={24} sx={{ color: colors.ion }} />
-    </Stack>
-  ),
+  // G6 and its layout engine are a large chunk. Hold the canvas's footprint so
+  // the panel does not resize when the graph mounts.
+  loading: () => <CanvasSkeleton height="100%" />,
 });
 
 const typeColor: Record<string, string> = {
@@ -37,14 +49,39 @@ export default function GraphPage() {
   const [node, setNode] = useState<GraphNode | null>(null);
   const [edge, setEdge] = useState<GraphEdge | null>(null);
 
+  const [layout, setLayout] = useState<GraphLayout>("spine");
+  const [stopIndex, setStopIndex] = useState(0);
+
   const payload = useMemo(() => {
-    if (!session) return incidentGraph;
-    const orgId = scopeOrgId(session.scope);
-    return orgId ? graphForOrg(orgId) : incidentGraph;
+    const base = !session
+      ? incidentGraph
+      : (() => {
+          const orgId = scopeOrgId(session.scope);
+          return orgId ? graphForOrg(orgId) : incidentGraph;
+        })();
+    return withDerivedNodeDiscovery(base);
   }, [session]);
+
+  const stops = useMemo(() => timelineStops(payload), [payload]);
+
+  // Land on the fully-assembled graph. Switching tenant changes the stop count,
+  // so re-pin to the end rather than leaving the handle at a stale index.
+  useEffect(() => {
+    setStopIndex(Math.max(stops.length - 1, 0));
+  }, [stops]);
+
+  const cutoff = stops.length > 1 ? (stops[Math.min(stopIndex, stops.length - 1)] ?? null) : null;
+  const revealed = revealedEdgeCount(payload, cutoff);
 
   const handleNode = useCallback((n: GraphNode | null) => setNode(n), []);
   const handleEdge = useCallback((e: GraphEdge | null) => setEdge(e), []);
+
+  // Clear an inspector selection that the replay has rewound past.
+  useEffect(() => {
+    if (!cutoff) return;
+    if (edge && edge.firstSeen > cutoff) setEdge(null);
+    if (node && node.firstSeen > cutoff) setNode(null);
+  }, [cutoff, edge, node]);
 
   const typeCounts = useMemo(() => {
     const map = new Map<string, number>();
@@ -53,19 +90,25 @@ export default function GraphPage() {
   }, [payload]);
 
   return (
-    <Stack gap={2}>
+    // The shell contributes a 52px header and 16px of vertical main padding
+    // top and bottom. Claim what is left so the panel reaches the fold instead
+    // of stopping at a fixed 520px and leaving dead space beneath it.
+    <Stack gap={2} sx={{ height: `calc(100dvh - ${layoutTokens.headerHeight + (layoutTokens.gutter - 4) * 2}px)` }}>
       <PageHeader
         title="Knowledge Graph"
-        subtitle="Actor → claim → organization. Click any edge to see the sentence that created it."
+        subtitle="Actor → claim → organization, ranked left to right. Click any edge to see the sentence that created it, or replay the timeline to watch the incident assemble."
       />
 
-      <Panel padded={false}>
+      <Panel
+        padded={false}
+        sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}
+      >
         <Stack
           direction="row"
           gap={1}
           flexWrap="wrap"
           alignItems="center"
-          sx={{ px: 2, py: 1.5, borderBottom: `1px solid ${colors.edge}` }}
+          sx={{ px: 2, py: 1.5, borderBottom: `1px solid ${colors.edge}`, flexShrink: 0 }}
         >
           {typeCounts.map(([type, count]) => (
             <Stack key={type} direction="row" alignItems="center" gap={0.7}>
@@ -82,23 +125,75 @@ export default function GraphPage() {
               </Typography>
             </Stack>
           ))}
-          <Typography
-            sx={{ ml: "auto", fontFamily: fonts.mono, fontSize: 10.5, color: colors.text3 }}
-          >
-            {payload.nodes.length} NODES · {payload.edges.length} EDGES
-          </Typography>
+          <Stack direction="row" gap={1.5} alignItems="center" sx={{ ml: "auto" }}>
+            <ToggleButtonGroup
+              size="small"
+              exclusive
+              value={layout}
+              onChange={(_, next: GraphLayout | null) => next && setLayout(next)}
+              aria-label="Graph layout"
+              sx={{
+                "& .MuiToggleButton-root": {
+                  fontFamily: fonts.mono,
+                  fontSize: 9.5,
+                  letterSpacing: "0.1em",
+                  py: 0.4,
+                  px: 1.2,
+                  color: colors.text3,
+                  borderColor: colors.edge,
+                  "&.Mui-selected": {
+                    color: colors.ionBright,
+                    backgroundColor: "rgba(76,141,255,0.14)",
+                    "&:hover": { backgroundColor: "rgba(76,141,255,0.20)" },
+                  },
+                },
+              }}
+            >
+              <ToggleButton value="spine">SPINE</ToggleButton>
+              <ToggleButton value="force">FORCE</ToggleButton>
+            </ToggleButtonGroup>
+            <Typography sx={{ fontFamily: fonts.mono, fontSize: 10.5, color: colors.text3 }}>
+              {payload.nodes.length} NODES · {payload.edges.length} EDGES
+            </Typography>
+          </Stack>
         </Stack>
 
-        <Stack direction={{ xs: "column", lg: "row" }}>
-          <Box sx={{ flex: 1, minWidth: 0, borderRight: { lg: `1px solid ${colors.edge}` } }}>
+        <Stack direction={{ xs: "column", lg: "row" }} sx={{ flex: 1, minHeight: 0 }}>
+          <Box
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              minHeight: 0,
+              display: "flex",
+              flexDirection: "column",
+              borderRight: { lg: `1px solid ${colors.edge}` },
+            }}
+          >
             <KnowledgeGraph
               payload={payload}
               onSelectNode={handleNode}
               onSelectEdge={handleEdge}
+              layout={layout}
+              discoveredBefore={cutoff}
+              height="100%"
+            />
+            <DiscoveryScrubber
+              timestamps={stops}
+              stopIndex={stopIndex}
+              onStopIndexChange={setStopIndex}
+              revealedLabel={`${revealed} of ${payload.edges.length} relationships`}
             />
           </Box>
 
-          <Box sx={{ width: { xs: "100%", lg: 300 }, flexShrink: 0, p: 2 }}>
+          <Box
+            sx={{
+              width: { xs: "100%", lg: 320 },
+              flexShrink: 0,
+              p: 2,
+              minHeight: 0,
+              overflowY: "auto",
+            }}
+          >
             {!node && !edge && (
               <Stack gap={1.5}>
                 <Typography variant="overline">Inspector</Typography>
@@ -116,6 +211,8 @@ export default function GraphPage() {
                       "Drag a node to rearrange",
                       "Click a node → resolution detail",
                       "Click an edge → evidence quote",
+                      "Spine ribbon thickness → corroboration",
+                      "Play the timeline → discovery order",
                     ].map((t) => (
                       <Typography key={t} sx={{ fontSize: 11.5, color: colors.text2 }}>
                         · {t}
