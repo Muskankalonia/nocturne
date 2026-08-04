@@ -1,13 +1,25 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Box, Button, Chip, Divider, Stack, Switch, TextField, Typography, alpha } from "@mui/material";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Box,
+  Button,
+  Chip,
+  CircularProgress,
+  Divider,
+  Stack,
+  Switch,
+  TextField,
+  Typography,
+  alpha,
+} from "@mui/material";
 import { Plus } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { Panel } from "@/components/ui/Panel";
 import { PageHeader, Tag } from "@/components/ui/Primitives";
 import { SeverityChip } from "@/components/ui/SeverityChip";
-import { colors, fonts, severityColor } from "@/theme/tokens";
+import { colors, fonts, layout, severityColor } from "@/theme/tokens";
+import type { MonitoredOrganizationRecord } from "@/types/dashboard";
 
 /**
  * The most consequential page in the product, and it looks like a boring form.
@@ -17,22 +29,117 @@ import { colors, fonts, severityColor } from "@/theme/tokens";
  */
 export default function SettingsPage() {
   const { activeOrg, isFleetScope } = useAuth();
+  const orgId = activeOrg?.orgId ?? null;
 
-  const [aliases, setAliases] = useState<string[]>(activeOrg?.aliases ?? []);
-  const [domains, setDomains] = useState<string[]>(activeOrg?.domains ?? []);
-  const [products, setProducts] = useState<string[]>(activeOrg?.products ?? []);
-  const [enabled, setEnabled] = useState(activeOrg?.enabled ?? true);
+  // `saved` is the row as it currently exists in Snowflake. The four editable
+  // pieces of state below are the draft; `dirty` is the difference between them.
+  const [saved, setSaved] = useState<MonitoredOrganizationRecord | null>(null);
+  const [aliases, setAliases] = useState<string[]>([]);
+  const [domains, setDomains] = useState<string[]>([]);
+  const [products, setProducts] = useState<string[]>([]);
+  const [enabled, setEnabled] = useState(true);
   const [draft, setDraft] = useState({ alias: "", domain: "", product: "" });
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const applyRecord = useCallback((record: MonitoredOrganizationRecord) => {
+    setSaved(record);
+    setAliases(record.aliases);
+    setDomains(record.domains);
+    setProducts(record.products);
+    setEnabled(record.enabled);
+  }, []);
+
+  useEffect(() => {
+    if (!orgId || isFleetScope) {
+      setIsLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    setIsLoading(true);
+    setError(null);
+
+    (async () => {
+      try {
+        const response = await fetch("/api/monitored-organizations", {
+          cache: "no-store",
+          credentials: "same-origin",
+          signal: controller.signal,
+        });
+        const body = (await response.json()) as
+          | { organizations: MonitoredOrganizationRecord[] }
+          | { error?: string };
+        if (!response.ok || !("organizations" in body)) {
+          throw new Error(
+            "error" in body && body.error
+              ? body.error
+              : "Unable to load organization configuration.",
+          );
+        }
+        const record = body.organizations.find((item) => item.orgId === orgId);
+        if (!record) throw new Error("This organization is not configured for monitoring.");
+        applyRecord(record);
+      } catch (loadError) {
+        if (loadError instanceof DOMException && loadError.name === "AbortError") return;
+        setError(
+          loadError instanceof Error
+            ? loadError.message
+            : "Unable to load organization configuration.",
+        );
+      } finally {
+        if (!controller.signal.aborted) setIsLoading(false);
+      }
+    })();
+
+    return () => controller.abort();
+  }, [orgId, isFleetScope, applyRecord]);
 
   const dirty = useMemo(() => {
-    if (!activeOrg) return false;
+    if (!saved) return false;
     return (
-      aliases.join("|") !== activeOrg.aliases.join("|") ||
-      domains.join("|") !== activeOrg.domains.join("|") ||
-      products.join("|") !== activeOrg.products.join("|") ||
-      enabled !== activeOrg.enabled
+      aliases.join("|") !== saved.aliases.join("|") ||
+      domains.join("|") !== saved.domains.join("|") ||
+      products.join("|") !== saved.products.join("|") ||
+      enabled !== saved.enabled
     );
-  }, [activeOrg, aliases, domains, products, enabled]);
+  }, [saved, aliases, domains, products, enabled]);
+
+  const handleSave = useCallback(async () => {
+    if (!orgId) return;
+    setIsSaving(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await fetch(
+        `/api/monitored-organizations?orgId=${encodeURIComponent(orgId)}`,
+        {
+          method: "PUT",
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ aliases, domains, products, enabled }),
+        },
+      );
+      const body = (await response.json()) as
+        | { organization: MonitoredOrganizationRecord }
+        | { error?: string };
+      if (!response.ok || !("organization" in body)) {
+        throw new Error(
+          "error" in body && body.error ? body.error : "Save failed.",
+        );
+      }
+      // Re-seed from the stored row, so what is on screen is what Snowflake has
+      // — including any normalization the server applied.
+      applyRecord(body.organization);
+      setNotice("Saved. Ownership matching uses this from the next L1 run.");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Save failed.");
+    } finally {
+      setIsSaving(false);
+    }
+  }, [orgId, aliases, domains, products, enabled, applyRecord]);
 
   if (isFleetScope || !activeOrg) {
     return (
@@ -46,6 +153,36 @@ export default function SettingsPage() {
             You are viewing all organizations. Asset configuration is per tenant — switch to one
             using the organization selector in the header, or manage them from Organizations.
           </Typography>
+        </Panel>
+      </Stack>
+    );
+  }
+
+  // The form edits live warehouse configuration, so it stays hidden until the
+  // stored row has actually arrived — a form seeded with placeholders could be
+  // saved straight over real settings.
+  if (isLoading || !saved) {
+    return (
+      <Stack gap={2}>
+        <PageHeader
+          title="Monitored Assets"
+          subtitle="What the pipeline matches ownership against for this organization."
+        />
+        <Panel>
+          <Stack alignItems="center" gap={1.5} sx={{ py: 6 }}>
+            {isLoading ? (
+              <>
+                <CircularProgress size={22} sx={{ color: colors.ion }} />
+                <Typography sx={{ fontSize: 12.5, color: colors.text2 }}>
+                  Loading configuration from Snowflake…
+                </Typography>
+              </>
+            ) : (
+              <Typography sx={{ fontSize: 12.5, color: colors.critical }}>
+                {error ?? "Organization configuration is unavailable."}
+              </Typography>
+            )}
+          </Stack>
         </Panel>
       </Stack>
     );
@@ -69,6 +206,22 @@ export default function SettingsPage() {
         subtitle="What the pipeline matches ownership against for this organization."
       />
 
+      {(error || notice) && (
+        <Box
+          sx={{
+            border: `1px solid ${alpha(error ? colors.critical : colors.verified, 0.35)}`,
+            backgroundColor: alpha(error ? colors.critical : colors.verified, 0.06),
+            borderRadius: `${layout.radiusSm}px`,
+            px: 1.5,
+            py: 1,
+            fontSize: 11.5,
+            color: error ? colors.critical : colors.verified,
+          }}
+        >
+          {error ?? notice}
+        </Box>
+      )}
+
       <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", lg: "1.55fr 1fr" } }}>
         <Panel title="Organization identity" meta="USED FOR OWNERSHIP MATCHING">
           <Stack gap={2.4}>
@@ -84,7 +237,7 @@ export default function SettingsPage() {
                   fontSize: 13,
                 }}
               >
-                {activeOrg.canonicalName}
+                {saved.canonicalName}
               </Box>
             </Field>
 
@@ -133,23 +286,30 @@ export default function SettingsPage() {
               </Typography>
             </Stack>
 
-            <Stack direction="row" gap={1.2}>
-              <Button variant="contained" disabled={!dirty}>
-                Save Changes
+            <Stack direction="row" gap={1.2} alignItems="center">
+              <Button
+                variant="contained"
+                disabled={!dirty || isSaving}
+                onClick={() => void handleSave()}
+                startIcon={
+                  isSaving ? <CircularProgress size={13} color="inherit" /> : undefined
+                }
+              >
+                {isSaving ? "Saving…" : "Save Changes"}
               </Button>
               <Button
                 variant="outlined"
-                disabled={!dirty}
-                onClick={() => {
-                  setAliases(activeOrg.aliases);
-                  setDomains(activeOrg.domains);
-                  setProducts(activeOrg.products);
-                  setEnabled(activeOrg.enabled);
-                }}
+                disabled={!dirty || isSaving}
+                onClick={() => applyRecord(saved)}
                 sx={{ borderColor: colors.edgeHi, color: colors.text2 }}
               >
                 Cancel
               </Button>
+              {saved.updatedAt && !dirty && (
+                <Typography sx={{ fontSize: 11, color: colors.text3, fontFamily: fonts.mono }}>
+                  SAVED {saved.updatedAt.slice(0, 16).replace("T", " ")}
+                </Typography>
+              )}
             </Stack>
           </Stack>
         </Panel>

@@ -35,6 +35,8 @@ import type {
   DashboardIncidentIndicatorCount,
   DashboardPipelineCounts,
   IncidentDetailResponse,
+  MonitoredOrganizationRecord,
+  MonitoredOrganizationUpdate,
 } from "@/types/dashboard";
 
 if (typeof window !== "undefined") {
@@ -1022,3 +1024,149 @@ export class SnowflakeNocturneBackend implements NocturneBackend {
 }
 
 export const nocturneBackend: NocturneBackend = new SnowflakeNocturneBackend();
+
+/* ── monitored-organization configuration ──────────────────────────────────── */
+
+const MONITORED_ORG_COLUMNS = `
+  ORG_ID,
+  CANONICAL_NAME,
+  ALIASES,
+  DOMAINS,
+  PRODUCTS,
+  ENABLED,
+  TO_VARCHAR(CREATED_AT, 'YYYY-MM-DD"T"HH24:MI:SSTZH:TZM') AS CREATED_AT,
+  TO_VARCHAR(UPDATED_AT, 'YYYY-MM-DD"T"HH24:MI:SSTZH:TZM') AS UPDATED_AT
+`;
+
+/** Caps are defensive: these arrays are matched against every crawled page. */
+const MAX_LIST_ENTRIES = 64;
+const MAX_ENTRY_LENGTH = 120;
+const DOMAIN_PATTERN = /^(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))+$/;
+
+function mapMonitoredOrganization(row: SnowflakeRow): MonitoredOrganizationRecord {
+  return {
+    orgId: stringValue(row.ORG_ID),
+    canonicalName: stringValue(row.CANONICAL_NAME),
+    aliases: stringArray(row.ALIASES),
+    domains: stringArray(row.DOMAINS),
+    products: stringArray(row.PRODUCTS),
+    enabled: booleanValue(row.ENABLED),
+    createdAt: nullableString(row.CREATED_AT),
+    updatedAt: nullableString(row.UPDATED_AT),
+  };
+}
+
+/** Trim, drop blanks, de-duplicate case-insensitively, and bound the size. */
+function normalizeList(values: unknown, label: string): string[] {
+  if (!Array.isArray(values)) {
+    throw new ConfigValidationError(`${label} must be an array of strings.`);
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of values) {
+    if (typeof raw !== "string") {
+      throw new ConfigValidationError(`${label} must contain only strings.`);
+    }
+    const value = raw.trim();
+    if (!value) continue;
+    if (value.length > MAX_ENTRY_LENGTH) {
+      throw new ConfigValidationError(
+        `${label} entries must be ${MAX_ENTRY_LENGTH} characters or fewer.`,
+      );
+    }
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(value);
+  }
+  if (out.length > MAX_LIST_ENTRIES) {
+    throw new ConfigValidationError(
+      `${label} cannot hold more than ${MAX_LIST_ENTRIES} entries.`,
+    );
+  }
+  return out;
+}
+
+/** A bad domain silently stops matching real breaches, so reject it loudly. */
+function normalizeDomains(values: unknown): string[] {
+  return normalizeList(values, "Domains").map((domain) => {
+    const value = domain.toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+    if (!DOMAIN_PATTERN.test(value)) {
+      throw new ConfigValidationError(
+        `"${domain}" is not a valid domain. Use a bare hostname such as example.com.`,
+      );
+    }
+    return value;
+  });
+}
+
+/** Thrown for user-correctable input so routes can answer 400 instead of 500. */
+export class ConfigValidationError extends Error {}
+
+export function normalizeMonitoredOrganizationUpdate(
+  input: unknown,
+): MonitoredOrganizationUpdate {
+  if (!input || typeof input !== "object") {
+    throw new ConfigValidationError("A JSON object body is required.");
+  }
+  const body = input as Record<string, unknown>;
+  if (typeof body.enabled !== "boolean") {
+    throw new ConfigValidationError("`enabled` must be true or false.");
+  }
+  return {
+    aliases: normalizeList(body.aliases, "Aliases"),
+    domains: normalizeDomains(body.domains),
+    products: normalizeList(body.products, "Products"),
+    enabled: body.enabled,
+  };
+}
+
+export async function listMonitoredOrganizations(
+  scope: DataScope,
+): Promise<MonitoredOrganizationRecord[]> {
+  const filter = scopeFilter(scope);
+  const rows = await executeQuery(
+    `SELECT ${MONITORED_ORG_COLUMNS}
+     FROM NOCTURNE.CONFIG.MONITORED_ORGANIZATIONS${filter.clause}
+     ORDER BY ORG_ID`,
+    filter.binds,
+  );
+  return rows.map(mapMonitoredOrganization);
+}
+
+/**
+ * Writes the editable fields for one organization and returns the stored row.
+ *
+ * Arrays travel as JSON text and are parsed server-side rather than being
+ * interpolated, so an alias containing a quote can never alter the statement.
+ * Returns null when the org does not exist, which the route turns into a 404.
+ */
+export async function updateMonitoredOrganization(
+  orgId: string,
+  update: MonitoredOrganizationUpdate,
+): Promise<MonitoredOrganizationRecord | null> {
+  await executeQuery(
+    `UPDATE NOCTURNE.CONFIG.MONITORED_ORGANIZATIONS
+     SET ALIASES = CAST(PARSE_JSON(?) AS ARRAY),
+         DOMAINS = CAST(PARSE_JSON(?) AS ARRAY),
+         PRODUCTS = CAST(PARSE_JSON(?) AS ARRAY),
+         ENABLED = ?,
+         UPDATED_AT = CURRENT_TIMESTAMP()
+     WHERE ORG_ID = ?`,
+    [
+      JSON.stringify(update.aliases),
+      JSON.stringify(update.domains),
+      JSON.stringify(update.products),
+      update.enabled,
+      orgId,
+    ],
+  );
+
+  const rows = await executeQuery(
+    `SELECT ${MONITORED_ORG_COLUMNS}
+     FROM NOCTURNE.CONFIG.MONITORED_ORGANIZATIONS
+     WHERE ORG_ID = ?`,
+    [orgId],
+  );
+  return rows.length ? mapMonitoredOrganization(rows[0]!) : null;
+}

@@ -90,6 +90,31 @@ WHEN NOT MATCHED THEN
     SOURCE.ENABLED
   );
 
+-- -----------------------------------------------------------------------------
+-- Dashboard access.
+--
+-- Everything else the console touches is SELECT-only against NOCTURNE.DASHBOARD
+-- views. This one config table is the single exception: Monitored Assets in the
+-- UI writes aliases, domains, products, and the enabled flag straight back here,
+-- because this table is what L1 ownership resolution reads. Adding a domain in
+-- the UI is what flips pages from "Needs Review" to "Confirmed Breach".
+--
+-- Change this to the least-privileged role the dashboard connects with — it
+-- must match SNOWFLAKE_ROLE in the dashboard's .env.local.
+-- -----------------------------------------------------------------------------
+SET NOCTURNE_DASHBOARD_ROLE = 'ACCOUNTADMIN';
+
+GRANT USAGE ON DATABASE NOCTURNE
+  TO ROLE IDENTIFIER($NOCTURNE_DASHBOARD_ROLE);
+
+GRANT USAGE ON SCHEMA NOCTURNE.CONFIG
+  TO ROLE IDENTIFIER($NOCTURNE_DASHBOARD_ROLE);
+
+-- SELECT + UPDATE only. The console never creates or deletes monitored
+-- organizations; onboarding a tenant stays a deliberate deployment step.
+GRANT SELECT, UPDATE ON TABLE NOCTURNE.CONFIG.MONITORED_ORGANIZATIONS
+  TO ROLE IDENTIFIER($NOCTURNE_DASHBOARD_ROLE);
+
 SELECT
   ORG_ID,
   CANONICAL_NAME,

@@ -260,3 +260,33 @@ export interface CommandCenterResponse {
   lastUpdatedAt: string | null;
   fetchedAt: string;
 }
+
+/**
+ * Monitored-organization configuration, read from and written back to
+ * NOCTURNE.CONFIG.MONITORED_ORGANIZATIONS. This is the one table the console
+ * mutates: L1 ownership resolution matches against these aliases, domains and
+ * products, so editing them changes which pages become confirmed breaches.
+ */
+export interface MonitoredOrganizationRecord {
+  orgId: string;
+  canonicalName: string;
+  aliases: string[];
+  domains: string[];
+  products: string[];
+  enabled: boolean;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+/** The editable subset. `orgId` and `canonicalName` are deliberately not here. */
+export interface MonitoredOrganizationUpdate {
+  aliases: string[];
+  domains: string[];
+  products: string[];
+  enabled: boolean;
+}
+
+export interface MonitoredOrganizationsResponse {
+  organizations: MonitoredOrganizationRecord[];
+  fetchedAt: string;
+}
