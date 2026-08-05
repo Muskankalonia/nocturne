@@ -6,6 +6,7 @@ import { colors, fonts, severityColor } from "@/theme/tokens";
 import type { GraphEdge, GraphNode, GraphPayload } from "@/types";
 
 const nodeColor: Record<string, string> = {
+  claim: severityColor.high,
   organization: severityColor.critical,
   domain: colors.verified,
   actor_alias: colors.ion,
@@ -40,6 +41,13 @@ export interface KnowledgeGraphProps {
 
 type Phase = "discovered" | "arriving" | "unknown";
 
+/** Keep the force canvas readable; the inspector owns the complete text. */
+function compactNodeLabel(value: string, maxLength = 38): string {
+  const singleLine = value.replace(/\s+/g, " ").trim();
+  if (singleLine.length <= maxLength) return singleLine;
+  return `${singleLine.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
 /**
  * Where an element sits relative to the replay cutoff. `arriving` is whatever
  * appeared at exactly this stop — the thing the current step is about.
@@ -52,7 +60,13 @@ function phaseOf(firstSeen: string, cutoff: string | null | undefined): Phase {
 
 function nodeStyle(node: GraphNode, phase: Phase) {
   const base = nodeColor[node.nodeType] ?? colors.informational;
-  const size = node.isMonitoredOrg ? 46 : node.nodeType === "actor_alias" ? 42 : 30;
+  const size = node.isMonitoredOrg
+    ? 46
+    : node.nodeType === "actor_alias"
+      ? 42
+      : node.nodeType === "claim"
+        ? 36
+        : 30;
 
   if (phase === "unknown") {
     return {
@@ -78,7 +92,7 @@ function nodeStyle(node: GraphNode, phase: Phase) {
     lineDash: 0,
     opacity: 1,
     cursor: "pointer" as const,
-    labelText: node.displayName,
+    labelText: compactNodeLabel(node.displayName),
     labelFill: phase === "arriving" ? colors.text1 : colors.text2,
     labelFontSize: 11,
     labelFontFamily: fonts.mono,
