@@ -8,6 +8,7 @@ import type {
   EdgeType,
   EntityType,
   ExtractedClaimStatus,
+  GraphPayload,
   GroundingLevel,
   IncidentInsight,
   L2Route,
@@ -167,6 +168,31 @@ export interface IncidentDetailResponse {
     nodes: DashboardIncidentGraphNode[];
     edges: DashboardIncidentGraphEdge[];
   };
+  fetchedAt: string;
+}
+
+/** The two organization-scoped projections available on the graph screen. */
+export type KnowledgeGraphView = "incident" | "actors";
+
+/** Minimal incident context shown when the graph is scoped to one incident. */
+export interface KnowledgeGraphIncidentRoot {
+  incidentKey: string;
+  title: string;
+  url: string;
+  actorName: string | null;
+  impactSeverityScore: number | null;
+  impactSeverityBand: SeverityBand | null;
+  firstSeen: string;
+}
+
+/**
+ * Live graph response. Incident mode contains one promoted component; actor
+ * mode contains the organization-wide aggregate of all promoted components.
+ */
+export interface KnowledgeGraphResponse extends GraphPayload {
+  view: KnowledgeGraphView;
+  rootIncident: KnowledgeGraphIncidentRoot | null;
+  incidentCount: number;
   fetchedAt: string;
 }
 

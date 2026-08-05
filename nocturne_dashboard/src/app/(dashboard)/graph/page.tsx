@@ -2,15 +2,17 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Box,
+  Button,
   Stack,
   ToggleButton,
   ToggleButtonGroup,
   Typography,
 } from "@mui/material";
-import { scopeOrgId, useAuth } from "@/contexts/AuthContext";
-import { graphForOrg, incidentGraph } from "@/mocks/graph";
+import { ExternalLink, RefreshCw } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
 import { Panel } from "@/components/ui/Panel";
 import { EvidenceQuote } from "@/components/ui/EvidenceQuote";
 import { DataGapNote, PageHeader, Tag } from "@/components/ui/Primitives";
@@ -24,6 +26,10 @@ import {
 } from "@/lib/graph-timeline";
 import { colors, fonts, layout as layoutTokens, severityColor } from "@/theme/tokens";
 import type { GraphEdge, GraphNode } from "@/types";
+import type {
+  KnowledgeGraphResponse,
+  KnowledgeGraphView,
+} from "@/types/dashboard";
 
 // G6 reads `window` at module scope, so it cannot be server-rendered.
 const KnowledgeGraph = dynamic(() => import("@/components/graph/KnowledgeGraph"), {
@@ -34,6 +40,7 @@ const KnowledgeGraph = dynamic(() => import("@/components/graph/KnowledgeGraph")
 });
 
 const typeColor: Record<string, string> = {
+  claim: severityColor.high,
   organization: severityColor.critical,
   domain: colors.verified,
   actor_alias: colors.ion,
@@ -44,25 +51,127 @@ const typeColor: Record<string, string> = {
   location: colors.informational,
 };
 
+const configuredRefreshMs = Number(
+  process.env.NEXT_PUBLIC_DASHBOARD_REFRESH_MS ?? "300000",
+);
+const refreshIntervalMs =
+  Number.isFinite(configuredRefreshMs) && configuredRefreshMs >= 30_000
+    ? configuredRefreshMs
+    : 300_000;
+
 export default function GraphPage() {
-  const { session, isFleetScope } = useAuth();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const { session, isLoading: isAuthLoading, isFleetScope } = useAuth();
+  const view: KnowledgeGraphView = searchParams.get("view") === "actors"
+    ? "actors"
+    : "incident";
+  const requestedIncidentKey = searchParams.get("incidentKey");
+
+  const [data, setData] = useState<KnowledgeGraphResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [node, setNode] = useState<GraphNode | null>(null);
   const [edge, setEdge] = useState<GraphEdge | null>(null);
 
   const [layout, setLayout] = useState<GraphLayout>("spine");
   const [stopIndex, setStopIndex] = useState(0);
 
-  const payload = useMemo(() => {
-    const base = !session
-      ? incidentGraph
-      : (() => {
-          const orgId = scopeOrgId(session.scope);
-          return orgId ? graphForOrg(orgId) : incidentGraph;
-        })();
-    return withDerivedNodeDiscovery(base);
-  }, [session]);
+  const load = useCallback(async (signal?: AbortSignal, background = false) => {
+    if (!session || session.scope.kind !== "org") return;
+    if (background) setIsRefreshing(true);
 
-  const stops = useMemo(() => timelineStops(payload), [payload]);
+    const query = new URLSearchParams({ view });
+    if (session.user.role === "SUPER_ADMIN") {
+      query.set("orgId", session.scope.orgId);
+    }
+    if (view === "incident" && requestedIncidentKey) {
+      query.set("incidentKey", requestedIncidentKey);
+    }
+
+    try {
+      const response = await fetch(`/api/knowledge-graph?${query.toString()}`, {
+        cache: "no-store",
+        credentials: "same-origin",
+        signal,
+      });
+      const body = (await response.json()) as
+        | KnowledgeGraphResponse
+        | { error?: string };
+      if (!response.ok || !("nodes" in body) || !("edges" in body)) {
+        throw new Error(
+          "error" in body && body.error
+            ? body.error
+            : "Unable to load live knowledge-graph data.",
+        );
+      }
+      if (
+        body.scope.kind !== "org"
+        || body.scope.orgId !== session.scope.orgId
+      ) {
+        throw new Error("The graph response did not match the selected organization.");
+      }
+      setData(body);
+      setError(null);
+    } catch (loadError) {
+      if (loadError instanceof DOMException && loadError.name === "AbortError") return;
+      setError(
+        loadError instanceof Error
+          ? loadError.message
+          : "Unable to load live knowledge-graph data.",
+      );
+    } finally {
+      if (background) setIsRefreshing(false);
+    }
+  }, [requestedIncidentKey, session, view]);
+
+  useEffect(() => {
+    if (isAuthLoading) return;
+    if (!session || session.scope.kind !== "org") {
+      setData(null);
+      setIsLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setData(null);
+    setError(null);
+    setIsLoading(true);
+    void load(controller.signal).finally(() => {
+      if (!controller.signal.aborted) setIsLoading(false);
+    });
+
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") {
+        void load(controller.signal, true);
+      }
+    };
+    const interval = window.setInterval(refreshWhenVisible, refreshIntervalMs);
+    window.addEventListener("focus", refreshWhenVisible);
+
+    return () => {
+      controller.abort();
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refreshWhenVisible);
+    };
+  }, [isAuthLoading, load, session]);
+
+  useEffect(() => {
+    setLayout(view === "actors" ? "force" : "spine");
+  }, [view]);
+
+  useEffect(() => {
+    setNode(null);
+    setEdge(null);
+  }, [data]);
+
+  const payload = useMemo(
+    () => data ? withDerivedNodeDiscovery(data) : null,
+    [data],
+  );
+
+  const stops = useMemo(() => payload ? timelineStops(payload) : [], [payload]);
 
   // Land on the fully-assembled graph. Switching tenant changes the stop count,
   // so re-pin to the end rather than leaving the handle at a stale index.
@@ -71,7 +180,7 @@ export default function GraphPage() {
   }, [stops]);
 
   const cutoff = stops.length > 1 ? (stops[Math.min(stopIndex, stops.length - 1)] ?? null) : null;
-  const revealed = revealedEdgeCount(payload, cutoff);
+  const revealed = payload ? revealedEdgeCount(payload, cutoff) : 0;
 
   const handleNode = useCallback((n: GraphNode | null) => setNode(n), []);
   const handleEdge = useCallback((e: GraphEdge | null) => setEdge(e), []);
@@ -85,9 +194,85 @@ export default function GraphPage() {
 
   const typeCounts = useMemo(() => {
     const map = new Map<string, number>();
-    for (const n of payload.nodes) map.set(n.nodeType, (map.get(n.nodeType) ?? 0) + 1);
+    for (const n of payload?.nodes ?? []) {
+      map.set(n.nodeType, (map.get(n.nodeType) ?? 0) + 1);
+    }
     return [...map.entries()].sort((a, b) => b[1] - a[1]);
   }, [payload]);
+
+  const title = view === "actors" ? "Actor Network" : "Knowledge Graph";
+  const subtitle = view === "actors"
+    ? "Organization-wide actor and marketplace relationships across every promoted incident."
+    : "One promoted incident component. Click a node for resolution details or an edge for its grounded evidence.";
+  const headerRight = (
+    <Stack direction="row" gap={1} alignItems="center">
+      {data && (
+        <Typography sx={{ fontFamily: fonts.mono, fontSize: 9.5, color: colors.text3 }}>
+          LIVE SNOWFLAKE · {new Date(data.fetchedAt).toLocaleString()}
+        </Typography>
+      )}
+      <Button
+        size="small"
+        variant="outlined"
+        startIcon={<RefreshCw size={13} />}
+        disabled={!session || isFleetScope || isLoading || isRefreshing}
+        onClick={() => void load(undefined, true)}
+      >
+        {isRefreshing ? "Refreshing" : "Refresh"}
+      </Button>
+    </Stack>
+  );
+
+  if (isAuthLoading || isLoading) {
+    return (
+      <Stack gap={2} sx={{ height: `calc(100dvh - ${layoutTokens.headerHeight + (layoutTokens.gutter - 4) * 2}px)` }}>
+        <PageHeader title={title} subtitle={subtitle} right={headerRight} />
+        <Panel padded={false} sx={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+          <CanvasSkeleton height="100%" />
+        </Panel>
+      </Stack>
+    );
+  }
+
+  if (!payload || !data) {
+    return (
+      <Stack gap={2} sx={{ height: `calc(100dvh - ${layoutTokens.headerHeight + (layoutTokens.gutter - 4) * 2}px)` }}>
+        <PageHeader title={title} subtitle={subtitle} right={headerRight} />
+        <Panel sx={{ flex: 1 }}>
+          <Stack gap={1.2} alignItems="center" justifyContent="center" sx={{ height: "100%" }}>
+            <Typography sx={{ color: colors.text1, fontSize: 14 }}>
+              {isFleetScope
+                ? "Select one organization to open its isolated knowledge graph."
+                : "Knowledge graph unavailable"}
+            </Typography>
+            {!isFleetScope && (
+              <Typography sx={{ color: colors.critical, fontSize: 12 }}>
+                {error ?? "No promoted incident graph exists for this organization yet."}
+              </Typography>
+            )}
+          </Stack>
+        </Panel>
+      </Stack>
+    );
+  }
+
+  if (payload.nodes.length === 0) {
+    return (
+      <Stack gap={2} sx={{ height: `calc(100dvh - ${layoutTokens.headerHeight + (layoutTokens.gutter - 4) * 2}px)` }}>
+        <PageHeader title={title} subtitle={subtitle} right={headerRight} />
+        <Panel sx={{ flex: 1 }}>
+          <Stack gap={1.2} alignItems="center" justifyContent="center" sx={{ height: "100%" }}>
+            <Typography sx={{ color: colors.text1, fontSize: 14 }}>
+              No promoted graph relationships are available yet.
+            </Typography>
+            <Typography sx={{ color: colors.text3, fontSize: 12 }}>
+              The graph appears after L2 ownership is confirmed and its grounded component reaches L3.
+            </Typography>
+          </Stack>
+        </Panel>
+      </Stack>
+    );
+  }
 
   return (
     // The shell contributes a 52px header and 16px of vertical main padding
@@ -95,8 +280,9 @@ export default function GraphPage() {
     // of stopping at a fixed 520px and leaving dead space beneath it.
     <Stack gap={2} sx={{ height: `calc(100dvh - ${layoutTokens.headerHeight + (layoutTokens.gutter - 4) * 2}px)` }}>
       <PageHeader
-        title="Knowledge Graph"
-        subtitle="Actor → claim → organization, ranked left to right. Click any edge to see the sentence that created it, or replay the timeline to watch the incident assemble."
+        title={title}
+        subtitle={subtitle}
+        right={headerRight}
       />
 
       <Panel
@@ -125,6 +311,26 @@ export default function GraphPage() {
               </Typography>
             </Stack>
           ))}
+          {data.rootIncident && (
+            <Button
+              size="small"
+              variant="text"
+              endIcon={<ExternalLink size={12} />}
+              onClick={() => router.push(
+                `/leaks/${encodeURIComponent(data.rootIncident!.incidentKey)}`,
+              )}
+              sx={{ ml: 1, maxWidth: 360 }}
+            >
+              <Box component="span" sx={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                {data.rootIncident.title}
+              </Box>
+            </Button>
+          )}
+          {error && (
+            <Typography sx={{ fontFamily: fonts.mono, fontSize: 9.5, color: colors.medium }}>
+              Refresh failed · showing last successful result
+            </Typography>
+          )}
           <Stack direction="row" gap={1.5} alignItems="center" sx={{ ml: "auto" }}>
             <ToggleButtonGroup
               size="small"
@@ -153,6 +359,7 @@ export default function GraphPage() {
               <ToggleButton value="force">FORCE</ToggleButton>
             </ToggleButtonGroup>
             <Typography sx={{ fontFamily: fonts.mono, fontSize: 10.5, color: colors.text3 }}>
+              {data.incidentCount} {data.incidentCount === 1 ? "INCIDENT" : "INCIDENTS"} ·{" "}
               {payload.nodes.length} NODES · {payload.edges.length} EDGES
             </Typography>
           </Stack>
@@ -247,8 +454,12 @@ export default function GraphPage() {
                 </Box>
 
                 <Stack gap={0.8}>
+                  <Kv k="Grounding" v={edge.groundingLevel} color={colors.verified} />
+                  <Kv k="Mentions" v={String(edge.mentionCount)} />
                   <Kv k="Sightings" v={String(edge.sightingCount)} />
                   <Kv k="Independent" v={String(edge.docCount)} />
+                  <Kv k="First seen" v={new Date(edge.firstSeen).toLocaleString()} />
+                  <Kv k="Last seen" v={new Date(edge.lastSeen).toLocaleString()} />
                 </Stack>
               </Stack>
             )}
@@ -257,12 +468,34 @@ export default function GraphPage() {
               <Stack gap={1.6}>
                 <Typography variant="overline">Selected node</Typography>
                 <Box>
-                  <Typography sx={{ fontSize: 15, fontWeight: 600 }}>{node.displayName}</Typography>
+                  <Typography sx={{ fontSize: 15, fontWeight: 600 }}>
+                    {node.nodeType === "claim" ? "Grounded leak claim" : node.displayName}
+                  </Typography>
                   <Stack direction="row" gap={0.6} sx={{ mt: 0.8 }} flexWrap="wrap">
                     <Tag tone={node.isMonitoredOrg ? "critical" : "neutral"}>{node.nodeType}</Tag>
                     {node.isMonitoredOrg && <Tag tone="critical">monitored</Tag>}
                   </Stack>
                 </Box>
+
+                {node.description
+                  && (node.nodeType === "claim" || node.description !== node.displayName) && (
+                    <Box>
+                      <Typography variant="overline" sx={{ display: "block", mb: 0.8 }}>
+                        Description
+                      </Typography>
+                      <Typography
+                        sx={{
+                          fontSize: 12,
+                          color: colors.text2,
+                          lineHeight: 1.7,
+                          whiteSpace: "pre-wrap",
+                          overflowWrap: "anywhere",
+                        }}
+                      >
+                        {node.description}
+                      </Typography>
+                    </Box>
+                  )}
 
                 <Stack gap={0.8}>
                   {node.entityMatchMethod && (
@@ -276,8 +509,11 @@ export default function GraphPage() {
                     <Kv k="Confidence" v={String(node.entityMatchConfidence)} />
                   )}
                   <Kv k="Mentions" v={String(node.mentionCount)} />
+                  <Kv k="Sightings" v={String(node.sightingCount)} />
                   <Kv k="Independent" v={String(node.docCount)} />
                   <Kv k="Reposts" v={String(node.mirrorSightingCount)} />
+                  <Kv k="First seen" v={new Date(node.firstSeen).toLocaleString()} />
+                  <Kv k="Last seen" v={new Date(node.lastSeen).toLocaleString()} />
                 </Stack>
 
                 {node.nodeType === "product" && (

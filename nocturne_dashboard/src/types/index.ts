@@ -325,8 +325,11 @@ export interface GraphNode {
   nodeKey: string;
   globalNodeKey: string | null;
   orgId: string;
-  nodeType: EntityType;
+  /** Claims are first-class graph nodes even though they are not L2 entities. */
+  nodeType: EntityType | "claim";
   displayName: string;
+  /** Full inspector text; canvas renderers must continue using displayName. */
+  description?: string;
   normalizedName: string;
   isMonitoredOrg: boolean;
 

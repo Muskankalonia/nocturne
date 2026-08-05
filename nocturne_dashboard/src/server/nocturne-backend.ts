@@ -10,8 +10,12 @@ import type {
   ConfidenceBand,
   DataScope,
   EdgeType,
+  EntityMatchMethod,
+  EntityMatchStatus,
   EntityType,
   ExtractedClaimStatus,
+  GraphEdge,
+  GraphNode,
   GroundingLevel,
   L2Route,
   LeakType,
@@ -35,6 +39,8 @@ import type {
   DashboardIncidentIndicatorCount,
   DashboardPipelineCounts,
   IncidentDetailResponse,
+  KnowledgeGraphResponse,
+  KnowledgeGraphView,
   MonitoredOrganizationRecord,
   MonitoredOrganizationUpdate,
 } from "@/types/dashboard";
@@ -68,6 +74,11 @@ export interface NocturneBackend {
     scope: DataScope,
     incidentKey: string,
   ): Promise<IncidentDetailResponse | null>;
+  getKnowledgeGraph(
+    scope: DataScope,
+    view: KnowledgeGraphView,
+    incidentKey?: string,
+  ): Promise<KnowledgeGraphResponse | null>;
 }
 
 export interface BreachMonitorAccess {
@@ -244,6 +255,7 @@ const INCIDENT_GRAPH_NODE_COLUMNS = `
   NODE_TYPE,
   NORMALIZED_NAME,
   DISPLAY_NAME,
+  NODE_DESCRIPTION,
   IS_MONITORED_ORG,
   MENTION_COUNT,
   SIGHTING_COUNT,
@@ -276,6 +288,65 @@ const INCIDENT_GRAPH_EDGE_COLUMNS = `
   TO_VARCHAR(LAST_SEEN, 'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM')
     AS LAST_SEEN,
   GRAPH_SCOPE
+`;
+
+const KNOWLEDGE_GRAPH_NODE_COLUMNS = `
+  ORG_ID,
+  NODE_KEY,
+  NODE_TYPE,
+  NORMALIZED_NAME,
+  DISPLAY_NAME,
+  NODE_DESCRIPTION,
+  IS_MONITORED_ORG,
+  ENTITY_MATCH_STATUS,
+  ENTITY_MATCH_METHOD,
+  ENTITY_MATCH_CONFIDENCE,
+  MENTION_COUNT,
+  SIGHTING_COUNT,
+  DOC_COUNT,
+  MIRROR_SIGHTING_COUNT,
+  TO_VARCHAR(FIRST_SEEN, 'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM')
+    AS FIRST_SEEN,
+  TO_VARCHAR(LAST_SEEN, 'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM')
+    AS LAST_SEEN,
+  GRAPH_SCOPE
+`;
+
+const KNOWLEDGE_GRAPH_EDGE_COLUMNS = `
+  ORG_ID,
+  GRAPH_EDGE_KEY,
+  SOURCE_KEY,
+  EDGE_TYPE,
+  TARGET_KEY,
+  SOURCE_KIND,
+  SOURCE_TYPE,
+  TARGET_KIND,
+  TARGET_TYPE,
+  SAMPLE_EVIDENCE_TEXT,
+  GROUNDING_LEVEL,
+  EVIDENCE_START,
+  EVIDENCE_END,
+  SELECTED_WINDOW_ID,
+  MENTION_COUNT,
+  SIGHTING_COUNT,
+  DOC_COUNT,
+  MIRROR_SIGHTING_COUNT,
+  TO_VARCHAR(FIRST_SEEN, 'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM')
+    AS FIRST_SEEN,
+  TO_VARCHAR(LAST_SEEN, 'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM')
+    AS LAST_SEEN,
+  GRAPH_SCOPE
+`;
+
+const KNOWLEDGE_GRAPH_ROOT_COLUMNS = `
+  INCIDENT_KEY,
+  TOP_TITLE,
+  TOP_URL,
+  ACTOR_NAME,
+  IMPACT_SEVERITY_SCORE,
+  IMPACT_SEVERITY_BAND,
+  TO_VARCHAR(FIRST_SEEN, 'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM')
+    AS FIRST_SEEN
 `;
 
 let connectionPromise: Promise<Connection> | null = null;
@@ -749,6 +820,61 @@ function mapIncidentGraphEdge(row: SnowflakeRow): DashboardIncidentGraphEdge {
   };
 }
 
+function mapKnowledgeGraphNode(row: SnowflakeRow): GraphNode {
+  const matchStatus = nullableString(row.ENTITY_MATCH_STATUS);
+  const matchMethod = nullableString(row.ENTITY_MATCH_METHOD);
+  const matchConfidence = nullableNumber(row.ENTITY_MATCH_CONFIDENCE);
+
+  return {
+    nodeKey: stringValue(row.NODE_KEY),
+    globalNodeKey: null,
+    orgId: stringValue(row.ORG_ID),
+    nodeType: stringValue(row.NODE_TYPE) as EntityType | "claim",
+    displayName: stringValue(row.DISPLAY_NAME),
+    description: stringValue(row.NODE_DESCRIPTION, stringValue(row.DISPLAY_NAME)),
+    normalizedName: stringValue(row.NORMALIZED_NAME),
+    isMonitoredOrg: booleanValue(row.IS_MONITORED_ORG),
+    mentionCount: numberValue(row.MENTION_COUNT),
+    sightingCount: numberValue(row.SIGHTING_COUNT),
+    docCount: numberValue(row.DOC_COUNT),
+    mirrorSightingCount: numberValue(row.MIRROR_SIGHTING_COUNT),
+    firstSeen: stringValue(row.FIRST_SEEN),
+    lastSeen: stringValue(row.LAST_SEEN),
+    ...(matchStatus
+      ? { entityMatchStatus: matchStatus as EntityMatchStatus }
+      : {}),
+    ...(matchMethod
+      ? { entityMatchMethod: matchMethod as EntityMatchMethod }
+      : {}),
+    ...(matchConfidence === null
+      ? {}
+      : { entityMatchConfidence: matchConfidence }),
+  };
+}
+
+function mapKnowledgeGraphEdge(row: SnowflakeRow): GraphEdge {
+  return {
+    graphEdgeKey: stringValue(row.GRAPH_EDGE_KEY),
+    orgId: stringValue(row.ORG_ID),
+    sourceKey: stringValue(row.SOURCE_KEY),
+    targetKey: stringValue(row.TARGET_KEY),
+    edgeType: stringValue(row.EDGE_TYPE) as EdgeType,
+    sourceKind: stringValue(row.SOURCE_KIND) as "entity" | "claim",
+    targetKind: stringValue(row.TARGET_KIND) as "entity" | "claim",
+    sourceType: stringValue(row.SOURCE_TYPE) as EntityType | "claim",
+    targetType: stringValue(row.TARGET_TYPE) as EntityType | "claim",
+    sampleEvidenceText: stringValue(row.SAMPLE_EVIDENCE_TEXT),
+    groundingLevel: stringValue(row.GROUNDING_LEVEL) as GroundingLevel,
+    evidenceStart: nullableNumber(row.EVIDENCE_START),
+    evidenceEnd: nullableNumber(row.EVIDENCE_END),
+    mentionCount: numberValue(row.MENTION_COUNT),
+    sightingCount: numberValue(row.SIGHTING_COUNT),
+    docCount: numberValue(row.DOC_COUNT),
+    firstSeen: stringValue(row.FIRST_SEEN),
+    lastSeen: stringValue(row.LAST_SEEN),
+  };
+}
+
 function summarizeBreachMonitor(
   rows: BreachMonitorRecord[],
 ): BreachMonitorResponse["summary"] {
@@ -1018,6 +1144,101 @@ export class SnowflakeNocturneBackend implements NocturneBackend {
         nodes: nodeRows.map(mapIncidentGraphNode),
         edges: edgeRows.map(mapIncidentGraphEdge),
       },
+      fetchedAt: new Date().toISOString(),
+    };
+  }
+
+  async getKnowledgeGraph(
+    scope: DataScope,
+    view: KnowledgeGraphView,
+    incidentKey?: string,
+  ): Promise<KnowledgeGraphResponse | null> {
+    if (scope.kind !== "org") {
+      throw new Error("Knowledge graph queries require one organization scope.");
+    }
+
+    const orgId = scope.orgId;
+    const rootClause = incidentKey ? " AND INCIDENT_KEY = ?" : "";
+    const rootBinds: Binds = incidentKey ? [orgId, incidentKey] : [orgId];
+    const [countRows, rootRows] = await Promise.all([
+      executeQuery(
+        `SELECT COUNT(*) AS INCIDENT_COUNT
+         FROM NOCTURNE.DASHBOARD.VW_INCIDENTS
+         WHERE ORG_ID = ?`,
+        [orgId],
+      ),
+      view === "incident"
+        ? executeQuery(
+            `SELECT ${KNOWLEDGE_GRAPH_ROOT_COLUMNS}
+             FROM NOCTURNE.DASHBOARD.VW_INCIDENTS
+             WHERE ORG_ID = ?${rootClause}
+             ORDER BY
+               TRIAGE_PRIORITY_SCORE DESC NULLS LAST,
+               LAST_SEEN DESC,
+               INCIDENT_KEY
+             LIMIT 1`,
+            rootBinds,
+          )
+        : Promise.resolve([]),
+    ]);
+
+    if (view === "incident" && rootRows.length === 0) return null;
+
+    const rootRow = rootRows[0];
+    const selectedIncidentKey = rootRow
+      ? stringValue(rootRow.INCIDENT_KEY)
+      : null;
+    const isActorNetwork = view === "actors";
+    const nodeView = isActorNetwork
+      ? "NOCTURNE.DASHBOARD.VW_KNOWLEDGE_GRAPH_NODES"
+      : "NOCTURNE.DASHBOARD.VW_INCIDENT_GRAPH_NODES";
+    const edgeView = isActorNetwork
+      ? "NOCTURNE.DASHBOARD.VW_KNOWLEDGE_GRAPH_EDGES"
+      : "NOCTURNE.DASHBOARD.VW_INCIDENT_GRAPH_EDGES";
+    const graphClause = isActorNetwork
+      ? "WHERE ORG_ID = ?"
+      : "WHERE ORG_ID = ? AND INCIDENT_KEY = ?";
+    const graphBinds: Binds = isActorNetwork
+      ? [orgId]
+      : [orgId, selectedIncidentKey as string];
+
+    const [nodeRows, edgeRows] = await Promise.all([
+      executeQuery(
+        `SELECT ${KNOWLEDGE_GRAPH_NODE_COLUMNS}
+         FROM ${nodeView}
+         ${graphClause}
+         ORDER BY IS_MONITORED_ORG DESC, NODE_TYPE, DISPLAY_NAME, NODE_KEY`,
+        graphBinds,
+      ),
+      executeQuery(
+        `SELECT ${KNOWLEDGE_GRAPH_EDGE_COLUMNS}
+         FROM ${edgeView}
+         ${graphClause}
+         ORDER BY FIRST_SEEN, EDGE_TYPE, SOURCE_KEY, TARGET_KEY`,
+        graphBinds,
+      ),
+    ]);
+
+    return {
+      scope,
+      view,
+      rootKey: selectedIncidentKey,
+      rootIncident: rootRow
+        ? {
+            incidentKey: stringValue(rootRow.INCIDENT_KEY),
+            title: stringValue(rootRow.TOP_TITLE),
+            url: stringValue(rootRow.TOP_URL),
+            actorName: nullableString(rootRow.ACTOR_NAME),
+            impactSeverityScore: nullableNumber(rootRow.IMPACT_SEVERITY_SCORE),
+            impactSeverityBand: nullableString(
+              rootRow.IMPACT_SEVERITY_BAND,
+            ) as SeverityBand | null,
+            firstSeen: stringValue(rootRow.FIRST_SEEN),
+          }
+        : null,
+      incidentCount: numberValue(countRows[0]?.INCIDENT_COUNT),
+      nodes: nodeRows.map(mapKnowledgeGraphNode),
+      edges: edgeRows.map(mapKnowledgeGraphEdge),
       fetchedAt: new Date().toISOString(),
     };
   }
