@@ -16,6 +16,7 @@ import type {
   RelationshipLabel,
   RemediationStatus,
   SeverityBand,
+  ThreatActor,
 } from "@/types";
 
 /**
@@ -193,6 +194,22 @@ export interface KnowledgeGraphResponse extends GraphPayload {
   view: KnowledgeGraphView;
   rootIncident: KnowledgeGraphIncidentRoot | null;
   incidentCount: number;
+  fetchedAt: string;
+}
+
+export interface ThreatActorsSummary {
+  actorCount: number;
+  corroboratedClaimCount: number;
+  marketplaceCount: number;
+  highestCredibilityScore: number;
+}
+
+/** Organization-isolated actor evidence and the aggregates shown above it. */
+export interface ThreatActorsResponse {
+  scope: DataScope;
+  summary: ThreatActorsSummary;
+  actors: ThreatActor[];
+  lastUpdatedAt: string | null;
   fetchedAt: string;
 }
 

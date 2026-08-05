@@ -23,6 +23,7 @@ import type {
   RemediationStatus,
   ScoreReason,
   SeverityBand,
+  ThreatActor,
 } from "@/types";
 import type {
   BreachMonitorPipelineState,
@@ -43,6 +44,7 @@ import type {
   KnowledgeGraphView,
   MonitoredOrganizationRecord,
   MonitoredOrganizationUpdate,
+  ThreatActorsResponse,
 } from "@/types/dashboard";
 
 if (typeof window !== "undefined") {
@@ -79,6 +81,7 @@ export interface NocturneBackend {
     view: KnowledgeGraphView,
     incidentKey?: string,
   ): Promise<KnowledgeGraphResponse | null>;
+  getThreatActors(scope: DataScope): Promise<ThreatActorsResponse>;
 }
 
 export interface BreachMonitorAccess {
@@ -347,6 +350,33 @@ const KNOWLEDGE_GRAPH_ROOT_COLUMNS = `
   IMPACT_SEVERITY_BAND,
   TO_VARCHAR(FIRST_SEEN, 'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM')
     AS FIRST_SEEN
+`;
+
+const THREAT_ACTOR_COLUMNS = `
+  ORG_ID,
+  ACTOR_NODE_KEY,
+  ACTOR_NAME,
+  TOTAL_CLAIM_COUNT,
+  CORROBORATED_CLAIM_COUNT,
+  SELF_EVIDENCED_CLAIM_COUNT,
+  DISPUTED_CLAIM_COUNT,
+  DOC_COUNT,
+  SIGHTING_COUNT,
+  MIRROR_SIGHTING_COUNT,
+  MARKETPLACE_COUNT,
+  MARKETPLACES,
+  CONTACT_CHANNEL_COUNT,
+  CORROBORATION_COMPONENT,
+  SELF_EVIDENCE_COMPONENT,
+  INDEPENDENT_HISTORY_COMPONENT,
+  CLAIM_HISTORY_COMPONENT,
+  DISPUTE_PENALTY,
+  ACTOR_CREDIBILITY_SCORE,
+  ACTOR_METHOD_VERSION,
+  TO_VARCHAR(FIRST_SEEN, 'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM')
+    AS FIRST_SEEN,
+  TO_VARCHAR(LAST_SEEN, 'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM')
+    AS LAST_SEEN
 `;
 
 let connectionPromise: Promise<Connection> | null = null;
@@ -875,6 +905,35 @@ function mapKnowledgeGraphEdge(row: SnowflakeRow): GraphEdge {
   };
 }
 
+function mapThreatActor(row: SnowflakeRow): ThreatActor {
+  return {
+    actorNodeKey: stringValue(row.ACTOR_NODE_KEY),
+    globalNodeKey: null,
+    orgId: stringValue(row.ORG_ID),
+    actorName: stringValue(row.ACTOR_NAME, "unattributed"),
+    totalClaimCount: numberValue(row.TOTAL_CLAIM_COUNT),
+    corroboratedClaimCount: numberValue(row.CORROBORATED_CLAIM_COUNT),
+    selfEvidencedClaimCount: numberValue(row.SELF_EVIDENCED_CLAIM_COUNT),
+    disputedClaimCount: numberValue(row.DISPUTED_CLAIM_COUNT),
+    docCount: numberValue(row.DOC_COUNT),
+    sightingCount: numberValue(row.SIGHTING_COUNT),
+    mirrorSightingCount: numberValue(row.MIRROR_SIGHTING_COUNT),
+    marketplaceCount: numberValue(row.MARKETPLACE_COUNT),
+    contactChannelCount: numberValue(row.CONTACT_CHANNEL_COUNT),
+    credibilityScore: numberValue(row.ACTOR_CREDIBILITY_SCORE),
+    corroborationComponent: numberValue(row.CORROBORATION_COMPONENT),
+    selfEvidenceComponent: numberValue(row.SELF_EVIDENCE_COMPONENT),
+    independentHistoryComponent: numberValue(row.INDEPENDENT_HISTORY_COMPONENT),
+    claimHistoryComponent: numberValue(row.CLAIM_HISTORY_COMPONENT),
+    disputePenalty: numberValue(row.DISPUTE_PENALTY),
+    credibilityMethodVersion: stringValue(row.ACTOR_METHOD_VERSION),
+    firstSeen: stringValue(row.FIRST_SEEN),
+    lastSeen: stringValue(row.LAST_SEEN),
+    contactChannels: [],
+    marketplaces: stringArray(row.MARKETPLACES),
+  };
+}
+
 function summarizeBreachMonitor(
   rows: BreachMonitorRecord[],
 ): BreachMonitorResponse["summary"] {
@@ -1239,6 +1298,43 @@ export class SnowflakeNocturneBackend implements NocturneBackend {
       incidentCount: numberValue(countRows[0]?.INCIDENT_COUNT),
       nodes: nodeRows.map(mapKnowledgeGraphNode),
       edges: edgeRows.map(mapKnowledgeGraphEdge),
+      fetchedAt: new Date().toISOString(),
+    };
+  }
+
+  async getThreatActors(scope: DataScope): Promise<ThreatActorsResponse> {
+    if (scope.kind !== "org") {
+      throw new Error("Threat actor queries require one organization scope.");
+    }
+
+    const rows = await executeQuery(
+      `SELECT ${THREAT_ACTOR_COLUMNS}
+       FROM NOCTURNE.DASHBOARD.VW_THREAT_ACTORS
+       WHERE ORG_ID = ?
+       ORDER BY ACTOR_CREDIBILITY_SCORE DESC, LAST_SEEN DESC, ACTOR_NODE_KEY`,
+      [scope.orgId],
+    );
+    const actors = rows.map(mapThreatActor);
+    const marketplaces = new Set(
+      actors.flatMap((actor) => actor.marketplaces),
+    );
+
+    return {
+      scope,
+      summary: {
+        actorCount: actors.length,
+        corroboratedClaimCount: actors.reduce(
+          (total, actor) => total + actor.corroboratedClaimCount,
+          0,
+        ),
+        marketplaceCount: marketplaces.size,
+        highestCredibilityScore: actors.reduce(
+          (highest, actor) => Math.max(highest, actor.credibilityScore),
+          0,
+        ),
+      },
+      actors,
+      lastUpdatedAt: latestTimestamp(actors.map((actor) => actor.lastSeen)),
       fetchedAt: new Date().toISOString(),
     };
   }
