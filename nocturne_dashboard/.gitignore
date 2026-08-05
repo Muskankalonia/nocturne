@@ -15,3 +15,6 @@ next-env.d.ts
 # account identifier, the signed-in user, the role and the warehouse in
 # cleartext, so it must never be committed.
 snowflake.log
+
+# Firebase CLI deploy cache — local state, not source.
+.firebase/

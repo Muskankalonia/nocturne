@@ -1,0 +1,36 @@
+# Everything here is either rebuilt inside the image or must never reach it.
+#
+# The .env rules are the important ones: .env.local holds a live Snowflake
+# programmatic access token, and anything copied into a layer stays in the
+# image even if a later layer deletes it. Cloud Run supplies these values as
+# runtime environment variables instead.
+.env
+.env.*
+!.env.example
+
+node_modules
+.next
+out
+build
+
+.git
+.gitignore
+*.md
+prod_requirement.md
+
+# Local tooling that has no place in a runtime image. puppeteer in particular
+# would drag a Chromium download into the build.
+scripts/clicktest.cjs
+scripts/shot.cjs
+public/snapshots
+
+snowflake.log
+*.tsbuildinfo
+.DS_Store
+
+# Firebase Hosting config — used by the deploy scripts, meaningless inside the
+# container that Firebase proxies to.
+firebase.json
+.firebaserc
+firebase-public
+.firebase

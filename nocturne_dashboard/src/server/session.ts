@@ -6,7 +6,11 @@ if (typeof window !== "undefined") {
   throw new Error("Nocturne session signing may only run on the server.");
 }
 
-export const SESSION_COOKIE_NAME = "nocturne.session";
+// Firebase Hosting strips every cookie from an incoming request except one
+// named exactly `__session`. Since the console is served through a Hosting
+// rewrite to Cloud Run, any other name means the browser sends a session the
+// origin never sees, and every authenticated request 401s.
+export const SESSION_COOKIE_NAME = "__session";
 export const SESSION_TTL_SECONDS = 8 * 60 * 60;
 
 interface SessionClaims {

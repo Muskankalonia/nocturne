@@ -1,0 +1,16 @@
+{
+  "hosting": {
+    "site": "nocturne-console",
+    "public": "firebase-public",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "source": "**",
+        "run": {
+          "serviceId": "nocturne-console",
+          "region": "asia-southeast1"
+        }
+      }
+    ]
+  }
+}
