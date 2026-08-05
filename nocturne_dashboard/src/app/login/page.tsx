@@ -234,7 +234,9 @@ export default function LoginPage() {
               autoFocus
               required
               fullWidth
-              placeholder="palo_alto_networks"
+              // A real tenant id here would be a working credential on its own:
+              // the demo scheme accepts the organization id as its own password.
+              placeholder="organization id"
               InputProps={{
                 startAdornment: (
                   <InputAdornment position="start">
@@ -276,34 +278,6 @@ export default function LoginPage() {
             {submitting ? "Signing in…" : "Sign in"}
           </Button>
 
-          <Box
-            sx={{
-              mt: 0.5,
-              p: 1.5,
-              borderRadius: `${layout.radiusSm}px`,
-              border: `1px dashed ${colors.edgeHi}`,
-              fontSize: 11,
-              color: colors.text2,
-              lineHeight: 1.7,
-            }}
-          >
-            <Box component="span" sx={{ color: colors.text1, fontWeight: 600 }}>
-              Demo credentials
-            </Box>
-            <br />
-            Tenant → <Code>palo_alto_networks</Code> / <Code>palo_alto_networks</Code>
-            <br />
-            Tenant → <Code>att</Code> / <Code>att</Code>
-            <br />
-            Fleet&nbsp;&nbsp;→ <Code>admin</Code> / <Code>admin</Code>
-            <Box sx={{ mt: 1, pt: 1, borderTop: `1px solid ${colors.edge}` }}>
-              <Box component="span" sx={{ color: colors.medium }}>
-                ⚠ Demo scheme only.
-              </Box>{" "}
-              Tenant isolation is enforced server-side on the session, never by the client
-              sending an organization id.
-            </Box>
-          </Box>
         </Box>
       </Stack>
     </Stack>
@@ -327,13 +301,5 @@ function FieldLabel({ htmlFor, children }: { htmlFor: string; children: React.Re
     >
       {children}
     </Typography>
-  );
-}
-
-function Code({ children }: { children: React.ReactNode }) {
-  return (
-    <Box component="code" sx={{ fontFamily: fonts.mono, color: colors.ion }}>
-      {children}
-    </Box>
   );
 }

@@ -3,6 +3,12 @@ import { NextResponse } from "next/server";
 
 import { organizations, users } from "@/mocks/organizations";
 import {
+  checkLoginRate,
+  clientKey,
+  recordLoginFailure,
+  recordLoginSuccess,
+} from "@/server/rate-limit";
+import {
   createSessionToken,
   SESSION_COOKIE_NAME,
   sessionCookieOptions,
@@ -34,7 +40,29 @@ function sessionForUser(user: User, issuedAt: string): Session {
   };
 }
 
-function unauthorized() {
+/**
+ * The demo scheme derives each password from the username plus a shared
+ * suffix, so `admin` signs in with `admin<suffix>`.
+ *
+ * The suffix comes from the environment rather than from this file on purpose.
+ * Once the console is reachable without an IP allowlist, a suffix committed to
+ * the repository is a published password — anyone who can read the source can
+ * sign in. Keep the real value in .env.local and in the Cloud Run environment.
+ *
+ * With the variable unset the password is simply the username, which keeps
+ * local development working without extra setup.
+ */
+function expectedPassword(username: string): string {
+  return `${username}${process.env.NOCTURNE_DEMO_PASSWORD_SUFFIX ?? ""}`;
+}
+
+/**
+ * Reject a sign-in and count it against the caller's throttle. Every failing
+ * path goes through here so that a malformed body is as expensive to retry as a
+ * wrong password — otherwise the cheap paths become the ones worth guessing on.
+ */
+function unauthorized(rateKey: string) {
+  recordLoginFailure(rateKey);
   return NextResponse.json(
     { error: "That username and password combination was not recognized." },
     { status: 401, headers: NO_STORE_HEADERS },
@@ -42,6 +70,24 @@ function unauthorized() {
 }
 
 export async function POST(request: Request) {
+  // Throttle before parsing anything: a blocked caller should cost as little as
+  // possible, and the check must not depend on the shape of their payload.
+  const rateKey = clientKey(request.headers);
+  const verdict = checkLoginRate(rateKey);
+  if (!verdict.allowed) {
+    return NextResponse.json(
+      {
+        error:
+          `Too many failed sign-in attempts. Try again in `
+          + `${Math.ceil(verdict.retryAfter / 60)} minute(s).`,
+      },
+      {
+        status: 429,
+        headers: { ...NO_STORE_HEADERS, "Retry-After": String(verdict.retryAfter) },
+      },
+    );
+  }
+
   let body: unknown;
   try {
     body = await request.json();
@@ -52,18 +98,24 @@ export async function POST(request: Request) {
     );
   }
 
-  if (!body || typeof body !== "object") return unauthorized();
+  if (!body || typeof body !== "object") return unauthorized(rateKey);
   const submitted = body as Record<string, unknown>;
   if (
     typeof submitted.username !== "string"
     || typeof submitted.password !== "string"
   ) {
-    return unauthorized();
+    return unauthorized(rateKey);
   }
 
   const username = submitted.username.trim().toLowerCase();
   const user = users.find((candidate) => candidate.username === username);
-  if (!user || submitted.password !== username) return unauthorized();
+  if (!user || submitted.password !== expectedPassword(username)) {
+    return unauthorized(rateKey);
+  }
+
+  // Correct credentials clear the record, so an ordinary user who mistypes a
+  // few times and then succeeds is never left throttled.
+  recordLoginSuccess(rateKey);
 
   const organization = enabledOrganizationFor(user);
   if (user.role === "ORG_USER" && !organization) {
