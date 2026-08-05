@@ -44,7 +44,10 @@ import type {
   KnowledgeGraphView,
   MonitoredOrganizationRecord,
   MonitoredOrganizationUpdate,
+  PendingAlert,
   ThreatActorsResponse,
+  UserProfileRecord,
+  UserProfileUpdate,
 } from "@/types/dashboard";
 
 if (typeof window !== "undefined") {
@@ -1486,4 +1489,285 @@ export async function updateMonitoredOrganization(
     [orgId],
   );
   return rows.length ? mapMonitoredOrganization(rows[0]!) : null;
+}
+
+/* ── user profiles ─────────────────────────────────────────────────────────── */
+
+const USER_PROFILE_COLUMNS = `
+  USERNAME,
+  DISPLAY_NAME,
+  EMAIL,
+  POSITION,
+  ALERT_BANDS,
+  WEEKLY_DIGEST,
+  TO_VARCHAR(UPDATED_AT, 'YYYY-MM-DD"T"HH24:MI:SSTZH:TZM') AS UPDATED_AT
+`;
+
+const MAX_DISPLAY_NAME = 80;
+const MAX_EMAIL = 254;
+const MAX_POSITION = 80;
+// Deliberately permissive: the goal is to catch a typo, not to adjudicate
+// RFC 5322. Anything with one @ and a dotted domain passes.
+const EMAIL_PATTERN = /^[^\s@]{1,64}@(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))+$/i;
+
+function mapUserProfile(row: SnowflakeRow): UserProfileRecord {
+  return {
+    username: stringValue(row.USERNAME),
+    displayName: nullableString(row.DISPLAY_NAME),
+    email: nullableString(row.EMAIL),
+    position: nullableString(row.POSITION),
+    // NULL means never configured; fall back to the default rather than
+    // silently treating an unconfigured account as "alerts off".
+    alertBands:
+      row.ALERT_BANDS === null || row.ALERT_BANDS === undefined
+        ? [...DEFAULT_ALERT_BANDS]
+        : (stringArray(row.ALERT_BANDS).filter(isSeverityBand) as SeverityBand[]),
+    weeklyDigest:
+      row.WEEKLY_DIGEST === null || row.WEEKLY_DIGEST === undefined
+        ? true
+        : booleanValue(row.WEEKLY_DIGEST),
+    updatedAt: nullableString(row.UPDATED_AT),
+  };
+}
+
+/** Loud severities only. Nobody wants an email for an informational row. */
+export const DEFAULT_ALERT_BANDS: SeverityBand[] = ["critical", "high"];
+
+/** The same defaults as a Snowflake array literal, built from the list above. */
+const DEFAULT_ALERT_BANDS_SQL = `ARRAY_CONSTRUCT(${DEFAULT_ALERT_BANDS.map(
+  (band) => `'${band}'`,
+).join(", ")})`;
+const SEVERITY_BANDS: SeverityBand[] = [
+  "critical",
+  "high",
+  "medium",
+  "low",
+  "informational",
+];
+
+function isSeverityBand(value: string): value is SeverityBand {
+  return (SEVERITY_BANDS as string[]).includes(value);
+}
+
+/** Trims, and treats an all-whitespace field as "cleared" rather than "  ". */
+function optionalText(
+  value: unknown,
+  label: string,
+  maxLength: number,
+): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string") {
+    throw new ConfigValidationError(`${label} must be text.`);
+  }
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.length > maxLength) {
+    throw new ConfigValidationError(
+      `${label} must be ${maxLength} characters or fewer.`,
+    );
+  }
+  return trimmed;
+}
+
+export function normalizeUserProfileUpdate(input: unknown): UserProfileUpdate {
+  if (!input || typeof input !== "object") {
+    throw new ConfigValidationError("A JSON object body is required.");
+  }
+  const body = input as Record<string, unknown>;
+
+  // Display name is the one required field — it is what the sidebar renders,
+  // and an empty one would leave the account visually anonymous.
+  const displayName = optionalText(body.displayName, "Display name", MAX_DISPLAY_NAME);
+  if (!displayName) {
+    throw new ConfigValidationError("Display name cannot be empty.");
+  }
+
+  const email = optionalText(body.email, "Email", MAX_EMAIL);
+  if (email && !EMAIL_PATTERN.test(email)) {
+    throw new ConfigValidationError(`"${email}" is not a valid email address.`);
+  }
+
+  const rawBands = body.alertBands;
+  if (!Array.isArray(rawBands)) {
+    throw new ConfigValidationError("`alertBands` must be an array.");
+  }
+  const alertBands = rawBands.map((band) => {
+    if (typeof band !== "string" || !isSeverityBand(band)) {
+      throw new ConfigValidationError(`"${String(band)}" is not a severity band.`);
+    }
+    return band;
+  });
+
+  if (typeof body.weeklyDigest !== "boolean") {
+    throw new ConfigValidationError("`weeklyDigest` must be true or false.");
+  }
+
+  // An alert with nowhere to go is a silent failure, so make it a loud one.
+  if (alertBands.length > 0 && !email) {
+    throw new ConfigValidationError(
+      "Add an email address before enabling breach alerts.",
+    );
+  }
+
+  return {
+    displayName,
+    email,
+    position: optionalText(body.position, "Position", MAX_POSITION),
+    alertBands: [...new Set(alertBands)],
+    weeklyDigest: body.weeklyDigest,
+  };
+}
+
+export async function getUserProfile(
+  username: string,
+): Promise<UserProfileRecord | null> {
+  const rows = await executeQuery(
+    `SELECT ${USER_PROFILE_COLUMNS}
+     FROM NOCTURNE.CONFIG.USER_PROFILES
+     WHERE USERNAME = ?`,
+    [username],
+  );
+  return rows.length ? mapUserProfile(rows[0]!) : null;
+}
+
+/**
+ * Upsert, because a profile row only exists once someone has saved one. The
+ * username is bound, never interpolated, and is taken from the signed session
+ * by the caller — a user can only ever write their own row.
+ */
+export async function saveUserProfile(
+  username: string,
+  update: UserProfileUpdate,
+): Promise<UserProfileRecord | null> {
+  await executeQuery(
+    `MERGE INTO NOCTURNE.CONFIG.USER_PROFILES AS target
+     USING (SELECT ? AS USERNAME) AS source
+       ON target.USERNAME = source.USERNAME
+     WHEN MATCHED THEN UPDATE SET
+       DISPLAY_NAME = ?,
+       EMAIL = ?,
+       POSITION = ?,
+       ALERT_BANDS = CAST(PARSE_JSON(?) AS ARRAY),
+       WEEKLY_DIGEST = ?,
+       UPDATED_AT = CURRENT_TIMESTAMP()
+     WHEN NOT MATCHED THEN
+       INSERT (USERNAME, DISPLAY_NAME, EMAIL, POSITION, ALERT_BANDS, WEEKLY_DIGEST)
+       VALUES (source.USERNAME, ?, ?, ?, CAST(PARSE_JSON(?) AS ARRAY), ?)`,
+    [
+      username,
+      update.displayName,
+      update.email,
+      update.position,
+      JSON.stringify(update.alertBands),
+      update.weeklyDigest,
+      update.displayName,
+      update.email,
+      update.position,
+      JSON.stringify(update.alertBands),
+      update.weeklyDigest,
+    ],
+  );
+  return getUserProfile(username);
+}
+
+/* ── breach alert dispatch ─────────────────────────────────────────────────── */
+
+/**
+ * Incidents that someone has asked to be emailed about and that have not been
+ * emailed to them yet.
+ *
+ * The anti-join against ALERT_DELIVERIES is what makes re-running the sweep
+ * safe: an incident already delivered to a user simply does not come back. The
+ * join to USER_PROFILES is an inner join on a non-null email, so a user with
+ * alerts on but no address is excluded here rather than failing later.
+ *
+ * `lookbackHours` stops a first run from emailing the entire history — the
+ * cold-start case where the deliveries table is empty and every incident ever
+ * raised would otherwise qualify.
+ */
+export async function findPendingAlerts(
+  lookbackHours: number,
+): Promise<PendingAlert[]> {
+  const rows = await executeQuery(
+    `SELECT
+       i.INCIDENT_KEY,
+       i.ORG_ID,
+       i.ORGANIZATION_NAME,
+       i.TOP_TITLE,
+       i.TOP_URL,
+       i.IMPACT_SEVERITY_BAND,
+       i.IMPACT_SEVERITY_SCORE,
+       TO_VARCHAR(i.FIRST_SEEN, 'YYYY-MM-DD"T"HH24:MI:SSTZH:TZM') AS FIRST_SEEN,
+       p.USERNAME,
+       p.EMAIL,
+       COALESCE(p.DISPLAY_NAME, p.USERNAME) AS DISPLAY_NAME
+     FROM NOCTURNE.DASHBOARD.VW_INCIDENTS i
+     JOIN NOCTURNE.CONFIG.USER_PROFILES p
+       ON p.EMAIL IS NOT NULL
+      -- NULL means never configured. The settings UI shows the same defaults
+      -- as enabled, so the dispatcher has to honour them or the switches would
+      -- promise alerts that never send.
+      AND ARRAY_CONTAINS(
+            i.IMPACT_SEVERITY_BAND::VARIANT,
+            COALESCE(p.ALERT_BANDS, ${DEFAULT_ALERT_BANDS_SQL})
+          )
+     LEFT JOIN NOCTURNE.CONFIG.ALERT_DELIVERIES d
+       ON d.INCIDENT_KEY = i.INCIDENT_KEY
+      AND d.USERNAME = p.USERNAME
+     WHERE d.INCIDENT_KEY IS NULL
+       AND i.L2_ROUTE = 'target_confirmed'
+       AND i.FIRST_SEEN >= DATEADD(hour, -?, CURRENT_TIMESTAMP())
+       AND (p.USERNAME = i.ORG_ID OR p.USERNAME = 'admin')
+     ORDER BY i.IMPACT_SEVERITY_SCORE DESC NULLS LAST, i.INCIDENT_KEY`,
+    [lookbackHours],
+  );
+
+  return rows.map((row) => ({
+    incidentKey: stringValue(row.INCIDENT_KEY),
+    orgId: stringValue(row.ORG_ID),
+    organizationName: stringValue(row.ORGANIZATION_NAME),
+    title: stringValue(row.TOP_TITLE),
+    sourceUrl: stringValue(row.TOP_URL),
+    severityBand: stringValue(row.IMPACT_SEVERITY_BAND) as SeverityBand,
+    severityScore: nullableNumber(row.IMPACT_SEVERITY_SCORE),
+    firstSeen: nullableString(row.FIRST_SEEN),
+    username: stringValue(row.USERNAME),
+    email: stringValue(row.EMAIL),
+    displayName: stringValue(row.DISPLAY_NAME),
+  }));
+}
+
+/**
+ * Claims the right to send one alert, returning false if someone already has.
+ *
+ * This is the exactly-once guard and it runs *before* the mail is queued. Two
+ * dispatchers racing on the same incident both reach here; the primary key
+ * lets exactly one insert succeed, and the loser skips instead of sending a
+ * duplicate. Claiming before queueing means the worst case is a dropped email,
+ * never a repeated one — the safer direction for an alert that says "breach".
+ */
+export async function claimAlertDelivery(alert: PendingAlert): Promise<boolean> {
+  const rows = await executeQuery(
+    `INSERT INTO NOCTURNE.CONFIG.ALERT_DELIVERIES
+       (INCIDENT_KEY, USERNAME, ORG_ID, EMAIL, SEVERITY_BAND)
+     SELECT ?, ?, ?, ?, ?
+     WHERE NOT EXISTS (
+       SELECT 1 FROM NOCTURNE.CONFIG.ALERT_DELIVERIES
+       WHERE INCIDENT_KEY = ? AND USERNAME = ?
+     )`,
+    [
+      alert.incidentKey,
+      alert.username,
+      alert.orgId,
+      alert.email,
+      alert.severityBand,
+      alert.incidentKey,
+      alert.username,
+    ],
+  );
+  // Snowflake reports affected rows as "number of rows inserted".
+  const inserted = Number(
+    (rows[0] as Record<string, unknown> | undefined)?.["number of rows inserted"] ?? 0,
+  );
+  return inserted > 0;
 }

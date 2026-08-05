@@ -14,21 +14,21 @@ import {
 } from "@mui/material";
 import { Building2, Lock } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
-import { headlineStats } from "@/lib/pipeline-stats";
-import { groundingStats, orgCascade } from "@/mocks/pipeline";
 import { colors, fonts, gradients, layout, shadows } from "@/theme/tokens";
 
 /**
- * Poster figures, computed once at module load from the same cascade the
- * pipeline page renders. Nothing here is fetched: the poster is pre-auth, and
- * an unauthenticated endpoint that reports corpus size and detection rates
- * would tell an anonymous visitor more about the estate than the sign-in screen
- * should. See `docs`/`prod_requirement.md` for the live-data option.
+ * Lockup size, shared by the mark itself and by the spacer that balances it.
+ * The lockup is pinned to the top of the poster, so centring the headline in
+ * the leftover space would sit it half a lockup below true centre and out of
+ * line with the sign-in card. Reserving the same height at the bottom puts it
+ * back on the panel's midline, and keeping one constant means the two can't
+ * drift apart.
+ *
+ * Written as explicit pixel strings: `width` takes raw pixels but `mb` is on
+ * MUI's 8px spacing scale, and a bare number would silently mean two different
+ * things in the two places this is used.
  */
-const stats = headlineStats(orgCascade, {
-  verified: groundingStats.org.verified,
-  quarantined: groundingStats.org.quarantined,
-});
+const LOCKUP_SIZE = { xs: "30px", md: "40px" };
 
 export default function LoginPage() {
   const router = useRouter();
@@ -69,7 +69,6 @@ export default function LoginPage() {
     >
       {/* poster */}
       <Stack
-        justifyContent="space-between"
         sx={{
           flex: { md: 1.15 },
           p: { xs: 3.5, sm: 5, md: 7, lg: 10 },
@@ -95,8 +94,8 @@ export default function LoginPage() {
               height={40}
               sx={{
                 display: "block",
-                width: { xs: 30, md: 40 },
-                height: { xs: 30, md: 40 },
+                width: LOCKUP_SIZE,
+                height: LOCKUP_SIZE,
                 filter: `drop-shadow(0 0 16px ${alpha(colors.ion, 0.45)})`,
               }}
             />
@@ -112,7 +111,21 @@ export default function LoginPage() {
             </Typography>
           </Stack>
 
-          <Box sx={{ py: { xs: 5, md: 7 } }}>
+          {/* The lockup stays pinned to the top and the headline centres in
+            * what's left, offset by a lockup's height so it lands on the
+            * panel's true midline. Centring here rather than distributing the
+            * column keeps the composition stable no matter how many blocks the
+            * poster carries. */}
+          <Box
+            sx={{
+              flex: 1,
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "center",
+              py: { xs: 5, md: 7 },
+              mb: LOCKUP_SIZE,
+            }}
+          >
             <Typography
               variant="h1"
               sx={{
@@ -137,36 +150,10 @@ export default function LoginPage() {
                 maxWidth: "46ch",
               }}
             >
-              Dark-web breach intelligence with verbatim evidence, deterministic ownership
-              resolution, and a cost cascade that sends only {stats.expensiveModelPct}% of
-              collected pages to an expensive model.
+              Know which dark-web leaks are actually yours — and see the exact line that
+              proves it.
             </Typography>
           </Box>
-
-          <Stack direction="row" gap={{ xs: 3.5, md: 5 }} flexWrap="wrap">
-            {[
-              { n: `${stats.groundedPct}%`, l: "Claims grounded", c: colors.verified },
-              { n: `${stats.expensiveModelPct}%`, l: "Pages to expensive AI", c: colors.ion },
-              { n: String(stats.layerCount), l: "Cascade layers", c: colors.text1 },
-            ].map((s) => (
-              <Box key={s.l}>
-                <Typography sx={{ fontFamily: fonts.mono, fontSize: 21, fontWeight: 600, color: s.c }}>
-                  {s.n}
-                </Typography>
-                <Typography
-                  sx={{
-                    fontFamily: fonts.mono,
-                    fontSize: 9.5,
-                    letterSpacing: "0.12em",
-                    textTransform: "uppercase",
-                    color: colors.text3,
-                  }}
-                >
-                  {s.l}
-                </Typography>
-              </Box>
-            ))}
-          </Stack>
         </Stack>
 
       {/* form */}

@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { organizations } from "@/mocks/organizations";
+import { initialsFromName } from "@/lib/format";
 import type { DataScope, Organization, Session, User } from "@/types";
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -45,6 +46,12 @@ export interface AuthContextValue {
   logout: () => Promise<void>;
   /** Super admin only; a no-op for an ORG_USER. */
   setScope: (scope: DataScope) => void;
+  /** Applies a saved profile to the in-memory session so chrome updates now. */
+  applyProfile: (profile: {
+    displayName: string;
+    email: string | null;
+    position: string | null;
+  }) => void;
 }
 
 export type LoginResult =
@@ -146,6 +153,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const applyProfile = useCallback(
+    (profile: { displayName: string; email: string | null; position: string | null }) => {
+      setSession((current) =>
+        current
+          ? {
+              ...current,
+              user: {
+                ...current.user,
+                displayName: profile.displayName,
+                // Initials follow the name, or the avatar keeps showing the old
+                // person's letters after a rename.
+                initials: initialsFromName(profile.displayName, current.user.initials),
+                email: profile.email,
+                position: profile.position,
+              },
+            }
+          : current,
+      );
+    },
+    [],
+  );
+
   const value = useMemo<AuthContextValue>(() => {
     const isSuperAdmin = session?.user.role === "SUPER_ADMIN";
     const isFleetScope = session?.scope.kind === "fleet";
@@ -169,8 +198,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       login,
       logout,
       setScope,
+      applyProfile,
     };
-  }, [session, isLoading, login, logout, setScope]);
+  }, [session, isLoading, login, logout, setScope, applyProfile]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
@@ -180,3 +210,4 @@ export function useAuth(): AuthContextValue {
   if (!ctx) throw new Error("useAuth must be used inside <AuthProvider>");
   return ctx;
 }
+

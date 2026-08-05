@@ -115,6 +115,67 @@ GRANT USAGE ON SCHEMA NOCTURNE.CONFIG
 GRANT SELECT, UPDATE ON TABLE NOCTURNE.CONFIG.MONITORED_ORGANIZATIONS
   TO ROLE IDENTIFIER($NOCTURNE_DASHBOARD_ROLE);
 
+-- =============================================================================
+-- User profiles.
+--
+-- The account directory (who may sign in, with what role and tenant) is not
+-- here — it is the demo scheme in the dashboard's mocks, and replacing it with
+-- a real identity provider is a separate job. This table holds only the
+-- presentation profile a signed-in user may edit about themselves: their
+-- display name, contact address, and job title.
+--
+-- Deliberately absent: ROLE and ORG_ID. Access level and tenant come from the
+-- session, never from a field the user can type into. A profile row can change
+-- what the sidebar renders; it can never change what the user may read.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS NOCTURNE.CONFIG.USER_PROFILES (
+  USERNAME STRING NOT NULL,
+  DISPLAY_NAME STRING,
+  EMAIL STRING,
+  POSITION STRING,
+  -- Severity bands this user wants emailed. Empty array = alerts off, which is
+  -- distinct from NULL (never configured) so a new user can inherit a default
+  -- without silently opting an existing one back in.
+  ALERT_BANDS ARRAY,
+  WEEKLY_DIGEST BOOLEAN,
+  UPDATED_AT TIMESTAMP_TZ DEFAULT CURRENT_TIMESTAMP() NOT NULL,
+  CONSTRAINT PK_USER_PROFILES PRIMARY KEY (USERNAME)
+);
+
+-- Deployments that predate alerting already have the table; add the columns.
+ALTER TABLE NOCTURNE.CONFIG.USER_PROFILES ADD COLUMN IF NOT EXISTS ALERT_BANDS ARRAY;
+ALTER TABLE NOCTURNE.CONFIG.USER_PROFILES ADD COLUMN IF NOT EXISTS WEEKLY_DIGEST BOOLEAN;
+
+-- =============================================================================
+-- Alert deliveries.
+--
+-- The exactly-once guard for breach emails. Both the pipeline and the scheduled
+-- sweep call the same dispatch endpoint, and a retry of either must not resend.
+-- The primary key is the guard: a delivery row is claimed *before* the mail is
+-- queued, so a concurrent second dispatcher collides on the key and skips.
+--
+-- Rows are the audit trail of what was actually sent to whom, and are never
+-- deleted by the console.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS NOCTURNE.CONFIG.ALERT_DELIVERIES (
+  INCIDENT_KEY STRING NOT NULL,
+  USERNAME STRING NOT NULL,
+  ORG_ID STRING NOT NULL,
+  EMAIL STRING NOT NULL,
+  SEVERITY_BAND STRING,
+  QUEUED_AT TIMESTAMP_TZ DEFAULT CURRENT_TIMESTAMP() NOT NULL,
+  CONSTRAINT PK_ALERT_DELIVERIES PRIMARY KEY (INCIDENT_KEY, USERNAME)
+);
+
+GRANT SELECT, INSERT ON TABLE NOCTURNE.CONFIG.ALERT_DELIVERIES
+  TO ROLE IDENTIFIER($NOCTURNE_DASHBOARD_ROLE);
+
+-- SELECT, INSERT and UPDATE: a profile row is created the first time someone
+-- saves, so there is nothing to seed. No DELETE — clearing a field is an
+-- UPDATE to NULL, and rows outliving a demo account are harmless.
+GRANT SELECT, INSERT, UPDATE ON TABLE NOCTURNE.CONFIG.USER_PROFILES
+  TO ROLE IDENTIFIER($NOCTURNE_DASHBOARD_ROLE);
+
 SELECT
   ORG_ID,
   CANONICAL_NAME,

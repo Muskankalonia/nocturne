@@ -20,6 +20,7 @@ import { PageHeader, Tag } from "@/components/ui/Primitives";
 import { SeverityChip } from "@/components/ui/SeverityChip";
 import { colors, fonts, layout, severityColor } from "@/theme/tokens";
 import type { MonitoredOrganizationRecord } from "@/types/dashboard";
+import type { SeverityBand } from "@/types";
 
 /**
  * The most consequential page in the product, and it looks like a boring form.
@@ -95,6 +96,109 @@ export default function SettingsPage() {
 
     return () => controller.abort();
   }, [orgId, isFleetScope, applyRecord]);
+
+
+  /* ── breach alert preferences ──────────────────────────────────────────────
+   * These live on the user's profile, not the organization: "email me on
+   * critical" is a personal preference and the address is the user's own.
+   * Each toggle saves immediately — a switch that silently needs a separate
+   * Save press is how people end up believing they are alerted when they are
+   * not. */
+  const [alertBands, setAlertBands] = useState<SeverityBand[]>([]);
+  const [weeklyDigest, setWeeklyDigest] = useState(true);
+  const [alertEmail, setAlertEmail] = useState<string | null>(null);
+  const [alertsSaving, setAlertsSaving] = useState(false);
+  const [alertError, setAlertError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch("/api/user-profile", {
+          cache: "no-store",
+          credentials: "same-origin",
+        });
+        const body = (await response.json()) as {
+          profile?: {
+            email: string | null;
+            alertBands: SeverityBand[];
+            weeklyDigest: boolean;
+            displayName: string;
+            position: string | null;
+          };
+        };
+        if (cancelled || !body.profile) return;
+        setAlertEmail(body.profile.email);
+        setAlertBands(body.profile.alertBands ?? []);
+        setWeeklyDigest(body.profile.weeklyDigest ?? true);
+      } catch {
+        // The panel renders disabled; the profile dialog is the place that
+        // surfaces a profile-loading failure.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const saveAlerts = useCallback(
+    async (bands: SeverityBand[], digest: boolean) => {
+      if (!alertEmail) return;
+      const previousBands = alertBands;
+      const previousDigest = weeklyDigest;
+      setAlertBands(bands);
+      setWeeklyDigest(digest);
+      setAlertsSaving(true);
+      setAlertError(null);
+      try {
+        // The profile PUT replaces the whole record, so the untouched identity
+        // fields have to be sent back with it.
+        const current = await fetch("/api/user-profile", {
+          cache: "no-store",
+          credentials: "same-origin",
+        }).then((r) => r.json());
+        const profile = current.profile;
+        const response = await fetch("/api/user-profile", {
+          method: "PUT",
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            displayName: profile.displayName,
+            email: profile.email,
+            position: profile.position,
+            alertBands: bands,
+            weeklyDigest: digest,
+          }),
+        });
+        const body = (await response.json()) as { error?: string };
+        if (!response.ok) {
+          throw new Error(body.error ?? "Could not save alert settings.");
+        }
+      } catch (saveError) {
+        // Put the switches back where they were, or the UI would claim a
+        // preference the warehouse never accepted.
+        setAlertBands(previousBands);
+        setWeeklyDigest(previousDigest);
+        setAlertError(
+          saveError instanceof Error ? saveError.message : "Could not save alert settings.",
+        );
+      } finally {
+        setAlertsSaving(false);
+      }
+    },
+    [alertEmail, alertBands, weeklyDigest],
+  );
+
+  const toggleBand = useCallback(
+    (band: SeverityBand, enabled: boolean) => {
+      const next = enabled
+        ? [...alertBands, band]
+        : alertBands.filter((value) => value !== band);
+      void saveAlerts(next, weeklyDigest);
+    },
+    [alertBands, weeklyDigest, saveAlerts],
+  );
 
   const dirty = useMemo(() => {
     if (!saved) return false;
@@ -337,28 +441,62 @@ export default function SettingsPage() {
             )}
           </Panel>
 
-          <Panel title="Alerts">
+          <Panel
+            title="Breach Alerts"
+            meta={alertsSaving ? "SAVING…" : alertEmail ? `TO ${alertEmail}` : "NO EMAIL SET"}
+          >
             <Stack gap={1.4}>
-              {(
-                [
-                  ["critical", true],
-                  ["high", true],
-                  ["medium", false],
-                ] as const
-              ).map(([band, on]) => (
+              {(["critical", "high", "medium", "low"] as const).map((band) => (
                 <Stack key={band} direction="row" alignItems="center" gap={1.2}>
-                  <Switch defaultChecked={on} size="small" color="secondary" />
+                  <Switch
+                    checked={alertBands.includes(band)}
+                    onChange={(event) => toggleBand(band, event.target.checked)}
+                    disabled={!alertEmail || alertsSaving}
+                    size="small"
+                    color="secondary"
+                  />
                   <Typography sx={{ fontSize: 12.5, color: colors.text2 }}>Email me on</Typography>
                   <SeverityChip band={band} />
                 </Stack>
               ))}
               <Divider sx={{ borderColor: colors.edge, my: 0.5 }} />
               <Stack direction="row" alignItems="center" gap={1.2}>
-                <Switch defaultChecked size="small" color="secondary" />
+                <Switch
+                  checked={weeklyDigest}
+                  onChange={(event) => saveAlerts(alertBands, event.target.checked)}
+                  disabled={!alertEmail || alertsSaving}
+                  size="small"
+                  color="secondary"
+                />
                 <Typography sx={{ fontSize: 12.5, color: colors.text2 }}>
                   Weekly digest of everything else
                 </Typography>
               </Stack>
+
+              {/* An alert with nowhere to go is the failure mode worth naming
+                * loudly: the switches look armed but nothing would ever send. */}
+              {!alertEmail && (
+                <Box
+                  sx={{
+                    mt: 0.5,
+                    px: 1.5,
+                    py: 1.1,
+                    border: `1px dashed ${alpha(severityColor.medium, 0.35)}`,
+                    borderRadius: `${layout.radiusSm}px`,
+                    backgroundColor: alpha(severityColor.medium, 0.05),
+                    fontSize: 11.5,
+                    color: colors.text2,
+                    lineHeight: 1.6,
+                  }}
+                >
+                  Add an email address in <b>your profile</b> to enable breach alerts.
+                </Box>
+              )}
+              {alertError && (
+                <Typography sx={{ fontSize: 11.5, color: colors.critical }}>
+                  {alertError}
+                </Typography>
+              )}
             </Stack>
           </Panel>
         </Stack>

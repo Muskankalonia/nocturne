@@ -14,9 +14,9 @@ import {
   versionDrift,
 } from "@/mocks/fleet";
 import { Panel } from "@/components/ui/Panel";
+import { DonutChart } from "@/components/ui/DonutChart";
 import { Cascade } from "@/components/ui/Cascade";
 import {
-  BarList,
   DataGapNote,
   PageHeader,
   StatCard,
@@ -184,27 +184,51 @@ export default function PipelinePage() {
           meta="WHY THEY WERE REJECTED"
           sx={{ display: "flex", flexDirection: "column", minHeight: 0 }}
         >
-          <Box sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-          <BarList
-            fill
-            data={rejectionReasons.map((r) => ({
-              label: (
-                <>
-                  {r.label}
-                  {r.reason === "unmatched_evidence" && <Tag tone="critical">hallucination</Tag>}
-                </>
-              ),
-              value: r.count,
-              color:
-                r.severity === "critical"
-                  ? severityColor.critical
-                  : r.severity === "high"
-                    ? severityColor.high
-                    : r.severity === "medium"
-                      ? severityColor.medium
-                      : severityColor.low,
-            }))}
-          />
+          <Box
+            sx={{
+              flex: 1,
+              minHeight: 0,
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "center",
+            }}
+          >
+            <DonutChart
+              // The panel stretches to the viewport, so the donut is sized to
+              // hold that space rather than float in the middle of it — the
+              // same reason the cascade opts into `fill`.
+              size={240}
+              totalLabel="QUARANTINED"
+              data={rejectionReasons.map((r) => ({
+                key: r.reason,
+                label: (
+                  <>
+                    <Box
+                      component="span"
+                      sx={{
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {r.label}
+                    </Box>
+                    {r.reason === "unmatched_evidence" && (
+                      <Tag tone="critical">hallucination</Tag>
+                    )}
+                  </>
+                ),
+                value: r.count,
+                color:
+                  r.severity === "critical"
+                    ? severityColor.critical
+                    : r.severity === "high"
+                      ? severityColor.high
+                      : r.severity === "medium"
+                        ? severityColor.medium
+                        : severityColor.low,
+              }))}
+            />
           </Box>
           <Box
             sx={{

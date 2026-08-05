@@ -333,3 +333,49 @@ export interface MonitoredOrganizationsResponse {
   organizations: MonitoredOrganizationRecord[];
   fetchedAt: string;
 }
+
+/**
+ * The self-service slice of a user's identity, from
+ * NOCTURNE.CONFIG.USER_PROFILES. Role and tenant are absent by design — they
+ * are authorization, and authorization never comes from an editable field.
+ */
+export interface UserProfileRecord {
+  username: string;
+  displayName: string | null;
+  email: string | null;
+  position: string | null;
+  /** Severity bands this user is emailed about. Empty means alerts are off. */
+  alertBands: SeverityBand[];
+  weeklyDigest: boolean;
+  updatedAt: string | null;
+}
+
+export interface UserProfileUpdate {
+  displayName: string;
+  email: string | null;
+  position: string | null;
+  alertBands: SeverityBand[];
+  weeklyDigest: boolean;
+}
+
+/** One incident that qualified for an alert, paired with its recipient. */
+export interface PendingAlert {
+  incidentKey: string;
+  orgId: string;
+  organizationName: string;
+  title: string;
+  sourceUrl: string;
+  severityBand: SeverityBand;
+  severityScore: number | null;
+  firstSeen: string | null;
+  username: string;
+  email: string;
+  displayName: string;
+}
+
+export interface AlertDispatchResult {
+  scanned: number;
+  queued: number;
+  skipped: number;
+  errors: string[];
+}
