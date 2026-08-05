@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { Box, Skeleton, Stack } from "@mui/material";
-import { scopeOrgId, useAuth } from "@/contexts/AuthContext";
-import { incidents } from "@/mocks/incidents";
+import { Box, LinearProgress, Skeleton, Stack } from "@mui/material";
+import { useAuth } from "@/contexts/AuthContext";
+import { PostureProvider, usePosture } from "@/contexts/PostureContext";
 import { colors, gradients, layout } from "@/theme/tokens";
 import { StatGridSkeleton } from "@/components/ui/Skeletons";
 import Header from "./Header";
@@ -17,25 +17,11 @@ import Sidebar from "./Sidebar";
  */
 export function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const { isAuthenticated, isLoading, session, isFleetScope } = useAuth();
+  const { isAuthenticated, isLoading } = useAuth();
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) router.replace("/login");
   }, [isLoading, isAuthenticated, router]);
-
-  const badges = useMemo(() => {
-    if (!session) return {};
-    const orgId = scopeOrgId(session.scope);
-    const scoped = orgId === null ? incidents : incidents.filter((i) => i.orgId === orgId);
-    return {
-      openCritical: scoped.filter(
-        (i) =>
-          i.impactSeverityBand === "critical" &&
-          i.remediationStatus !== "resolved" &&
-          i.remediationStatus !== "false_positive",
-      ).length,
-    };
-  }, [session, isFleetScope]);
 
   // The one place a whole-page skeleton is honest: until the session resolves we
   // do not know the role, so we cannot draw the correct navigation. Sketching
@@ -88,11 +74,52 @@ export function AppShell({ children }: { children: ReactNode }) {
     );
   }
 
+  // Everything below the gate shares one live posture read, so the rail, the
+  // switcher, global search and the page can never disagree with each other.
+  return (
+    <PostureProvider>
+      <Chrome>{children}</Chrome>
+    </PostureProvider>
+  );
+}
+
+function Chrome({ children }: { children: ReactNode }) {
+  const { openCriticalCount, isRefreshing } = usePosture();
+
   return (
     <Box sx={{ display: "flex", minHeight: "100vh" }}>
-      <Sidebar badges={badges} />
+      <Sidebar badges={{ openCritical: openCriticalCount }} />
       <Box sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
         <Header />
+
+        {/* Background refresh runs in ~1.5s and used to signal itself only by
+          * relabelling one small button, which nobody notices. A bar under the
+          * header is the standard tell. The page keeps its current data rather
+          * than collapsing to a skeleton — the old numbers are still true, and
+          * blanking them would be a worse lie than showing them a second stale.
+          * Reserving the 2px whether or not it is running keeps the content
+          * from jumping each time it fires. */}
+        <Box
+          aria-hidden={!isRefreshing}
+          sx={{
+            height: 2,
+            flexShrink: 0,
+            position: "sticky",
+            top: `${layout.headerHeight}px`,
+            zIndex: 14,
+            overflow: "hidden",
+          }}
+        >
+          {isRefreshing && (
+            <LinearProgress
+              sx={{
+                height: 2,
+                backgroundColor: "transparent",
+                "& .MuiLinearProgress-bar": { backgroundColor: colors.ion },
+              }}
+            />
+          )}
+        </Box>
         <Box
           component="main"
           sx={{

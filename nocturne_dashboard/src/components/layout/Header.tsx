@@ -13,35 +13,29 @@ import {
 } from "@mui/material";
 import { BarChart3, Building2, ChevronDown, Lock } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { usePosture } from "@/contexts/PostureContext";
 import GlobalSearch from "./GlobalSearch";
 import { colors, fonts, gradients, layout, severityColor, shadows } from "@/theme/tokens";
-import { incidents } from "@/mocks/incidents";
-import type { SeverityBand } from "@/types";
 
-export interface HeaderProps {
-  lastUpdated?: string;
-}
-
-export function Header({ lastUpdated = "04:05 PM" }: HeaderProps) {
+export function Header() {
   const { isSuperAdmin, isFleetScope, activeOrg, switchableOrgs, setScope } = useAuth();
+  const { summaryFor, organizations, isLoading } = usePosture();
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
 
-  // Per-tenant triage summary so the switcher is itself a triage list.
-  const orgSummaries = useMemo(() => {
-    return switchableOrgs.map((org) => {
-      const rows = incidents.filter(
-        (i) => i.orgId === org.orgId && i.triagePriorityScore !== null,
-      );
-      const criticals = rows.filter((i) => i.impactSeverityBand === "critical").length;
-      const top = rows.reduce(
-        (max, i) => Math.max(max, i.impactSeverityScore ?? 0),
-        0,
-      );
-      const band: SeverityBand =
-        top >= 80 ? "critical" : top >= 60 ? "high" : top >= 40 ? "medium" : "low";
-      return { org, criticals, top, band };
-    });
-  }, [switchableOrgs]);
+  // Enabled tenants per CONFIG.MONITORED_ORGANIZATIONS. Null until the first
+  // response lands, so the roster length stands in rather than a flash of "0".
+  const monitoredCount = isLoading && organizations.length === 0
+    ? null
+    : organizations.length;
+
+  // Per-tenant triage summary so the switcher is itself a triage list. The
+  // numbers come from the same live response the page renders; a tenant the
+  // current scope excludes reports `hasData: false` and shows a dash instead of
+  // a zero, which would read as "nothing wrong there".
+  const orgSummaries = useMemo(
+    () => switchableOrgs.map((org) => ({ org, ...summaryFor(org.orgId) })),
+    [switchableOrgs, summaryFor],
+  );
 
   const liveLabel = isFleetScope
     ? `${switchableOrgs.length} TENANTS LIVE`
@@ -99,17 +93,12 @@ export function Header({ lastUpdated = "04:05 PM" }: HeaderProps) {
         </Typography>
       </Stack>
 
-      <Typography
-        sx={{
-          fontFamily: fonts.mono,
-          fontSize: 10.5,
-          color: colors.text3,
-          whiteSpace: "nowrap",
-          display: { xs: "none", md: "block" },
-        }}
-      >
-        UPDATED {lastUpdated}
-      </Typography>
+      {/* There was an "UPDATED 04:05 PM" clock here. It was a hardcoded string
+        * — no caller ever passed a value — so it showed the same time on every
+        * page, for every tenant, forever, beside a pulsing "live" dot. A stale
+        * clock next to a live indicator is worse than no clock: the real
+        * pipeline timestamp is on each page's heading, sourced from
+        * VW_COMMAND_CENTER.LAST_UPDATED_AT, and that one moves. */}
 
       {/* org badge (locked) or switcher */}
       {isSuperAdmin ? (
@@ -182,13 +171,15 @@ export function Header({ lastUpdated = "04:05 PM" }: HeaderProps) {
               <Typography
                 sx={{ ml: "auto", fontFamily: fonts.mono, fontSize: 10.5, color: colors.text3 }}
               >
-                {switchableOrgs.length} orgs
+                {/* The count Snowflake actually reports as enabled, not the
+                  * length of the demo tenant roster. */}
+                {monitoredCount ?? switchableOrgs.length} orgs
               </Typography>
             </MenuItem>
 
             <Divider sx={{ my: 0.7, borderColor: colors.edge }} />
 
-            {orgSummaries.map(({ org, criticals, top, band }) => (
+            {orgSummaries.map(({ org, criticals, topScore, band, hasData }) => (
               <MenuItem
                 key={org.orgId}
                 selected={!isFleetScope && activeOrg?.orgId === org.orgId}
@@ -200,7 +191,9 @@ export function Header({ lastUpdated = "04:05 PM" }: HeaderProps) {
               >
                 <Box
                   component="span"
-                  aria-label={`${criticals} critical`}
+                  aria-label={
+                    hasData ? `${criticals} critical` : "outside the current scope"
+                  }
                   sx={{
                     fontFamily: fonts.mono,
                     fontSize: 10,
@@ -210,12 +203,16 @@ export function Header({ lastUpdated = "04:05 PM" }: HeaderProps) {
                     minWidth: 20,
                     textAlign: "center",
                     borderRadius: "4px",
-                    color: severityColor[band],
-                    backgroundColor: alpha(severityColor[band], 0.12),
-                    border: `1px solid ${alpha(severityColor[band], 0.3)}`,
+                    color: hasData ? severityColor[band] : colors.text3,
+                    backgroundColor: hasData
+                      ? alpha(severityColor[band], 0.12)
+                      : "transparent",
+                    border: `1px solid ${
+                      hasData ? alpha(severityColor[band], 0.3) : colors.edge
+                    }`,
                   }}
                 >
-                  {criticals}
+                  {hasData ? criticals : "—"}
                 </Box>
                 <Box component="span" sx={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                   {org.canonicalName}
@@ -225,10 +222,10 @@ export function Header({ lastUpdated = "04:05 PM" }: HeaderProps) {
                     ml: "auto",
                     fontFamily: fonts.mono,
                     fontSize: 10.5,
-                    color: top > 0 ? severityColor[band] : colors.text3,
+                    color: hasData && topScore > 0 ? severityColor[band] : colors.text3,
                   }}
                 >
-                  {top > 0 ? top : "—"}
+                  {hasData && topScore > 0 ? topScore : "—"}
                 </Typography>
               </MenuItem>
             ))}

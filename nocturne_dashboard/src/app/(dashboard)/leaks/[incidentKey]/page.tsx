@@ -244,9 +244,22 @@ export default function IncidentDetailPage({
           </Stack>
         </Panel>
 
-        {/* score decomposition */}
+        {/* score decomposition
+          *
+          * The radar now scales with the column instead of sitting at a fixed
+          * 210px, which roughly doubles it. It is not stretched to match the AI
+          * insight panel beside it: a radar is square, so filling a tall narrow
+          * column would either distort the plot or letterbox it behind ~290px
+          * of dead space. `alignSelf: start` ends the panel under its own
+          * content, which puts the slack in the grid where it reads as layout
+          * rather than inside a half-empty box. */}
+        {/* Right column: the radar plus the leak classes. The narrative beside
+          * it runs much taller, and a lone square radar left most of this
+          * column blank — stacking the two panels here fills it with something
+          * an analyst actually reads next, instead of stretching one panel. */}
+        <Stack gap={2} sx={{ alignSelf: "start" }}>
         <Panel title="Score decomposition" meta="8 COMPONENTS">
-          <ScoreRadar vector={incident.scoreVector} />
+          <ScoreRadar vector={incident.scoreVector} height="auto" />
           <Divider sx={{ my: 1.5, borderColor: colors.edge }} />
           <Stack direction="row" justifyContent="space-around">
             <ScoreStat label="Impact" value={incident.impactSeverityScore} color={severityColor.critical} />
@@ -258,6 +271,59 @@ export default function IncidentDetailPage({
             a probability.
           </Typography>
         </Panel>
+
+        <Panel title="Exposed data classes">
+          <Stack direction="row" gap={1} flexWrap="wrap">
+            {incident.leakTypes.map((t) => {
+              const critical = isDirectlyAbusable(t);
+              return (
+                <Box
+                  key={t}
+                  sx={{
+                    px: 1.6,
+                    py: 1.1,
+                    borderRadius: "8px",
+                    border: `1px solid ${alpha(
+                      critical ? severityColor.critical : colors.edgeHi,
+                      0.4,
+                    )}`,
+                    backgroundColor: alpha(
+                      critical ? severityColor.critical : colors.ion,
+                      0.06,
+                    ),
+                    fontSize: 12.5,
+                  }}
+                >
+                  {leakTypeLabel[t]}
+                </Box>
+              );
+            })}
+          </Stack>
+
+          {/* The red outline was carrying meaning with nothing to decode it.
+            * Colour alone never states a fact in this console — it is always
+            * paired with a label, so the key says what the ring means and is
+            * driven by the same predicate as the chips above. */}
+          <Stack
+            direction="row"
+            gap={2}
+            flexWrap="wrap"
+            alignItems="center"
+            sx={{ mt: 1.8, pt: 1.4, borderTop: `1px solid ${colors.edge}` }}
+          >
+            <LegendKey
+              color={severityColor.critical}
+              label="Critical — directly abusable"
+              detail="credentials, financial data"
+            />
+            <LegendKey
+              color={colors.ion}
+              label="Sensitive — not directly abusable"
+              detail="everything else"
+            />
+          </Stack>
+        </Panel>
+        </Stack>
       </Box>
 
       <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", lg: "1.55fr 1fr" } }}>
@@ -350,32 +416,46 @@ export default function IncidentDetailPage({
           ) : null}
         </Panel>
       </Box>
+    </Stack>
+  );
+}
 
-      <Panel title="Exposed data classes">
-        <Stack direction="row" gap={1} flexWrap="wrap">
-          {incident.leakTypes.map((t) => (
-            <Box
-              key={t}
-              sx={{
-                px: 1.6,
-                py: 1.1,
-                borderRadius: "8px",
-                border: `1px solid ${alpha(
-                  t === "credential" || t === "financial" ? severityColor.critical : colors.edgeHi,
-                  0.4,
-                )}`,
-                backgroundColor: alpha(
-                  t === "credential" || t === "financial" ? severityColor.critical : colors.ion,
-                  0.06,
-                ),
-                fontSize: 12.5,
-              }}
-            >
-              {leakTypeLabel[t]}
-            </Box>
-          ))}
-        </Stack>
-      </Panel>
+/**
+ * Leak classes an attacker can act on without any further work — the ones that
+ * turn a disclosure into an intrusion. Everything else is sensitive but needs a
+ * second step. Single source for both the chip styling and its legend.
+ */
+const DIRECTLY_ABUSABLE: ReadonlySet<string> = new Set(["credential", "financial"]);
+
+function isDirectlyAbusable(leakType: string): boolean {
+  return DIRECTLY_ABUSABLE.has(leakType);
+}
+
+function LegendKey({
+  color,
+  label,
+  detail,
+}: {
+  color: string;
+  label: string;
+  detail: string;
+}) {
+  return (
+    <Stack direction="row" alignItems="center" gap={0.8}>
+      <Box
+        sx={{
+          width: 20,
+          height: 12,
+          borderRadius: "4px",
+          flexShrink: 0,
+          border: `1px solid ${alpha(color, 0.4)}`,
+          backgroundColor: alpha(color, 0.06),
+        }}
+      />
+      <Typography sx={{ fontSize: 11, color: colors.text2 }}>
+        {label}
+        <Box component="span" sx={{ color: colors.text3 }}> · {detail}</Box>
+      </Typography>
     </Stack>
   );
 }

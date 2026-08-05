@@ -102,15 +102,29 @@ export function DataTable<T>({
       ] as ColDef<T>[])
     : (columnDefs as ColDef<T>[] | undefined);
 
+  // `height="100%"` only means anything if this wrapper has a definite height
+  // of its own. As a plain block it does not, so the percentage would silently
+  // collapse to the grid's intrinsic height. Becoming a flex column lets the
+  // caller's flex context size us, and the grid below claims what is left after
+  // the toolbar.
+  const fills = height === "100%";
+
   return (
-    <Box sx={{ minWidth: 0 }}>
+    <Box
+      sx={{
+        minWidth: 0,
+        ...(fills
+          ? { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }
+          : null),
+      }}
+    >
       {toolbar && (
         <Stack
           direction="row"
           gap={1.2}
           alignItems="center"
           flexWrap="wrap"
-          sx={{ mb: 1.5 }}
+          sx={{ mb: 1.5, flexShrink: 0 }}
         >
           <Stack
             direction="row"
@@ -228,6 +242,7 @@ export function DataTable<T>({
         className="ag-theme-quartz-dark"
         sx={{
           height,
+          ...(fills ? { flex: 1, minHeight: 0 } : null),
           width: "100%",
           // Quartz exposes its tokens as CSS variables, so we recolour rather
           // than fight the theme with selector overrides.

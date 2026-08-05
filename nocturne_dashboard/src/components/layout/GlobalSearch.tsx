@@ -4,10 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Box, InputBase, Popper, Paper, Stack, Typography, alpha } from "@mui/material";
 import { Search, X } from "lucide-react";
-import { scopeOrgId, useAuth } from "@/contexts/AuthContext";
-import { incidents } from "@/mocks/incidents";
-import { actors } from "@/mocks/actors";
-import { organizations } from "@/mocks/organizations";
+import { useAuth } from "@/contexts/AuthContext";
+import { usePosture } from "@/contexts/PostureContext";
 import { colors, fonts, layout, severityColor, shadows } from "@/theme/tokens";
 import { hostOf, routeLabel, shortHash } from "@/lib/format";
 
@@ -20,13 +18,19 @@ type Hit = {
 };
 
 /**
- * Global search across everything the session is allowed to see. An org user
- * only ever matches their own tenant's rows; the filtering happens against
- * already-scoped data, and the API applies the same scope again server-side.
+ * Global search across everything the session is allowed to see.
+ *
+ * The corpus is the live command-centre response, which the API has already
+ * scoped to the session — an org user's payload only ever contains their own
+ * tenant, so there is no client-side filter here that could be bypassed.
+ * Actors are folded out of the incident rows rather than read from a separate
+ * source, so an actor can only ever surface alongside an incident the caller
+ * is already entitled to see.
  */
 export function GlobalSearch() {
   const router = useRouter();
   const { session, isFleetScope } = useAuth();
+  const { incidents, organizations } = usePosture();
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -46,16 +50,37 @@ export function GlobalSearch() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // One row per distinct actor named in the visible incidents, with the counts
+  // rolled up. Credibility is the max rather than the mean: the strongest
+  // corroborated sighting is what an analyst is searching for.
+  const actors = useMemo(() => {
+    const rollup = new Map<
+      string,
+      { actorName: string; credibility: number; incidentCount: number; hosts: Set<string> }
+    >();
+    for (const incident of incidents) {
+      if (!incident.actorName) continue;
+      const entry = rollup.get(incident.actorName) ?? {
+        actorName: incident.actorName,
+        credibility: 0,
+        incidentCount: 0,
+        hosts: new Set<string>(),
+      };
+      entry.credibility = Math.max(entry.credibility, incident.actorCredibilityScore ?? 0);
+      entry.incidentCount += 1;
+      entry.hosts.add(hostOf(incident.topUrl));
+      rollup.set(incident.actorName, entry);
+    }
+    return [...rollup.values()];
+  }, [incidents]);
+
   const hits = useMemo<Hit[]>(() => {
     const q = query.trim().toLowerCase();
     if (q.length < 2 || !session) return [];
-    const orgId = scopeOrgId(session.scope);
-    const inScope = <T extends { orgId: string }>(rows: T[]) =>
-      orgId === null ? rows : rows.filter((r) => r.orgId === orgId);
 
     const out: Hit[] = [];
 
-    for (const i of inScope(incidents)) {
+    for (const i of incidents) {
       const haystack = [
         i.topTitle,
         i.organizationName,
@@ -80,14 +105,14 @@ export function GlobalSearch() {
       }
     }
 
-    for (const a of inScope(actors)) {
-      if (
-        [a.actorName, ...a.marketplaces, ...a.contactChannels].join(" ").toLowerCase().includes(q)
-      ) {
+    for (const a of actors) {
+      if ([a.actorName, ...a.hosts].join(" ").toLowerCase().includes(q)) {
         out.push({
           kind: "Actor",
           title: a.actorName,
-          detail: `credibility ${a.credibilityScore} · ${a.totalClaimCount} claims`,
+          detail: `credibility ${a.credibility} · ${a.incidentCount} incident${
+            a.incidentCount === 1 ? "" : "s"
+          }`,
           href: "/actors",
           accent: colors.ion,
         });
@@ -96,11 +121,11 @@ export function GlobalSearch() {
 
     if (isFleetScope) {
       for (const o of organizations) {
-        if ([o.canonicalName, o.orgId, ...o.domains, ...o.aliases].join(" ").toLowerCase().includes(q)) {
+        if ([o.organizationName, o.orgId].join(" ").toLowerCase().includes(q)) {
           out.push({
             kind: "Organization",
-            title: o.canonicalName,
-            detail: o.domains.join(", ") || o.orgId,
+            title: o.organizationName,
+            detail: `${o.metrics.incidentsByBand.critical} critical · ${o.orgId}`,
             href: "/admin/organizations",
             accent: colors.verified,
           });
@@ -109,7 +134,7 @@ export function GlobalSearch() {
     }
 
     return out.slice(0, 8);
-  }, [query, session, isFleetScope]);
+  }, [query, session, isFleetScope, incidents, actors, organizations]);
 
   useEffect(() => setActive(0), [query]);
 

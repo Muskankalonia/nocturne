@@ -15,3 +15,8 @@ snowflake.log
 __pycache__/
 *.pyc
 output/report*.txt
+
+# `scripts/render_diagrams.cjs` needs mermaid, which is installed with
+# --no-save at the repo root. The rendered PNGs are committed; the toolchain
+# that produced them is not.
+node_modules/
