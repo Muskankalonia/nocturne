@@ -1,9 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
+import NextLink from "next/link";
 import { useRouter } from "next/navigation";
 import { Box, Button, Stack, Typography, alpha } from "@mui/material";
 import { useAuth } from "@/contexts/AuthContext";
+import { usePosture } from "@/contexts/PostureContext";
 import { Panel } from "@/components/ui/Panel";
 import { Cascade } from "@/components/ui/Cascade";
 import { PostureFlow } from "@/components/ui/PostureFlow";
@@ -16,105 +18,20 @@ import {
 import { SeverityChip } from "@/components/ui/SeverityChip";
 import { colors, fonts, severityColor } from "@/theme/tokens";
 import { hostOf } from "@/lib/format";
-import type { CommandCenterResponse } from "@/types/dashboard";
-
-const configuredRefreshMs = Number(
-  process.env.NEXT_PUBLIC_DASHBOARD_REFRESH_MS ?? "300000",
-);
-const refreshIntervalMs =
-  Number.isFinite(configuredRefreshMs) && configuredRefreshMs >= 30_000
-    ? configuredRefreshMs
-    : 300_000;
 
 export default function CommandCenterPage() {
   const router = useRouter();
-  const { session, isFleetScope, activeOrg, switchableOrgs } = useAuth();
-  const [data, setData] = useState<CommandCenterResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async (signal?: AbortSignal, background = false) => {
-    if (!session) return;
-    if (background) setIsRefreshing(true);
-    const params = new URLSearchParams();
-    if (session.user.role === "SUPER_ADMIN" && session.scope.kind === "org") {
-      params.set("orgId", session.scope.orgId);
-    }
-    const url = params.size
-      ? `/api/command-center?${params.toString()}`
-      : "/api/command-center";
-
-    try {
-      const response = await fetch(url, {
-        cache: "no-store",
-        credentials: "same-origin",
-        signal,
-      });
-      const body = (await response.json()) as
-        | CommandCenterResponse
-        | { error?: string };
-      if (!response.ok || !("totals" in body)) {
-        throw new Error(
-          "error" in body && body.error
-            ? body.error
-            : "Unable to load live dashboard data.",
-        );
-      }
-      setData(body);
-      setError(null);
-    } catch (loadError) {
-      if (loadError instanceof DOMException && loadError.name === "AbortError") return;
-      setError(
-        loadError instanceof Error
-          ? loadError.message
-          : "Unable to load live dashboard data.",
-      );
-    } finally {
-      if (background) setIsRefreshing(false);
-    }
-  }, [session]);
-
-  useEffect(() => {
-    if (!session) {
-      setData(null);
-      setIsLoading(false);
-      return;
-    }
-
-    const controller = new AbortController();
-    setData(null);
-    setError(null);
-    setIsLoading(true);
-    void load(controller.signal).finally(() => {
-      if (!controller.signal.aborted) setIsLoading(false);
-    });
-
-    const refreshWhenVisible = () => {
-      if (document.visibilityState === "visible") {
-        void load(controller.signal, true);
-      }
-    };
-    const interval = window.setInterval(refreshWhenVisible, refreshIntervalMs);
-    window.addEventListener("focus", refreshWhenVisible);
-
-    return () => {
-      controller.abort();
-      window.clearInterval(interval);
-      window.removeEventListener("focus", refreshWhenVisible);
-    };
-  }, [load, session]);
-
-  const visibleData = data && session && (
-    data.scope.kind === session.scope.kind
-    && (
-      data.scope.kind === "fleet"
-      || (
-        session.scope.kind === "org"
-        && data.scope.orgId === session.scope.orgId
-      )
-    )
-  ) ? data : null;
+  const { isFleetScope, activeOrg, switchableOrgs } = useAuth();
+  // The fetch, the scope guard and the auto-refresh live in PostureContext so
+  // the sidebar badge and the tenant switcher read the same numbers this page
+  // renders, off one query rather than three.
+  const {
+    data: visibleData,
+    isLoading,
+    isRefreshing,
+    error,
+    refresh,
+  } = usePosture();
 
   const scored = visibleData?.incidents.filter(
     (incident) => incident.triagePriorityScore !== null,
@@ -203,7 +120,7 @@ export default function CommandCenterPage() {
                 {error}
               </Typography>
             )}
-            <Button size="small" onClick={() => void load(undefined, true)}>
+            <Button size="small" onClick={refresh}>
               Retry
             </Button>
           </Stack>
@@ -265,7 +182,7 @@ export default function CommandCenterPage() {
         }
         lastUpdatedAt={visibleData.lastUpdatedAt}
         isRefreshing={isRefreshing}
-        onRefresh={() => void load(undefined, true)}
+        onRefresh={refresh}
       />
 
       {error && (
@@ -367,8 +284,13 @@ export default function CommandCenterPage() {
         }}
       >
         <Panel
-          title={isFleetScope ? "Fleet cascade — all tenants" : "Detection cascade — last 24h"}
-          meta="RED = BILLED STAGE"
+          // "last 24h" was never true: every count in VW_COMMAND_CENTER is a
+          // lifetime aggregate with no time predicate, so the panel was
+          // labelling cumulative totals as a rolling day. Windowing it needs a
+          // date filter in the view — see prod_requirement.md — so until that
+          // lands the label states what the numbers actually are.
+          title={isFleetScope ? "Fleet cascade — all tenants" : "Detection cascade — cumulative"}
+          meta="RED = BILLED (AI) STAGE"
         >
           <Cascade stages={cascade} />
           <Box
@@ -491,18 +413,28 @@ export default function CommandCenterPage() {
                 </Box>
               )}
               {queue.map((row) => (
+                /* Every row here comes from VW_INCIDENTS, which is the same
+                 * view `/api/incidents/[key]` reads, so a detail page exists
+                 * for all of them — no `detailAvailable` gate is needed as it
+                 * is on the breach monitor, whose rows include pages that never
+                 * became incidents. The anchor in the first cell carries the
+                 * keyboard and open-in-new-tab affordances; the row handler is
+                 * a convenience for pointer users and stands down whenever the
+                 * click already landed on a link.
+                 *
+                 * This landed twice, independently. The other implementation
+                 * put role="link" + tabIndex + onKeyDown on the <tr> itself;
+                 * that reads as a link to a screen reader but costs the row and
+                 * cell semantics of the table, and gives up ⌘-click, middle
+                 * click and the status-bar href that a real anchor provides for
+                 * free. Its aria-label and ion-tinted hover were better than
+                 * mine and are kept below. */
                 <Box
                   component="tr"
                   key={row.incidentKey}
-                  role="link"
-                  tabIndex={0}
-                  aria-label={`Open incident ${row.insight.headline ?? row.topTitle}`}
-                  onClick={() => router.push(`/leaks/${encodeURIComponent(row.incidentKey)}`)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      router.push(`/leaks/${encodeURIComponent(row.incidentKey)}`);
-                    }
+                  onClick={(event: React.MouseEvent<HTMLTableRowElement>) => {
+                    if ((event.target as HTMLElement).closest("a")) return;
+                    router.push(`/leaks/${encodeURIComponent(row.incidentKey)}`);
                   }}
                   sx={{
                     cursor: "pointer",
@@ -510,13 +442,15 @@ export default function CommandCenterPage() {
                       row.impactSeverityBand === "critical"
                         ? `linear-gradient(90deg, ${alpha(colors.critical, 0.09)}, transparent 42%)`
                         : "none",
-                    "&:hover": {
+                    transition: "background-color 120ms ease",
+                    "&:hover": { backgroundColor: alpha(colors.ion, 0.055) },
+                    // The anchor lives in the first cell; light the whole row
+                    // when it takes focus so keyboard and pointer agree on what
+                    // is selected.
+                    "&:has(a:focus-visible)": {
                       backgroundColor: alpha(colors.ion, 0.055),
                     },
-                    "&:focus-visible": {
-                      outline: `2px solid ${alpha(colors.ion, 0.8)}`,
-                      outlineOffset: -2,
-                    },
+                    "@media (prefers-reduced-motion: reduce)": { transition: "none" },
                   }}
                 >
                   {isFleetScope && (
@@ -539,7 +473,23 @@ export default function CommandCenterPage() {
                           AI insight
                         </Box>
                       )}
-                      <Box sx={{ fontWeight: 600, fontSize: 12.5 }}>
+                      <Box
+                        component={NextLink}
+                        href={`/leaks/${encodeURIComponent(row.incidentKey)}`}
+                        aria-label={`Open incident ${row.insight.headline ?? row.topTitle}`}
+                        sx={{
+                          fontWeight: 600,
+                          fontSize: 12.5,
+                          color: "inherit",
+                          textDecoration: "none",
+                          "&:hover": { color: colors.ionBright },
+                          "&:focus-visible": {
+                            outline: `2px solid ${alpha(colors.ion, 0.7)}`,
+                            outlineOffset: 2,
+                            borderRadius: "3px",
+                          },
+                        }}
+                      >
                         {row.insight.headline ?? row.topTitle}
                       </Box>
                       {row.insight.headline && row.insight.headline !== row.topTitle && (
@@ -647,7 +597,9 @@ function PageHeading({
               textTransform: "uppercase",
             }}
           >
-            Live Snowflake · updated {formatTimestamp(lastUpdatedAt ?? null)}
+            {isRefreshing
+              ? "Querying Snowflake…"
+              : `Live Snowflake · updated ${formatTimestamp(lastUpdatedAt ?? null)}`}
           </Typography>
           <Button
             size="small"

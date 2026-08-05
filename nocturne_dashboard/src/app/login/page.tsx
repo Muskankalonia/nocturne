@@ -14,7 +14,21 @@ import {
 } from "@mui/material";
 import { Building2, Lock } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { headlineStats } from "@/lib/pipeline-stats";
+import { groundingStats, orgCascade } from "@/mocks/pipeline";
 import { colors, fonts, gradients, layout, shadows } from "@/theme/tokens";
+
+/**
+ * Poster figures, computed once at module load from the same cascade the
+ * pipeline page renders. Nothing here is fetched: the poster is pre-auth, and
+ * an unauthenticated endpoint that reports corpus size and detection rates
+ * would tell an anonymous visitor more about the estate than the sign-in screen
+ * should. See `docs`/`prod_requirement.md` for the live-data option.
+ */
+const stats = headlineStats(orgCascade, {
+  verified: groundingStats.org.verified,
+  quarantined: groundingStats.org.quarantined,
+});
 
 export default function LoginPage() {
   const router = useRouter();
@@ -67,20 +81,34 @@ export default function LoginPage() {
           ].join(","),
         }}
       >
-          <Stack direction="row" alignItems="center" gap={1.2}>
+          {/* The poster is a hero, not chrome, so the lockup is sized against
+            * the headline beneath it rather than against the nav rail. What
+            * carries across is the *ratio*: 40/28 here and 24/17 in the rail
+            * are both ~1.43, so it reads as one logo at two scales instead of
+            * two different logos. */}
+          <Stack direction="row" alignItems="center" gap={{ xs: 1.4, md: 1.8 }}>
             <Box
               component="img"
               src="/nocturne-mark.png"
               alt="Nocturne"
-              width={26}
-              height={26}
+              width={40}
+              height={40}
               sx={{
                 display: "block",
-                filter: `drop-shadow(0 0 12px ${alpha(colors.ion, 0.45)})`,
+                width: { xs: 30, md: 40 },
+                height: { xs: 30, md: 40 },
+                filter: `drop-shadow(0 0 16px ${alpha(colors.ion, 0.45)})`,
               }}
             />
-            <Typography sx={{ fontWeight: 600, fontSize: 14, letterSpacing: "0.02em" }}>
-              NOCTURNE{" "}
+            <Typography
+              sx={{
+                fontWeight: 700,
+                fontSize: { xs: 21, md: 28 },
+                letterSpacing: "0.06em",
+                lineHeight: 1,
+              }}
+            >
+              NOCTURNE
             </Typography>
           </Stack>
 
@@ -110,15 +138,16 @@ export default function LoginPage() {
               }}
             >
               Dark-web breach intelligence with verbatim evidence, deterministic ownership
-              resolution, and a cost cascade that sends only 6.7% of pages to an expensive model.
+              resolution, and a cost cascade that sends only {stats.expensiveModelPct}% of
+              collected pages to an expensive model.
             </Typography>
           </Box>
 
           <Stack direction="row" gap={{ xs: 3.5, md: 5 }} flexWrap="wrap">
             {[
-              { n: "94.2%", l: "Grounded", c: colors.verified },
-              { n: "6.7%", l: "To expensive AI", c: colors.ion },
-              { n: "5", l: "Layers", c: colors.text1 },
+              { n: `${stats.groundedPct}%`, l: "Claims grounded", c: colors.verified },
+              { n: `${stats.expensiveModelPct}%`, l: "Pages to expensive AI", c: colors.ion },
+              { n: String(stats.layerCount), l: "Cascade layers", c: colors.text1 },
             ].map((s) => (
               <Box key={s.l}>
                 <Typography sx={{ fontFamily: fonts.mono, fontSize: 21, fontWeight: 600, color: s.c }}>

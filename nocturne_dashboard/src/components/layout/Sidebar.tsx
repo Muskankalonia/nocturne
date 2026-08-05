@@ -30,6 +30,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { usePosture } from "@/contexts/PostureContext";
 import { navigationForRole, sectionLabels, sectionOrder } from "@/config/navigation";
 import { colors, fonts, gradients, layout } from "@/theme/tokens";
 import type { NavChild, NavItem, NavSection } from "@/types";
@@ -59,6 +60,12 @@ export function Sidebar({ badges }: SidebarProps) {
   const router = useRouter();
   const { isSuperAdmin, session, logout, isFleetScope, activeOrg, switchableOrgs } =
     useAuth();
+  const { organizations, isLoading: postureLoading } = usePosture();
+
+  // Enabled tenants per Snowflake, not the length of the demo roster.
+  const monitoredCount = postureLoading && organizations.length === 0
+    ? null
+    : organizations.length;
 
   // Opening the rail pins it. Nothing closes it except the toggle — a rail that
   // recollapses the moment the pointer leaves is infuriating when you are
@@ -248,8 +255,16 @@ export function Sidebar({ badges }: SidebarProps) {
         </Box>
         {expanded && (
           <>
+            {/* The wordmark has to out-measure the nav labels beneath it, not
+              * merely tick over them. At 13.5px/600 its ink was 11px tall and
+              * 77px wide against "Command Center" at 9px tall and 104px wide —
+              * the brand read as the *smallest* text in the rail because the
+              * eye takes horizontal extent for size in a vertical stack. 17px
+              * /700 puts it at roughly 14px by 105px: taller and wider than any
+              * label, and in proportion to the 24px mark beside it. All-caps
+              * needs the looser tracking to stop the extra weight closing up. */}
             <Typography
-              sx={{ fontWeight: 600, fontSize: 13.5, letterSpacing: "0.02em", whiteSpace: "nowrap" }}
+              sx={{ fontWeight: 700, fontSize: 17, letterSpacing: "0.06em", whiteSpace: "nowrap" }}
             >
               NOCTURNE
             </Typography>
@@ -294,7 +309,7 @@ export function Sidebar({ badges }: SidebarProps) {
           </Typography>
           <Typography sx={{ fontSize: 12, mt: 0.2, whiteSpace: "nowrap" }}>
             {isFleetScope
-              ? `All Organizations · ${switchableOrgs.length}`
+              ? `All Organizations · ${monitoredCount ?? switchableOrgs.length}`
               : activeOrg?.canonicalName}
           </Typography>
         </Box>
