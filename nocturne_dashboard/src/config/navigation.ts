@@ -65,16 +65,14 @@ export const navigation: NavItem[] = [
     ],
   },
   {
-    // A second child, "Actor Network" → /graph?view=actors, used to sit here.
-    // The graph page never read `view`, so both links rendered the identical
-    // page. An actor-centred graph is a different query — alias across
-    // incidents, venue and channel reuse — and needs an actor-scoped view
-    // before it can exist. The actor story lives on /actors until then.
     id: "graph",
     label: "Knowledge Graph",
     icon: "Share2",
     section: "intel",
-    href: "/graph",
+    children: [
+      { label: "Incident Graph", href: "/graph" },
+      { label: "Actor Network", href: "/graph?view=actors" },
+    ],
   },
   {
     id: "actors",
