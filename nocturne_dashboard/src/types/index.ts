@@ -391,13 +391,23 @@ export interface ThreatActor {
 
   totalClaimCount: number;
   corroboratedClaimCount: number;
+  selfEvidencedClaimCount?: number;
   disputedClaimCount: number;
   docCount: number;
   sightingCount: number;
   mirrorSightingCount: number;
   marketplaceCount: number;
+  /** Exact contact identifiers stay server-side; only this count is exposed. */
+  contactChannelCount?: number;
 
+  /** Evidence-support score. This is neither probability nor threat severity. */
   credibilityScore: number;
+  corroborationComponent?: number;
+  selfEvidenceComponent?: number;
+  independentHistoryComponent?: number;
+  claimHistoryComponent?: number;
+  disputePenalty?: number;
+  credibilityMethodVersion?: string;
   firstSeen: string;
   lastSeen: string;
 
