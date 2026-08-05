@@ -24,7 +24,7 @@ const FAN_X = 352; // where source strands begin
 const MERGE_X = 548; // where they converge
 const MID_Y = 268;
 
-const ALERT_X = 632; // "relevant pages" node
+const ALERT_X = 632; // "checked for relevance" node
 const CORE_X = 830; // orbital core centre
 const CORE_R = 118;
 const INC_X = 1010; // "incidents" node
@@ -124,7 +124,7 @@ export function PostureFlow({
       preserveAspectRatio="xMidYMid meet"
       role="img"
       aria-label={
-        `${collected.toLocaleString()} pages collected, ${relevant.toLocaleString()} screened as relevant, ` +
+        `${collected.toLocaleString()} pages collected, ${relevant.toLocaleString()} checked for relevance, ` +
         `${deepAnalysis} sent to deep analysis, ${incidents} incidents raised, ` +
         `${confirmed} confirmed and ${needsReview} not confirmed; of the confirmed, ${resolved} resolved and ${open} still open.`
       }
@@ -298,9 +298,18 @@ export function PostureFlow({
         x={ALERT_X}
         y={MID_Y}
         value={relevant.toLocaleString()}
-        label="RELEVANT PAGES"
+        label={
+          <>
+            <tspan x={ALERT_X} dy="0">
+              CHECKED
+            </tspan>
+            <tspan x={ALERT_X} dy="13">
+              FOR RELEVANCE
+            </tspan>
+          </>
+        }
         color={colors.text1}
-        anchor="start"
+        anchor="middle"
       />
 
       {/* ── the cascade core ───────────────────────────────────────────────── */}
@@ -464,7 +473,7 @@ function FlowStat({
   x: number;
   y: number;
   value: string;
-  label: string;
+  label: React.ReactNode;
   color: string;
   anchor: "start" | "middle" | "end";
   big?: boolean;

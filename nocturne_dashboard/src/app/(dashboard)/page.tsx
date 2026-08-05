@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Box, Button, Stack, Typography, alpha } from "@mui/material";
 import { useAuth } from "@/contexts/AuthContext";
 import { Panel } from "@/components/ui/Panel";
@@ -26,6 +27,7 @@ const refreshIntervalMs =
     : 300_000;
 
 export default function CommandCenterPage() {
+  const router = useRouter();
   const { session, isFleetScope, activeOrg, switchableOrgs } = useAuth();
   const [data, setData] = useState<CommandCenterResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -492,11 +494,29 @@ export default function CommandCenterPage() {
                 <Box
                   component="tr"
                   key={row.incidentKey}
+                  role="link"
+                  tabIndex={0}
+                  aria-label={`Open incident ${row.insight.headline ?? row.topTitle}`}
+                  onClick={() => router.push(`/leaks/${encodeURIComponent(row.incidentKey)}`)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      router.push(`/leaks/${encodeURIComponent(row.incidentKey)}`);
+                    }
+                  }}
                   sx={{
+                    cursor: "pointer",
                     background:
                       row.impactSeverityBand === "critical"
                         ? `linear-gradient(90deg, ${alpha(colors.critical, 0.09)}, transparent 42%)`
                         : "none",
+                    "&:hover": {
+                      backgroundColor: alpha(colors.ion, 0.055),
+                    },
+                    "&:focus-visible": {
+                      outline: `2px solid ${alpha(colors.ion, 0.8)}`,
+                      outlineOffset: -2,
+                    },
                   }}
                 >
                   {isFleetScope && (
