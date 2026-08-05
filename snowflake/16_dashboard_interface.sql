@@ -316,6 +316,8 @@ CREATE OR REPLACE VIEW NOCTURNE.DASHBOARD.VW_INCIDENT_GRAPH_EDGES AS
 -- A target-confirmed document can briefly exist before leak-type classification
 -- and L4 finish. PENDING_CONFIRMED keeps it visible without fabricating scores;
 -- it is replaced by the incident-level row once VW_INCIDENTS contains it.
+-- Final-stage incidents with evidence confidence below 50 stay visible with
+-- their detail page, but route to Needs Review instead of Confirmed Breach.
 CREATE OR REPLACE VIEW NOCTURNE.DASHBOARD.VW_BREACH_MONITOR AS
   WITH CONFIRMED_INCIDENTS AS (
     SELECT
@@ -331,8 +333,16 @@ CREATE OR REPLACE VIEW NOCTURNE.DASHBOARD.VW_BREACH_MONITOR AS
       INCIDENT.TOP_URL AS URL,
       INCIDENT.SOURCE,
       INCIDENT.FIRST_SEEN AS DISCOVERED_AT,
-      'confirmed_yours' AS MONITOR_STATUS,
-      'incident_ready' AS PIPELINE_STATE,
+      IFF(
+        COALESCE(INCIDENT.EVIDENCE_CONFIDENCE_SCORE, 0) < 50,
+        'needs_review',
+        'confirmed_yours'
+      ) AS MONITOR_STATUS,
+      IFF(
+        COALESCE(INCIDENT.EVIDENCE_CONFIDENCE_SCORE, 0) < 50,
+        'incident_ready_low_confidence',
+        'incident_ready'
+      ) AS PIPELINE_STATE,
       'success' AS RELATIONSHIP_AI_STATUS,
       INCIDENT.RELATIONSHIP_LABEL,
       INCIDENT.L2_ROUTE,
