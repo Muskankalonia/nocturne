@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { organizations, users } from "@/mocks/organizations";
+import { cachedQuery, scopeKey } from "@/server/query-cache";
 import { nocturneBackend } from "@/server/nocturne-backend";
 import {
   SESSION_COOKIE_NAME,
@@ -81,9 +82,13 @@ export async function GET(request: Request) {
   }
 
   try {
-    const data = await nocturneBackend.getBreachMonitor(scope, {
-      includeExternalContext: user.role === "SUPER_ADMIN",
-    });
+    // The external-context flag changes the payload, so it belongs in the key —
+    // otherwise a tenant could be served a super-admin's richer result.
+    const includeExternalContext = user.role === "SUPER_ADMIN";
+    const data = await cachedQuery(
+      `breach-monitor:${scopeKey(scope)}:ext=${includeExternalContext}`,
+      () => nocturneBackend.getBreachMonitor(scope, { includeExternalContext }),
+    );
     return NextResponse.json(data, { headers: RESPONSE_HEADERS });
   } catch (error) {
     console.error(

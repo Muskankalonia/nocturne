@@ -125,6 +125,18 @@ else
   echo "  IP allowlist: $ALLOWED_IPS"
 fi
 
+# Carry the warm-instance setting across deploys. The Cloud Run deploy passes
+# --min-instances explicitly, so leaving this unset would reset a warm service
+# to zero on the next run and quietly bring back the cold start it was set to
+# avoid.
+if [[ -z "${MIN_INSTANCES+x}" ]]; then
+  MIN_INSTANCES="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" \
+    --region "$REGION" --format='value(spec.template.metadata.annotations["autoscaling.knative.dev/minScale"])' \
+    2>/dev/null || true)"
+fi
+MIN_INSTANCES="${MIN_INSTANCES:-0}"
+echo "  min instances: $MIN_INSTANCES$([[ "$MIN_INSTANCES" == "0" ]] && echo '  (cold starts on first visit; set MIN_INSTANCES=1 for a demo)' || echo '  (warm — this bills)')"
+
 # Firebase rewrites the Host header to the Cloud Run hostname, so both the
 # run.app names and the web.app names have to be accepted here.
 ALLOWED_HOSTS="${ALLOWED_HOSTS:-}"
@@ -135,7 +147,7 @@ bold "[4/6] deploying to Cloud Run (Cloud Build compiles remotely, ~3-5 min)"
 # PROXY_HOPS=1 because Firebase Hosting sits in front and appends itself to
 # X-Forwarded-For. It also blocks direct run.app access as a side effect: a
 # request that did not come through Firebase has nothing left after the strip.
-PROXY_HOPS=1 \
+PROXY_HOPS=1 MIN_INSTANCES="$MIN_INSTANCES" \
 PROJECT_ID="$PROJECT_ID" REGION="$REGION" SERVICE="$SERVICE" ENV_FILE="$ENV_FILE" \
 ALLOWED_IPS="$ALLOWED_IPS" ALLOWED_HOSTS="$ALLOWED_HOSTS" \
   ./scripts/deploy_cloudrun.sh
@@ -183,6 +195,24 @@ direct="$(curl -s -o /dev/null -w '%{http_code}' --max-time 45 "${RUN_URL}/login
 [[ "$direct" == "403" ]] \
   && echo "  direct ${RUN_HOST} -> 403 (correctly refused)" \
   || warn "  direct ${RUN_HOST} -> $direct (expected 403)"
+
+# A fresh revision starts with an empty query cache, so whoever loads the
+# console first would pay the full Snowflake round trip and watch the loading
+# skeletons. Prime it here instead, using the demo account.
+if [[ "$code" == "200" ]]; then
+  SUFFIX="$(read_env NOCTURNE_DEMO_PASSWORD_SUFFIX)"
+  JAR="$(mktemp)"
+  if curl -s -c "$JAR" -X POST "https://${SITE}.web.app/api/auth/session" \
+       -H 'content-type: application/json' \
+       -d "{\"username\":\"admin\",\"password\":\"admin${SUFFIX}\"}" \
+       -o /dev/null --max-time 60; then
+    for ep in command-center breach-monitor; do
+      curl -s -b "$JAR" -o /dev/null --max-time 120 "https://${SITE}.web.app/api/$ep" || true
+    done
+    echo "  query cache primed"
+  fi
+  rm -f "$JAR"
+fi
 
 echo
 if [[ "$fail" == "0" ]]; then

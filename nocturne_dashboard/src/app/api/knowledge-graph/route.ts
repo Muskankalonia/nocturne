@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { organizations, users } from "@/mocks/organizations";
+import { cachedQuery, scopeKey } from "@/server/query-cache";
 import { nocturneBackend } from "@/server/nocturne-backend";
 import {
   SESSION_COOKIE_NAME,
@@ -102,10 +103,11 @@ export async function GET(request: Request) {
   }
 
   try {
-    const graph = await nocturneBackend.getKnowledgeGraph(
-      scope,
-      view,
-      view === "incident" ? requestedIncidentKey ?? undefined : undefined,
+    const incidentKey =
+      view === "incident" ? requestedIncidentKey ?? undefined : undefined;
+    const graph = await cachedQuery(
+      `knowledge-graph:${scopeKey(scope)}:${view}:${incidentKey ?? "-"}`,
+      () => nocturneBackend.getKnowledgeGraph(scope, view, incidentKey),
     );
     if (!graph) {
       return NextResponse.json(

@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { organizations, users } from "@/mocks/organizations";
+import { cachedQuery, scopeKey } from "@/server/query-cache";
 import { nocturneBackend } from "@/server/nocturne-backend";
 import {
   SESSION_COOKIE_NAME,
@@ -72,7 +73,9 @@ export async function GET(request: Request) {
   }
 
   try {
-    const data = await nocturneBackend.getCommandCenter(scope);
+    const data = await cachedQuery(`command-center:${scopeKey(scope)}`, () =>
+      nocturneBackend.getCommandCenter(scope),
+    );
     if (scope.kind === "org" && data.organizations.length === 0) {
       return NextResponse.json(
         { error: "No enabled dashboard organization was found for this scope." },

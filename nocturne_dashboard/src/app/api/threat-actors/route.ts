@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { organizations, users } from "@/mocks/organizations";
+import { cachedQuery, scopeKey } from "@/server/query-cache";
 import { nocturneBackend } from "@/server/nocturne-backend";
 import {
   SESSION_COOKIE_NAME,
@@ -79,7 +80,9 @@ export async function GET(request: Request) {
   }
 
   try {
-    const data = await nocturneBackend.getThreatActors(scope);
+    const data = await cachedQuery(`threat-actors:${scopeKey(scope)}`, () =>
+      nocturneBackend.getThreatActors(scope),
+    );
     return NextResponse.json(data, { headers: RESPONSE_HEADERS });
   } catch (error) {
     console.error(
