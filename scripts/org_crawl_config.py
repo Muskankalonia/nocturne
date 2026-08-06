@@ -8,10 +8,10 @@ writes to NOCTURNE.CONFIG.MONITORED_ORGANIZATIONS and prints the environment a
 crawl should run with, so what an analyst types in the UI is what gets searched.
 
     # inspect
-    python scripts/org_crawl_config.py --org-id palo_alto_networks
+    python scripts/org_crawl_config.py --org-id odido
 
     # run a crawl with it
-    set -a && eval "$(python scripts/org_crawl_config.py --org-id att)" && set +a
+    set -a && eval "$(python scripts/org_crawl_config.py --org-id european_commission)" && set +a
     python -m nocturne_crawler.scraper
 
 Credentials come from the same environment variables deploy_pipeline.py uses.
@@ -153,7 +153,7 @@ def build_keywords(row: dict) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--org-id", required=True, help="lowercase slug, e.g. palo_alto_networks")
+    parser.add_argument("--org-id", required=True, help="lowercase slug, e.g. odido")
     parser.add_argument(
         "--format",
         choices=("env", "json"),

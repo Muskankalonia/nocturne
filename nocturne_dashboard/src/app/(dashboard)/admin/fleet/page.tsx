@@ -31,7 +31,7 @@ export default function FleetCommandPage() {
 
   return (
     <AdminOnly>
-      <Stack gap={2}>
+      <Stack gap={2} sx={{ minHeight: "calc(100vh - 132px)", pb: 3 }}>
         <PageHeader
           title="Fleet Command"
           subtitle="Every tenant ranked by risk. The unit here is the organization, not the incident."
@@ -61,8 +61,12 @@ export default function FleetCommandPage() {
           />
         </StatGrid>
 
-        <Panel title="Tenant risk leaderboard" meta="RANKED BY TOP TRIAGE PRIORITY">
-          <Box sx={{ overflowX: "auto" }}>
+        <Panel
+          title="Tenant risk leaderboard"
+          meta="RANKED BY TOP TRIAGE PRIORITY"
+          sx={{ flex: "1 1 0", minHeight: 0, display: "flex", flexDirection: "column" }}
+        >
+          <Box sx={{ overflow: "auto", flex: 1, minHeight: 0 }}>
             <Box component="table" sx={{ width: "100%", borderCollapse: "collapse", minWidth: 860 }}>
               <Box component="thead">
                 <Box component="tr">
@@ -155,8 +159,12 @@ export default function FleetCommandPage() {
           </Typography>
         </Panel>
 
-        <Panel title="Exposure by data class" meta="TENANT × TYPE">
-          <Box sx={{ overflowX: "auto" }}>
+        <Panel
+          title="Exposure by data class"
+          meta="TENANT × TYPE"
+          sx={{ flex: "1 1 0", minHeight: 0, display: "flex", flexDirection: "column" }}
+        >
+          <Box sx={{ overflow: "auto", flex: 1, minHeight: 0 }}>
             {/* `width: 100%` matters: without it the table sizes to its content
                 and leaves the right half of the panel empty. */}
             <Box component="table" sx={{ width: "100%", borderCollapse: "collapse", minWidth: 520 }}>

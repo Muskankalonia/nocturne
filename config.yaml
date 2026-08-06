@@ -21,13 +21,13 @@ interstitial_wait: 300
 interstitial_poll: 15
 fetch_attempts: 2
 
-query: "palo alto networks"
+query: "odido"
 
 # Stable identifier carried with every crawled page from GCS through Snowflake.
 # Keep the organization profile (name, aliases, domains, and products) in
 # Snowflake; the crawler only needs this lowercase slug.
 organization:
-  org_id: palo_alto_networks
+  org_id: odido
 
 # Only save pages containing at least one of these keywords
 keywords:

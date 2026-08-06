@@ -19,6 +19,7 @@ const RESPONSE_HEADERS = {
   Vary: "Cookie",
 };
 const ORG_ID_PATTERN = /^[a-z0-9]+(?:_[a-z0-9]+)*$/;
+const MAX_FLEET_SELECTION = 50;
 
 function invalidSessionResponse() {
   const response = NextResponse.json(
@@ -81,13 +82,30 @@ export async function GET(request: Request) {
     scope = { kind: "org", orgId: requestedOrgId };
   }
 
+  // Fleet subset selection: subtractive only, and ignored outside fleet scope.
+  let include: ReadonlySet<string> | undefined;
+  if (scope.kind === "fleet") {
+    const raw = new URL(request.url).searchParams.get("orgIds");
+    if (raw !== null) {
+      const ids = raw.split(",").map((id) => id.trim()).filter(Boolean);
+      if (ids.length > MAX_FLEET_SELECTION || ids.some((id) => !ORG_ID_PATTERN.test(id))) {
+        return NextResponse.json(
+          { error: "The requested organization selection is invalid." },
+          { status: 400, headers: RESPONSE_HEADERS },
+        );
+      }
+      include = new Set(ids);
+    }
+  }
+  const selectionKey = include ? [...include].sort().join("+") : "default";
+
   try {
     // The external-context flag changes the payload, so it belongs in the key —
     // otherwise a tenant could be served a super-admin's richer result.
     const includeExternalContext = user.role === "SUPER_ADMIN";
     const data = await cachedQuery(
-      `breach-monitor:${scopeKey(scope)}:ext=${includeExternalContext}`,
-      () => nocturneBackend.getBreachMonitor(scope, { includeExternalContext }),
+      `breach-monitor:${scopeKey(scope)}:ext=${includeExternalContext}:sel=${selectionKey}`,
+      () => nocturneBackend.getBreachMonitor(scope, { includeExternalContext }, include),
     );
     return NextResponse.json(data, { headers: RESPONSE_HEADERS });
   } catch (error) {

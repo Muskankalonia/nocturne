@@ -58,6 +58,32 @@ function phaseOf(firstSeen: string, cutoff: string | null | undefined): Phase {
   return firstSeen < cutoff ? "discovered" : "unknown";
 }
 
+/**
+ * G6 throws "Node already exists" on a duplicate id and the whole canvas fails
+ * to mount — one repeated key takes the entire graph down rather than degrading
+ * it. The warehouse view has produced such a duplicate, so dedupe here as well:
+ * a graph that drops one redundant node is strictly better than a blank panel.
+ * Edges are filtered to surviving endpoints for the same reason.
+ */
+function dedupeGraph(payload: GraphPayload): GraphPayload {
+  const seenNodes = new Set<string>();
+  const nodes = payload.nodes.filter((n) => {
+    if (seenNodes.has(n.nodeKey)) return false;
+    seenNodes.add(n.nodeKey);
+    return true;
+  });
+
+  const seenEdges = new Set<string>();
+  const edges = payload.edges.filter((e) => {
+    if (seenEdges.has(e.graphEdgeKey)) return false;
+    if (!seenNodes.has(e.sourceKey) || !seenNodes.has(e.targetKey)) return false;
+    seenEdges.add(e.graphEdgeKey);
+    return true;
+  });
+
+  return { ...payload, nodes, edges };
+}
+
 function nodeStyle(node: GraphNode, phase: Phase) {
   const base = nodeColor[node.nodeType] ?? colors.informational;
   const size = node.isMonitoredOrg
@@ -92,7 +118,7 @@ function nodeStyle(node: GraphNode, phase: Phase) {
     lineDash: 0,
     opacity: 1,
     cursor: "pointer" as const,
-    labelText: compactNodeLabel(node.displayName),
+    labelText: compactNodeLabel(node.displayName, node.nodeType === "claim" ? 22 : 32),
     labelFill: phase === "arriving" ? colors.text1 : colors.text2,
     labelFontSize: 11,
     labelFontFamily: fonts.mono,
@@ -196,19 +222,25 @@ export function KnowledgeGraph({
       containerRef.current.replaceChildren();
 
       const cutoff = cutoffRef.current;
+      const safe = dedupeGraph(payload);
 
       instance = new Graph({
         container: containerRef.current,
-        autoFit: "view",
+        // Not `autoFit: "view"`: that scales the drawing to fill the canvas,
+        // which on a sparse graph magnifies a 36px node into a 150px blob and
+        // stacks the labels. Fit manually below and never zoom past 1:1, so
+        // nodes keep the size they were designed at and only shrink when the
+        // component genuinely does not fit.
+        autoFit: undefined,
         // The container is now a flex child that changes size with the viewport.
         autoResize: true,
         data: {
-          nodes: payload.nodes.map((n) => ({
+          nodes: safe.nodes.map((n) => ({
             id: n.nodeKey,
             data: { ...n },
             style: nodeStyle(n, phaseOf(n.firstSeen, cutoff)),
           })),
-          edges: payload.edges.map((e) => ({
+          edges: safe.edges.map((e) => ({
             id: e.graphEdgeKey,
             source: e.sourceKey,
             target: e.targetKey,
@@ -222,7 +254,18 @@ export function KnowledgeGraph({
               // is tall, and a tight dagre graph fits to height and leaves half
               // the canvas empty.
               { type: "antv-dagre", rankdir: "LR", nodesep: 36, ranksep: 220 }
-            : { type: "force", preventOverlap: true, nodeSize: 60, linkDistance: 150 },
+            : {
+                // d3-force rather than G6's "force": its parameters are the
+                // d3 ones and actually take effect at this scale. The actors
+                // view is the dense case — ~19 nodes, most of them claims
+                // carrying a sentence — so charge and link distance are set far
+                // beyond the defaults to stop the labels overlapping.
+                type: "d3-force",
+                link: { distance: 220, strength: 0.4 },
+                manyBody: { strength: -1400 },
+                collide: { radius: 90, strength: 1 },
+                center: { strength: 0.06 },
+              },
         behaviors: ["zoom-canvas", "drag-canvas", "drag-element", "click-select", "hover-activate"],
       });
 
@@ -255,6 +298,13 @@ export function KnowledgeGraph({
       });
 
       await instance.render();
+
+      try {
+        await instance.fitView();
+        if (instance.getZoom() > 1) await instance.zoomTo(1);
+      } catch {
+        /* fitView is best-effort; a rendered graph at default zoom still works */
+      }
 
       // The effect may have been torn down while render() was in flight.
       if (cancelled) {

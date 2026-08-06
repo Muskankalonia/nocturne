@@ -87,6 +87,19 @@ export interface PostureFlowProps {
   groundingRate: number;
 }
 
+/**
+ * Onion hosts are 56 characters before the TLD, which right-anchored runs
+ * straight off the left edge of the viewBox. Keep the distinctive head and the
+ * .onion suffix — the suffix is what tells an analyst where this came from —
+ * and hang the full value off a <title> for hover.
+ */
+function shortHost(label: string, max = 26): string {
+  if (label.length <= max) return label;
+  const suffix = label.endsWith(".onion") ? ".onion" : "";
+  const head = label.slice(0, Math.max(4, max - suffix.length - 1));
+  return `${head}\u2026${suffix}`;
+}
+
 export function PostureFlow({
   sources,
   extraSourceCount,
@@ -230,7 +243,8 @@ export function PostureFlow({
                 fontSize={12.5}
                 fontFamily={fonts.mono}
               >
-                {s.label}
+                <title>{s.label}</title>
+                {shortHost(s.label)}
               </text>
             </g>
           );

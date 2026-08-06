@@ -4,6 +4,19 @@ import snowflake, {
   type ConnectionOptions,
 } from "snowflake-sdk";
 
+import { organizations as consoleTenants } from "@/mocks/organizations";
+import {
+  getDemoBreachMonitor,
+  getDemoCommandCenter,
+  getDemoIncidentDetail,
+  getDemoKnowledgeGraph,
+  getDemoPipeline,
+  getDemoMonitoredOrganization,
+  getDemoThreatActors,
+  isDemoScope,
+  DEMO_ORG_ID,
+} from "@/server/demo-backend";
+
 import type {
   AiStatus,
   AiStage,
@@ -90,10 +103,19 @@ interface BackendConfig {
 }
 
 export interface NocturneBackend {
-  getCommandCenter(scope: DataScope): Promise<CommandCenterResponse>;
+  /**
+   * `include` narrows a fleet request to a chosen subset of tenants. It is a
+   * view preference, not an access control: it can only ever remove rows the
+   * caller was already permitted to see, and org-scoped requests ignore it.
+   */
+  getCommandCenter(
+    scope: DataScope,
+    include?: ReadonlySet<string>,
+  ): Promise<CommandCenterResponse>;
   getBreachMonitor(
     scope: DataScope,
     access?: BreachMonitorAccess,
+    include?: ReadonlySet<string>,
   ): Promise<BreachMonitorResponse>;
   getIncidentDetail(
     scope: DataScope,
@@ -1740,7 +1762,126 @@ export class SnowflakeNocturneBackend implements NocturneBackend {
   }
 }
 
-export const nocturneBackend: NocturneBackend = new SnowflakeNocturneBackend();
+const snowflakeBackend: NocturneBackend = new SnowflakeNocturneBackend();
+
+/**
+ * Tenants this console is configured for.
+ *
+ * MONITORED_ORGANIZATIONS accumulates rows from earlier crawls and experiments,
+ * and VW_INCIDENTS joins it unconditionally — so a retired target keeps
+ * appearing in fleet views with all of its historical incidents. Filtering to
+ * the console's own registry hides them without deleting warehouse data, which
+ * would take the incident history with it. Onboarding a tenant means adding it
+ * to src/mocks/organizations.ts, the same place its login comes from.
+ */
+const CONSOLE_TENANT_IDS = new Set(consoleTenants.map((tenant) => tenant.orgId));
+
+function isConsoleTenant(row: { orgId: string }): boolean {
+  return CONSOLE_TENANT_IDS.has(row.orgId);
+}
+
+/**
+ * Fleet response with retired tenants removed and the demo tenant folded in.
+ *
+ * Totals and the cascade are recomputed from the surviving rows rather than
+ * carried over, so the header cannot disagree with the table beneath it.
+ */
+async function fleetCommandCenter(
+  scope: DataScope,
+  include?: ReadonlySet<string>,
+): Promise<CommandCenterResponse> {
+  const live = await snowflakeBackend.getCommandCenter(scope);
+  const demo = getDemoCommandCenter();
+
+  // The demo tenant's figures are fabricated, so it is opt-in: leaving it in
+  // by default would put invented incidents into the fleet totals a reviewer
+  // reads as real.
+  const selected = (row: { orgId: string }) =>
+    include ? include.has(row.orgId) : row.orgId !== DEMO_ORG_ID;
+
+  const organizations = [
+    ...live.organizations.filter(isConsoleTenant),
+    ...demo.organizations,
+  ].filter(selected);
+  const incidents = [...live.incidents.filter(isConsoleTenant), ...demo.incidents]
+    .filter(selected)
+    .sort((a, b) => (b.triagePriorityScore ?? -1) - (a.triagePriorityScore ?? -1));
+  const totals = aggregateMetrics(organizations, incidents);
+
+  return {
+    ...live,
+    organizations,
+    totals,
+    cascade: buildCascade(totals),
+    incidents,
+  };
+}
+
+
+
+/**
+ * One dispatch point for the synthetic demo tenant.
+ *
+ * Routing here rather than in each API route means a new route cannot forget
+ * the check, and — more importantly — cannot accidentally apply it too widely:
+ * `isDemoScope` is true only for an org-scoped request against DEMO_ORG_ID, so
+ * fleet scope and every real tenant still reach Snowflake. See demo-backend.ts.
+ */
+export const nocturneBackend: NocturneBackend = {
+  getCommandCenter(scope, include) {
+    if (isDemoScope(scope)) return Promise.resolve(getDemoCommandCenter());
+    if (scope.kind === "fleet") return fleetCommandCenter(scope, include);
+    return snowflakeBackend.getCommandCenter(scope);
+  },
+  async getBreachMonitor(scope, access, include) {
+    if (isDemoScope(scope)) return getDemoBreachMonitor();
+    const live = await snowflakeBackend.getBreachMonitor(scope, access);
+    if (scope.kind !== "fleet") return live;
+
+    // Same rule as the command centre: honour an explicit selection, and leave
+    // the fabricated demo tenant out when there is none.
+    const selected = (row: { orgId: string }) =>
+      include ? include.has(row.orgId) : row.orgId !== DEMO_ORG_ID;
+
+    const demo = getDemoBreachMonitor();
+    const rows = [...live.rows.filter(isConsoleTenant), ...demo.rows].filter(selected);
+    const confirmed = rows.filter((row) => row.monitorStatus === "confirmed_yours");
+    return {
+      ...live,
+      rows,
+      summary: {
+        totalRows: rows.length,
+        confirmedLeaks: confirmed.length,
+        recordsClaimed: confirmed.reduce((sum, r) => sum + (r.quantityClaimed ?? 0), 0),
+        exposedDataClassCount: new Set(confirmed.flatMap((r) => r.leakTypes)).size,
+        needsReview: rows.filter((r) => r.monitorStatus === "needs_review").length,
+        anotherCompany: rows.filter((r) => r.monitorStatus === "another_company").length,
+      },
+    };
+  },
+  getIncidentDetail(scope, incidentKey) {
+    if (isDemoScope(scope)) return Promise.resolve(getDemoIncidentDetail(incidentKey));
+    return snowflakeBackend.getIncidentDetail(scope, incidentKey);
+  },
+  getKnowledgeGraph(scope, view, incidentKey) {
+    if (isDemoScope(scope)) return Promise.resolve(getDemoKnowledgeGraph(view, incidentKey));
+    return snowflakeBackend.getKnowledgeGraph(scope, view, incidentKey);
+  },
+  getThreatActors(scope) {
+    if (isDemoScope(scope)) return Promise.resolve(getDemoThreatActors());
+    return snowflakeBackend.getThreatActors(scope);
+  },
+  async getPipeline(scope) {
+    if (isDemoScope(scope)) return getDemoPipeline();
+    const live = await snowflakeBackend.getPipeline(scope);
+    if (scope.kind !== "fleet") return live;
+    return {
+      ...live,
+      organizations: live.organizations.filter(isConsoleTenant),
+      health: live.health.filter((row) => row.orgId === null || isConsoleTenant({ orgId: row.orgId })),
+    };
+  },
+};
 
 /* ── monitored-organization configuration ──────────────────────────────────── */
 
@@ -1841,6 +1982,7 @@ export function normalizeMonitoredOrganizationUpdate(
 export async function listMonitoredOrganizations(
   scope: DataScope,
 ): Promise<MonitoredOrganizationRecord[]> {
+  if (isDemoScope(scope)) return [getDemoMonitoredOrganization()];
   const filter = scopeFilter(scope);
   const rows = await executeQuery(
     `SELECT ${MONITORED_ORG_COLUMNS}
@@ -1862,6 +2004,11 @@ export async function updateMonitoredOrganization(
   orgId: string,
   update: MonitoredOrganizationUpdate,
 ): Promise<MonitoredOrganizationRecord | null> {
+  // The demo tenant has no warehouse row to write. Echo the edit back so the
+  // form round-trips, without pretending it was persisted anywhere.
+  if (orgId === DEMO_ORG_ID) {
+    return { ...getDemoMonitoredOrganization(), ...update, orgId: DEMO_ORG_ID };
+  }
   await executeQuery(
     `UPDATE NOCTURNE.CONFIG.MONITORED_ORGANIZATIONS
      SET ALIASES = CAST(PARSE_JSON(?) AS ARRAY),
@@ -2094,6 +2241,14 @@ export async function findPendingAlerts(
        i.TOP_URL,
        i.IMPACT_SEVERITY_BAND,
        i.IMPACT_SEVERITY_SCORE,
+       i.LEAK_TYPE_LABELS,
+       i.QUANTITY_CLAIMED,
+       i.EVIDENCE_CONFIDENCE_SCORE,
+       i.TRIAGE_PRIORITY_SCORE,
+       i.ACTOR_NAME,
+       i.INSIGHT_HEADLINE,
+       i.EXECUTIVE_SUMMARY,
+       i.RECOMMENDED_ACTIONS,
        TO_VARCHAR(i.FIRST_SEEN, 'YYYY-MM-DD"T"HH24:MI:SSTZH:TZM') AS FIRST_SEEN,
        p.USERNAME,
        p.EMAIL,
@@ -2131,6 +2286,14 @@ export async function findPendingAlerts(
     username: stringValue(row.USERNAME),
     email: stringValue(row.EMAIL),
     displayName: stringValue(row.DISPLAY_NAME),
+    leakTypes: stringArray(row.LEAK_TYPE_LABELS) as LeakType[],
+    quantityClaimed: nullableNumber(row.QUANTITY_CLAIMED),
+    evidenceConfidenceScore: nullableNumber(row.EVIDENCE_CONFIDENCE_SCORE),
+    triagePriorityScore: nullableNumber(row.TRIAGE_PRIORITY_SCORE),
+    actorName: nullableString(row.ACTOR_NAME),
+    insightHeadline: nullableString(row.INSIGHT_HEADLINE),
+    executiveSummary: nullableString(row.EXECUTIVE_SUMMARY),
+    recommendedActions: stringArray(row.RECOMMENDED_ACTIONS),
   }));
 }
 
@@ -2167,4 +2330,37 @@ export async function claimAlertDelivery(alert: PendingAlert): Promise<boolean> 
     (rows[0] as Record<string, unknown> | undefined)?.["number of rows inserted"] ?? 0,
   );
   return inserted > 0;
+}
+
+/**
+ * Starts the ingestion task and reports what is queued behind it.
+ *
+ * EXECUTE TASK returns as soon as the task is submitted, not when it finishes,
+ * so the counts below describe the state at submission — the UI says "started",
+ * never "complete".
+ */
+export async function executePipelineRun(): Promise<{
+  startedAt: string;
+  task: string;
+  pendingCandidates: number | null;
+}> {
+  await executeQuery("EXECUTE TASK NOCTURNE.RAW.CRAWL_INGEST_TASK", []);
+
+  let pendingCandidates: number | null = null;
+  try {
+    const rows = await executeQuery(
+      `SELECT COUNT(*) AS PENDING
+       FROM NOCTURNE.RAW.DT_L1_CLASSIFICATION_INPUT`,
+      [],
+    );
+    pendingCandidates = nullableNumber(rows[0]?.PENDING);
+  } catch {
+    // Informational only — a run that started is still a run that started.
+  }
+
+  return {
+    startedAt: new Date().toISOString(),
+    task: "CRAWL_INGEST_TASK",
+    pendingCandidates,
+  };
 }

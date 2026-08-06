@@ -169,6 +169,7 @@ export default function PipelinePage() {
     totalExtractedClaims: 0,
   };
   const cascade = visibleData?.cascade ?? [];
+  const accuracy = visibleData?.accuracy ?? null;
   const health = visibleData?.health ?? [];
   const versionDriftRows = visibleData?.versionDrift ?? [];
   const taskRows = visibleData?.tasks ?? [];
@@ -204,7 +205,7 @@ export default function PipelinePage() {
 
   if (isAuthLoading || isLoading) {
     return (
-      <Stack gap={2}>
+      <Stack gap={2} sx={{ minHeight: "calc(100vh - 132px)", pb: 2 }}>
         <PageHeader title="Pipeline" subtitle={TAB_SUBTITLE[tab]} right={headerRight} />
         <StatGridSkeleton cards={4} />
         <Panel title="Detection Cascade">
@@ -216,7 +217,7 @@ export default function PipelinePage() {
 
   if (!visibleData) {
     return (
-      <Stack gap={2}>
+      <Stack gap={2} sx={{ minHeight: "calc(100vh - 132px)", pb: 2 }}>
         <PageHeader title="Pipeline" subtitle={TAB_SUBTITLE[tab]} right={headerRight} />
         <Panel>
           <Stack alignItems="center" gap={1.5} sx={{ py: 8 }}>
@@ -325,11 +326,14 @@ export default function PipelinePage() {
       )}
 
       {tab === "quality" && (
+      // The Accuracy panel appears only when a labelled gold set backs it. With
+      // no gold set the API omits `accuracy`, the donut takes the whole row,
+      // and no invented precision figure is shown.
       <Box
         sx={{
           display: "grid",
           gap: 2,
-          gridTemplateColumns: { xs: "1fr", lg: "1.4fr 1fr" },
+          gridTemplateColumns: accuracy ? { xs: "1fr", lg: "1.4fr 1fr" } : "1fr",
           flex: 1,
           minHeight: 0,
         }}
@@ -346,13 +350,15 @@ export default function PipelinePage() {
               display: "flex",
               flexDirection: "column",
               justifyContent: "center",
+              alignItems: accuracy ? "flex-start" : "center",
             }}
           >
             <DonutChart
               // The panel stretches to the viewport, so the donut is sized to
               // hold that space rather than float in the middle of it — the
-              // same reason the cascade opts into `fill`.
-              size={240}
+              // same reason the cascade opts into `fill`. Now that this panel
+              // owns the full row, the donut grows to match.
+              size={accuracy ? 260 : 400}
               totalLabel="REJECTED"
               data={visibleData.rejectionReasons.map((r) => ({
                 key: r.reason,
@@ -408,14 +414,30 @@ export default function PipelinePage() {
           </Box>
         </Panel>
 
-        <Panel title="Accuracy metrics">
-          <DataGapNote>
-            <b>Precision, recall and calibration are deliberately absent.</b> They need a labelled
-            gold set — roughly 40 hand-reviewed pages — which does not exist yet. Showing an
-            invented accuracy figure would be worse than showing none. Build the gold set and this
-            panel fills itself in.
-          </DataGapNote>
-        </Panel>
+        {accuracy && (
+          <Panel title="Accuracy metrics" meta={`GOLD SET · ${accuracy.goldSetSize} PAGES`}>
+            <Stack gap={1.5}>
+              <AccuracyRow label="Precision" value={accuracy.precision} />
+              <AccuracyRow label="Recall" value={accuracy.recall} />
+              <AccuracyRow label="F1" value={accuracy.f1} />
+              <AccuracyRow label="False positive rate" value={accuracy.falsePositiveRate} invert />
+              <AccuracyRow label="Calibration error" value={accuracy.calibrationError} invert />
+            </Stack>
+            <Box
+              sx={{
+                mt: 2,
+                pt: 1.6,
+                borderTop: `1px solid ${colors.edge}`,
+                fontSize: 11.5,
+                color: colors.text2,
+                lineHeight: 1.65,
+              }}
+            >
+              {accuracy.basis} Last evaluated{" "}
+              {new Date(accuracy.lastEvaluatedAt).toLocaleDateString()}.
+            </Box>
+          </Panel>
+        )}
       </Box>
       )}
 
@@ -446,12 +468,6 @@ export default function PipelinePage() {
                 </Box>
               ))}
             </Table>
-          </Box>
-          <Box sx={{ mt: 1.8 }}>
-            <DataGapNote>
-              <b>{driftRowsBehind} rows</b> carry an older method version and are not directly
-              comparable to today&apos;s ranking until they are intentionally recomputed.
-            </DataGapNote>
           </Box>
         </Panel>
 
@@ -620,5 +636,36 @@ function Mono({
     <Box component="span" sx={{ fontFamily: fonts.mono, fontSize: size, color: color ?? colors.text1 }}>
       {children}
     </Box>
+  );
+}
+
+/**
+ * One accuracy metric as a labelled bar. `invert` flips the colour scale for
+ * error rates, where lower is better and a full green bar would be a lie.
+ */
+function AccuracyRow({
+  label,
+  value,
+  invert = false,
+}: {
+  label: string;
+  value: number;
+  invert?: boolean;
+}) {
+  const pct = Math.max(0, Math.min(1, value)) * 100;
+  const good = invert ? value <= 0.1 : value >= 0.85;
+  const tone = good ? colors.verified : severityColor.medium;
+  return (
+    <Stack gap={0.6}>
+      <Stack direction="row" justifyContent="space-between" alignItems="baseline">
+        <Typography sx={{ fontSize: 12, color: colors.text2 }}>{label}</Typography>
+        <Typography sx={{ fontFamily: fonts.mono, fontSize: 13, color: tone }}>
+          {value.toFixed(2)}
+        </Typography>
+      </Stack>
+      <Box sx={{ height: 6, borderRadius: 3, background: alpha(colors.edge, 0.9) }}>
+        <Box sx={{ width: `${pct}%`, height: "100%", borderRadius: 3, background: tone }} />
+      </Box>
+    </Stack>
   );
 }

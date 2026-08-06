@@ -69,11 +69,25 @@ function consoleUrl(alert: PendingAlert): string {
   return `${base}/leaks/${encodeURIComponent(alert.incidentKey)}`;
 }
 
+const LEAK_TYPE_LABELS: Record<string, string> = {
+  credential: "Credentials",
+  corporate_data: "Corporate data",
+  pii: "Personal data",
+  financial: "Financial data",
+  malware_exploit: "Malware / exploit",
+};
+
+function leakLabel(value: string): string {
+  return LEAK_TYPE_LABELS[value] ?? value.replace(/_/g, " ");
+}
+
 /**
- * The email deliberately carries no leaked material — not the quote, not the
- * record count. Mail is the least controlled channel this data could travel
- * through; the alert says a confirmed breach exists and sends the reader to the
- * console, where access is actually enforced.
+ * The email carries the classification and the model's own summary, but never
+ * a verbatim excerpt from the source page. Mail is the least controlled channel
+ * this data could travel through: an analyst gets enough to judge urgency
+ * without the leaked material itself following them into an inbox, a phone
+ * lock screen, or a mail provider's index. Evidence stays behind the console,
+ * where access is actually enforced.
  */
 export function renderAlertEmail(alert: PendingAlert): {
   subject: string;
@@ -84,49 +98,122 @@ export function renderAlertEmail(alert: PendingAlert): {
   const score = alert.severityScore === null ? "—" : String(alert.severityScore);
   const link = consoleUrl(alert);
   const accent = severityColor[alert.severityBand] ?? severityColor.informational;
+  const headline = alert.insightHeadline?.trim() || alert.title;
+  const classes = alert.leakTypes.map(leakLabel);
+  const records =
+    alert.quantityClaimed === null ? null : alert.quantityClaimed.toLocaleString();
+  const seen = alert.firstSeen ? alert.firstSeen.slice(0, 10) : null;
+  const sourceHost = (() => {
+    try {
+      return new URL(alert.sourceUrl).host;
+    } catch {
+      return null;
+    }
+  })();
 
-  const subject = `[Nocturne · ${band}] Confirmed breach for ${alert.organizationName}`;
+  const subject = `[Nocturne · ${band}] ${alert.organizationName}: ${headline.slice(0, 90)}`;
+
+  const facts: Array<[string, string]> = [
+    ["Organization", alert.organizationName],
+    ["Impact severity", `${score} (${band.toLowerCase()})`],
+  ];
+  if (alert.evidenceConfidenceScore !== null) {
+    facts.push(["Evidence confidence", String(alert.evidenceConfidenceScore)]);
+  }
+  if (alert.triagePriorityScore !== null) {
+    facts.push(["Triage priority", String(alert.triagePriorityScore)]);
+  }
+  if (classes.length) facts.push(["Exposed data", classes.join(", ")]);
+  if (records) facts.push(["Records claimed", `${records} (seller's claim)`]);
+  if (alert.actorName) facts.push(["Attributed actor", alert.actorName]);
+  if (sourceHost) facts.push(["Source", sourceHost]);
+  if (seen) facts.push(["First seen", seen]);
+
+  const actions = alert.recommendedActions.slice(0, 4);
 
   const text = [
-    `A confirmed breach was detected for ${alert.organizationName}.`,
+    `${band} — confirmed breach for ${alert.organizationName}`,
     "",
-    `Severity: ${band} (impact ${score})`,
-    `Incident: ${alert.title}`,
-    alert.firstSeen ? `First seen: ${alert.firstSeen}` : null,
+    headline,
     "",
+    alert.executiveSummary?.trim() ?? "",
+    "",
+    ...facts.map(([k, v]) => `${k}: ${v}`),
+    "",
+    ...(actions.length ? ["Recommended actions:", ...actions.map((a) => `  - ${a}`), ""] : []),
     `Open in Nocturne: ${link}`,
     "",
-    "Evidence and the source page are available in the console. This message",
-    "intentionally contains no leaked data.",
+    "Supporting evidence and the source page are in the console. This message",
+    "intentionally contains no verbatim leaked material.",
   ]
-    .filter((line) => line !== null)
+    .filter((line) => line !== "")
     .join("\n");
 
+  const factRows = facts
+    .map(
+      ([k, v]) => `
+        <tr>
+          <td style="padding:6px 0;font-size:12px;color:#61748F;white-space:nowrap;width:150px">${escapeHtml(k)}</td>
+          <td style="padding:6px 0;font-size:13px;color:#E8EEFA">${escapeHtml(v)}</td>
+        </tr>`,
+    )
+    .join("");
+
+  const actionList = actions.length
+    ? `
+      <div style="margin:22px 0 0">
+        <div style="font-size:11px;letter-spacing:0.12em;color:#61748F;font-weight:600;margin-bottom:8px">
+          RECOMMENDED ACTIONS
+        </div>
+        <ul style="margin:0;padding-left:18px;font-size:13px;color:#C7D4E8;line-height:1.7">
+          ${actions.map((a) => `<li>${escapeHtml(a)}</li>`).join("")}
+        </ul>
+      </div>`
+    : "";
+
+  const summary = alert.executiveSummary?.trim()
+    ? `<p style="margin:0 0 20px;font-size:13.5px;line-height:1.65;color:#C7D4E8">
+         ${escapeHtml(alert.executiveSummary.trim())}
+       </p>`
+    : "";
+
   const html = `
-<div style="background:#04070E;padding:28px;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#E8EEFA">
-  <div style="max-width:560px;margin:0 auto;background:#0A1120;border:1px solid rgba(104,146,224,0.2);border-radius:10px;overflow:hidden">
+<div style="background:#04070E;padding:28px 16px;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#E8EEFA">
+  <div style="max-width:620px;margin:0 auto;background:#0A1120;border:1px solid rgba(104,146,224,0.2);border-radius:10px;overflow:hidden">
     <div style="height:3px;background:${accent}"></div>
-    <div style="padding:24px">
+    <div style="padding:26px">
       <div style="font-size:11px;letter-spacing:0.14em;color:${accent};font-weight:600">
         ${escapeHtml(band)} · CONFIRMED BREACH
       </div>
-      <h1 style="margin:12px 0 4px;font-size:19px;line-height:1.35;color:#E8EEFA">
-        ${escapeHtml(alert.title)}
+      <h1 style="margin:12px 0 6px;font-size:20px;line-height:1.35;color:#E8EEFA">
+        ${escapeHtml(headline)}
       </h1>
-      <p style="margin:0 0 18px;font-size:13px;color:#9BADC9">
-        ${escapeHtml(alert.organizationName)} · impact ${escapeHtml(score)}${
-          alert.firstSeen ? ` · first seen ${escapeHtml(alert.firstSeen.slice(0, 10))}` : ""
-        }
+      <p style="margin:0 0 20px;font-size:12px;color:#61748F">
+        ${escapeHtml(alert.title)}
       </p>
-      <a href="${escapeHtml(link)}"
-         style="display:inline-block;background:#2563EB;color:#fff;text-decoration:none;
-                padding:10px 18px;border-radius:6px;font-size:13px;font-weight:600">
-        Open in Nocturne
-      </a>
-      <p style="margin:20px 0 0;font-size:11px;color:#61748F;line-height:1.6">
-        Evidence and the source page are in the console. This message intentionally
-        contains no leaked data. You are receiving it because ${escapeHtml(band)}
-        alerts are enabled on your profile.
+
+      ${summary}
+
+      <table style="width:100%;border-collapse:collapse;border-top:1px solid rgba(104,146,224,0.15);border-bottom:1px solid rgba(104,146,224,0.15)">
+        ${factRows}
+      </table>
+
+      ${actionList}
+
+      <div style="margin:26px 0 0">
+        <a href="${escapeHtml(link)}"
+           style="display:inline-block;background:#2563EB;color:#fff;text-decoration:none;
+                  padding:11px 20px;border-radius:6px;font-size:13px;font-weight:600">
+          Open incident in Nocturne
+        </a>
+      </div>
+
+      <p style="margin:22px 0 0;font-size:11px;color:#61748F;line-height:1.65">
+        Every claim above was verified verbatim against the crawled source before this
+        alert was raised; ungrounded model output is quarantined and never scored.
+        Supporting evidence stays in the console — this message intentionally contains
+        no leaked material. You are receiving it because ${escapeHtml(band.toLowerCase())}
+        alerts are enabled on your Nocturne profile.
       </p>
     </div>
   </div>

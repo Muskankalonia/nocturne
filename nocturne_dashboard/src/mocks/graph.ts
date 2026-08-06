@@ -25,17 +25,17 @@ const T = {
 } as const;
 
 /**
- * The promoted component for the Palo Alto incident.
+ * The promoted component for the Odido incident.
  * SQL: DIM_GRAPH_NODE + FCT_GRAPH_EDGE, scoped to one target_confirmed page.
  *
  * Every edge carries the sentence that created it — that is the entire point of
  * showing a graph rather than a table.
  */
-const panwNodes: GraphNode[] = [
+const odidoNodes: GraphNode[] = [
   {
     nodeKey: "n-actor-nightfox",
     globalNodeKey: null,
-    orgId: "palo_alto_networks",
+    orgId: "odido",
     nodeType: "actor_alias",
     displayName: "NightFox",
     normalizedName: "nightfox",
@@ -50,7 +50,7 @@ const panwNodes: GraphNode[] = [
   {
     nodeKey: "n-claim-1",
     globalNodeKey: null,
-    orgId: "palo_alto_networks",
+    orgId: "odido",
     nodeType: "data_asset",
     displayName: "claim_1",
     normalizedName: "claim 1",
@@ -63,12 +63,12 @@ const panwNodes: GraphNode[] = [
     lastSeen: seen.last,
   },
   {
-    nodeKey: "n-org-panw",
+    nodeKey: "n-org-odido",
     globalNodeKey: null,
-    orgId: "palo_alto_networks",
+    orgId: "odido",
     nodeType: "organization",
-    displayName: "Palo Alto Networks",
-    normalizedName: "palo alto networks",
+    displayName: "Odido",
+    normalizedName: "odido",
     isMonitoredOrg: true,
     mentionCount: 3,
     sightingCount: 1,
@@ -81,12 +81,12 @@ const panwNodes: GraphNode[] = [
     entityMatchConfidence: 100,
   },
   {
-    nodeKey: "n-domain-panw",
+    nodeKey: "n-domain-odido",
     globalNodeKey: null,
-    orgId: "palo_alto_networks",
+    orgId: "odido",
     nodeType: "domain",
-    displayName: "paloaltonetworks.com",
-    normalizedName: "paloaltonetworks.com",
+    displayName: "odido.nl",
+    normalizedName: "odido.nl",
     isMonitoredOrg: true,
     mentionCount: 2,
     sightingCount: 1,
@@ -101,7 +101,7 @@ const panwNodes: GraphNode[] = [
   {
     nodeKey: "n-market-darkbay",
     globalNodeKey: null,
-    orgId: "palo_alto_networks",
+    orgId: "odido",
     nodeType: "marketplace",
     displayName: "darkbay-market",
     normalizedName: "darkbay market",
@@ -116,7 +116,7 @@ const panwNodes: GraphNode[] = [
   {
     nodeKey: "n-market-ghost",
     globalNodeKey: null,
-    orgId: "palo_alto_networks",
+    orgId: "odido",
     nodeType: "marketplace",
     displayName: "ghostforum-7x",
     normalizedName: "ghostforum 7x",
@@ -131,7 +131,7 @@ const panwNodes: GraphNode[] = [
   {
     nodeKey: "n-contact-tox",
     globalNodeKey: null,
-    orgId: "palo_alto_networks",
+    orgId: "odido",
     nodeType: "contact_channel",
     displayName: "tox:8f2c…",
     normalizedName: "tox 8f2c",
@@ -146,7 +146,7 @@ const panwNodes: GraphNode[] = [
   {
     nodeKey: "n-asset-vpncreds",
     globalNodeKey: null,
-    orgId: "palo_alto_networks",
+    orgId: "odido",
     nodeType: "data_asset",
     displayName: "vpn-creds.csv",
     normalizedName: "vpn creds csv",
@@ -161,7 +161,7 @@ const panwNodes: GraphNode[] = [
   {
     nodeKey: "n-product-gp",
     globalNodeKey: null,
-    orgId: "palo_alto_networks",
+    orgId: "odido",
     nodeType: "product",
     displayName: "GlobalProtect",
     normalizedName: "globalprotect",
@@ -194,7 +194,7 @@ const edge = (
   level: GraphEdge["groundingLevel"] = "exact",
 ): GraphEdge => ({
   graphEdgeKey: id,
-  orgId: "palo_alto_networks",
+  orgId: "odido",
   sourceKey: source,
   targetKey: target,
   edgeType,
@@ -213,7 +213,7 @@ const edge = (
   lastSeen: seen.last,
 });
 
-const panwEdges: GraphEdge[] = [
+const odidoEdges: GraphEdge[] = [
   edge(
     "e-offers-asset",
     "n-actor-nightfox",
@@ -240,11 +240,11 @@ const panwEdges: GraphEdge[] = [
   edge(
     "e-affects-domain",
     "n-claim-1",
-    "n-domain-panw",
+    "n-domain-odido",
     "ALLEGEDLY_AFFECTS",
     "claim",
     "domain",
-    "credential set for paloaltonetworks.com including VPN logins",
+    "credential set for odido.nl including VPN logins",
     8431,
     T.domainNamed,
     3,
@@ -252,11 +252,11 @@ const panwEdges: GraphEdge[] = [
   edge(
     "e-affects-org",
     "n-claim-1",
-    "n-org-panw",
+    "n-org-odido",
     "ALLEGEDLY_AFFECTS",
     "claim",
     "organization",
-    "employee credential set for paloaltonetworks.com",
+    "employee credential set for odido.nl",
     8425,
     T.ownershipTied,
     4,
@@ -312,14 +312,14 @@ const panwEdges: GraphEdge[] = [
 ];
 
 export const incidentGraph: GraphPayload = {
-  nodes: panwNodes,
-  edges: panwEdges,
-  scope: { kind: "org", orgId: "palo_alto_networks" },
+  nodes: odidoNodes,
+  edges: odidoEdges,
+  scope: { kind: "org", orgId: "odido" },
   rootKey: "2d1000495fc0f8847173ee6b9f8e158316a104a26eed7383b837602258a0db53",
 };
 
 export function graphForOrg(orgId: string): GraphPayload {
-  if (orgId === "palo_alto_networks") return incidentGraph;
+  if (orgId === "odido") return incidentGraph;
   // Other tenants reuse the shape with relabelled endpoints so every org has a
   // renderable component in the demo.
   return {

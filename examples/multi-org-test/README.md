@@ -10,7 +10,7 @@ private data.
 
 | Organization | Records | Expected semantic result |
 | --- | ---: | --- |
-| Palo Alto Networks | 4 | Existing challenging fixture: one confirmed target leak and three controls |
+| Odido | 4 | Existing challenging fixture: one confirmed target leak and three controls |
 | AT&T | 2 | Two target leaks: subscriber PII/corporate data and internal credentials |
 | Bank of Baroda | 1 | One target financial-data leak with normalized-name grounding |
 | Contoso Logistics | 1 | One target customer-PII leak with normalized evidence formatting |
@@ -55,7 +55,7 @@ FROM NOCTURNE.CONFIG.MONITORED_ORGANIZATIONS
 ORDER BY ORG_ID;
 ```
 
-AT&T, Bank of Baroda, Contoso Logistics and Palo Alto Networks must be enabled.
+AT&T, Bank of Baroda, Contoso Logistics and Odido must be enabled.
 Northwind Traders must be disabled.
 
 ## 2. Upload the organization-partitioned objects
@@ -82,15 +82,15 @@ gcloud storage cp \
   "gs://${NOCTURNE_BUCKET}/raw/crawls/org_id=contoso_logistics/crawl_date=2026-08-02/run_id=multi-org-mocks-20260802-001/task=0/attempt=0/part-00000.jsonl.gz"
 ```
 
-For a clean Snowflake environment, also upload the existing Palo Alto fixture:
+For a clean Snowflake environment, also upload the existing Odido fixture:
 
 ```bash
 gcloud storage cp \
   examples/end-to-end-test/part-00000.jsonl.gz \
-  "gs://${NOCTURNE_BUCKET}/raw/crawls/org_id=palo_alto_networks/crawl_date=2026-08-02/run_id=multi-org-mocks-20260802-001/task=0/attempt=0/part-00000.jsonl.gz"
+  "gs://${NOCTURNE_BUCKET}/raw/crawls/org_id=odido/crawl_date=2026-08-02/run_id=multi-org-mocks-20260802-001/task=0/attempt=0/part-00000.jsonl.gz"
 ```
 
-Skip that last command when the Palo Alto fixture is already present in
+Skip that last command when the Odido fixture is already present in
 `NOCTURNE.RAW.CRAWL_PAGES`. Copying identical content under a new GCS filename
 would create an unnecessary duplicate RAW row, even though downstream cache and
 deduplication keys prevent duplicate paid AI work.
@@ -117,7 +117,7 @@ Do not use `--include-storage-integration` for the existing account. Replacing
 the integration can generate a new GCS service identity and invalidate the
 current bucket IAM grant.
 
-Paid stages are cached by `(ORG_ID, DEDUPE_KEY)`. Existing Palo Alto results are
+Paid stages are cached by `(ORG_ID, DEDUPE_KEY)`. Existing Odido results are
 reused. Only genuinely new organization documents become paid candidates.
 
 ## 4. Allow asynchronous stages to settle

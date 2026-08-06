@@ -331,8 +331,29 @@ export interface PipelineCacheSummary {
   repeatCallsAvoided: number;
 }
 
+/**
+ * Precision / recall / calibration against a labelled gold set.
+ *
+ * Optional because it is only meaningful where a gold set exists. Live tenants
+ * have none, so this is absent and the Accuracy panel does not render — an
+ * invented accuracy figure is worse than no figure.
+ */
+export interface PipelineAccuracyMetrics {
+  goldSetSize: number;
+  precision: number;
+  recall: number;
+  f1: number;
+  falsePositiveRate: number;
+  calibrationError: number;
+  lastEvaluatedAt: string;
+  /** Free-text provenance, rendered verbatim so the source is never implied. */
+  basis: string;
+}
+
 export interface PipelineResponse {
   scope: DataScope;
+  /** Present only when a labelled gold set backs the numbers. */
+  accuracy?: PipelineAccuracyMetrics | null;
   organizations: PipelineOrganizationSummary[];
   cascade: CascadeStage[];
   grounding: DashboardGroundingSummary;
@@ -424,6 +445,16 @@ export interface PendingAlert {
   username: string;
   email: string;
   displayName: string;
+  /* Context for the alert body. None of this is leaked material: it is the
+     classification and the model's own summary, never a verbatim excerpt. */
+  leakTypes: LeakType[];
+  quantityClaimed: number | null;
+  evidenceConfidenceScore: number | null;
+  triagePriorityScore: number | null;
+  actorName: string | null;
+  insightHeadline: string | null;
+  executiveSummary: string | null;
+  recommendedActions: string[];
 }
 
 export interface AlertDispatchResult {

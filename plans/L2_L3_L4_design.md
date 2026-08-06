@@ -34,7 +34,7 @@ Two changes, both cheap:
    3 marketplaces, same org across 4 docs, one contradicting claim. Without
    overlap, corroboration scoring has nothing to compute and the demo falls flat.
 
-Also note the deployed `MONITORED_ORGANIZATIONS` row is `palo_alto_networks`,
+Also note the deployed `MONITORED_ORGANIZATIONS` row is `odido`,
 while local `config.yaml` now crawls `bank of baroda`. Pick one before seeding.
 
 ---
@@ -358,7 +358,7 @@ could not produce, which is precisely how you show the graph earned its place.
 Deliver as **Streamlit in Snowflake**, three tabs: severity-ranked leak feed →
 click through to claim with highlighted evidence span (you have exact offsets)
 → actor profile showing the graph neighborhood. Add a Cortex Analyst semantic
-view so judges can ask *"which actors are targeting Palo Alto Networks?"* in
+view so judges can ask *"which actors are targeting Odido?"* in
 plain English. That lands the "Unstructured Data Intelligence System" and
 "Domain-Specific AI Copilot" tracks simultaneously.
 

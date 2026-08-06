@@ -80,7 +80,7 @@ class FakeStorageClient:
         return self.fake_bucket
 
 
-def page_record(number=1, raw_text=None, org_id="palo_alto_networks"):
+def page_record(number=1, raw_text=None, org_id="odido"):
     text = raw_text if raw_text is not None else f"raw page content {number}"
     return {
         "schema_version": 2,
@@ -89,7 +89,7 @@ def page_record(number=1, raw_text=None, org_id="palo_alto_networks"):
         "dedupe_key": f"dedupe-{number}",
         "run_id": "execution-abc",
         "source": "ahmia",
-        "query": "palo alto networks",
+        "query": "odido",
         "url": f"http://page-{number}.example.onion/",
         "title": f"Page {number}",
         "fetched_at": "2026-07-19T10:00:00Z",
@@ -110,7 +110,7 @@ class GcsJsonlSinkTests(unittest.TestCase):
     def make_sink(self, **overrides):
         options = {
             "bucket_name": "raw-crawler-data",
-            "org_id": "palo_alto_networks",
+            "org_id": "odido",
             "prefix": "raw/crawls",
             "max_documents": 2,
             "max_bytes": 1024 * 1024,
@@ -140,7 +140,7 @@ class GcsJsonlSinkTests(unittest.TestCase):
 
         self.assertEqual(
             uri,
-            "gs://raw-crawler-data/raw/crawls/org_id=palo_alto_networks/"
+            "gs://raw-crawler-data/raw/crawls/org_id=odido/"
             "crawl_date=2026-07-19/"
             "run_id=execution-abc/task=3/attempt=1/part-00000.jsonl.gz",
         )
@@ -159,7 +159,7 @@ class GcsJsonlSinkTests(unittest.TestCase):
         self.assertEqual(blob.content_encoding, "gzip")
         self.assertEqual(blob.metadata["document-count"], "2")
         self.assertEqual(blob.metadata["schema-version"], "2")
-        self.assertEqual(blob.metadata["org-id"], "palo_alto_networks")
+        self.assertEqual(blob.metadata["org-id"], "odido")
         self.assertEqual(upload["content_type"], "application/x-ndjson")
         self.assertEqual(upload["if_generation_match"], 0)
         self.assertIsNotNone(upload["retry"])
@@ -179,7 +179,7 @@ class GcsJsonlSinkTests(unittest.TestCase):
         result = sink.finalize(
             {
                 "schema_version": 2,
-                "org_id": "palo_alto_networks",
+                "org_id": "odido",
                 "status": "succeeded",
                 "total_pages_scraped": 1,
             }
@@ -199,9 +199,9 @@ class GcsJsonlSinkTests(unittest.TestCase):
         manifest_blob = self.client.fake_bucket.blobs[manifest_name]
         uploaded_manifest = json.loads(manifest_blob.uploads[0]["data"])
         self.assertEqual(uploaded_manifest["status"], "succeeded")
-        self.assertEqual(uploaded_manifest["org_id"], "palo_alto_networks")
+        self.assertEqual(uploaded_manifest["org_id"], "odido")
         self.assertEqual(
-            uploaded_manifest["storage"]["org_id"], "palo_alto_networks"
+            uploaded_manifest["storage"]["org_id"], "odido"
         )
         self.assertEqual(
             uploaded_manifest["storage"]["manifest_uri"],
@@ -212,7 +212,7 @@ class GcsJsonlSinkTests(unittest.TestCase):
         )
         self.assertEqual(manifest_blob.uploads[0]["if_generation_match"], 0)
         self.assertEqual(manifest_blob.metadata["schema-version"], "2")
-        self.assertEqual(manifest_blob.metadata["org-id"], "palo_alto_networks")
+        self.assertEqual(manifest_blob.metadata["org-id"], "odido")
 
     def test_zero_result_crawl_still_uploads_a_manifest(self):
         sink = self.make_sink()
@@ -220,7 +220,7 @@ class GcsJsonlSinkTests(unittest.TestCase):
         result = sink.finalize(
             {
                 "schema_version": 2,
-                "org_id": "palo_alto_networks",
+                "org_id": "odido",
                 "status": "succeeded",
                 "total_pages_scraped": 0,
             }
@@ -244,14 +244,14 @@ class GcsJsonlSinkTests(unittest.TestCase):
         )
 
     def test_identical_runs_are_partitioned_by_organization(self):
-        first = self.make_sink(org_id="palo_alto_networks", max_documents=1)
-        second = self.make_sink(org_id="bank_of_baroda", max_documents=1)
+        first = self.make_sink(org_id="odido", max_documents=1)
+        second = self.make_sink(org_id="demo_org", max_documents=1)
 
-        first_uri = first.write(page_record(org_id="palo_alto_networks"))
-        second_uri = second.write(page_record(org_id="bank_of_baroda"))
+        first_uri = first.write(page_record(org_id="odido"))
+        second_uri = second.write(page_record(org_id="demo_org"))
 
-        self.assertIn("/org_id=palo_alto_networks/", first_uri)
-        self.assertIn("/org_id=bank_of_baroda/", second_uri)
+        self.assertIn("/org_id=odido/", first_uri)
+        self.assertIn("/org_id=demo_org/", second_uri)
         self.assertNotEqual(first_uri, second_uri)
 
     def test_finalized_sink_rejects_more_writes(self):
@@ -294,7 +294,7 @@ class OutputSinkFactoryTests(unittest.TestCase):
             "/unused",
             environ={
                 "OUTPUT_BACKEND": "gcs",
-                "ORG_ID": "palo_alto_networks",
+                "ORG_ID": "odido",
                 "GCS_BUCKET": "raw-crawler-data",
                 "GCS_PREFIX": "landing",
                 "GCS_BATCH_MAX_DOCUMENTS": "5",
@@ -306,10 +306,10 @@ class OutputSinkFactoryTests(unittest.TestCase):
         self.assertIsInstance(sink, GcsJsonlSink)
         self.assertEqual(sink.max_documents, 5)
         self.assertEqual(sink.max_bytes, 4096)
-        self.assertEqual(sink.org_id, "palo_alto_networks")
+        self.assertEqual(sink.org_id, "odido")
         self.assertTrue(
             sink.object_base.startswith(
-                "landing/org_id=palo_alto_networks/crawl_date="
+                "landing/org_id=odido/crawl_date="
             )
         )
 
@@ -335,7 +335,7 @@ class OutputSinkFactoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "lowercase slug"):
             create_output_sink(
                 "/unused",
-                org_id="Palo Alto Networks",
+                org_id="Odido",
                 environ=base_environment,
                 client=FakeStorageClient(),
             )
@@ -346,7 +346,7 @@ class OutputSinkFactoryTests(unittest.TestCase):
                 "/unused",
                 environ={
                     "OUTPUT_BACKEND": "gcs",
-                    "ORG_ID": "palo_alto_networks",
+                    "ORG_ID": "odido",
                     "GCS_BUCKET": "raw-crawler-data",
                     "GCS_BATCH_MAX_DOCUMENTS": "0",
                 },

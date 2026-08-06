@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import {
   Box,
+  Checkbox,
   Divider,
   Menu,
   MenuItem,
@@ -17,9 +18,13 @@ import { usePosture } from "@/contexts/PostureContext";
 import GlobalSearch from "./GlobalSearch";
 import { colors, fonts, gradients, layout, severityColor, shadows } from "@/theme/tokens";
 
+/** Kept in step with DEMO_ORG_ID in src/server/demo-backend.ts. */
+const DEMO_TENANT_ID = "demo_org";
+
 export function Header() {
   const { isSuperAdmin, isFleetScope, activeOrg, switchableOrgs, setScope } = useAuth();
-  const { summaryFor, organizations, isLoading } = usePosture();
+  const { summaryFor, organizations, isLoading, fleetSelection, setFleetSelection } =
+    usePosture();
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
 
   // Enabled tenants per CONFIG.MONITORED_ORGANIZATIONS. Null until the first
@@ -32,6 +37,33 @@ export function Header() {
   // numbers come from the same live response the page renders; a tenant the
   // current scope excludes reports `hasData: false` and shows a dash instead of
   // a zero, which would read as "nothing wrong there".
+  // A null selection means the server default, which is every tenant except
+  // the fabricated demo one. Resolving that here keeps the checkboxes honest
+  // about what the totals below them actually cover.
+  const includedOrgIds = useMemo(() => {
+    if (fleetSelection) return new Set(fleetSelection);
+    return new Set(
+      switchableOrgs.map((org) => org.orgId).filter((orgId) => orgId !== DEMO_TENANT_ID),
+    );
+  }, [fleetSelection, switchableOrgs]);
+
+  const toggleOrg = (orgId: string) => {
+    const next = new Set(includedOrgIds);
+    if (next.has(orgId)) next.delete(orgId);
+    else next.add(orgId);
+    // Never leave the fleet view with nothing in it: an empty aggregate reads
+    // as "no incidents" rather than "you deselected everything".
+    if (next.size === 0) return;
+    setFleetSelection([...next]);
+
+    // Narrowing to a single tenant means "show me only this one", so move the
+    // whole session into that scope. Knowledge Graph and Threat Actors are
+    // single-organization screens by design — left in fleet scope they render
+    // "select one organization" and the selection appears to do nothing.
+    if (next.size === 1) setScope({ kind: "org", orgId: [...next][0]! });
+    else if (!isFleetScope) setScope({ kind: "fleet" });
+  };
+
   const orgSummaries = useMemo(
     () => switchableOrgs.map((org) => ({ org, ...summaryFor(org.orgId) })),
     [switchableOrgs, summaryFor],
@@ -173,9 +205,39 @@ export function Header() {
               >
                 {/* The count Snowflake actually reports as enabled, not the
                   * length of the demo tenant roster. */}
-                {monitoredCount ?? switchableOrgs.length} orgs
+                {includedOrgIds.size} of {switchableOrgs.length}
               </Typography>
             </MenuItem>
+
+            <Stack
+              direction="row"
+              alignItems="center"
+              justifyContent="space-between"
+              sx={{ px: 1.6, pt: 0.4, pb: 0.2 }}
+            >
+              <Typography
+                sx={{ fontFamily: fonts.mono, fontSize: 9.5, color: colors.text3 }}
+              >
+                INCLUDE IN FLEET TOTALS
+              </Typography>
+              <Box
+                component="button"
+                type="button"
+                onClick={() => setFleetSelection(null)}
+                sx={{
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  p: 0,
+                  fontFamily: fonts.mono,
+                  fontSize: 9.5,
+                  color: colors.ion,
+                  "&:hover": { textDecoration: "underline" },
+                }}
+              >
+                RESET
+              </Box>
+            </Stack>
 
             <Divider sx={{ my: 0.7, borderColor: colors.edge }} />
 
@@ -189,6 +251,19 @@ export function Header() {
                 }}
                 sx={{ gap: 1.3, fontSize: 12, borderRadius: "7px", mx: 0.5 }}
               >
+                {/* The checkbox includes a tenant in the fleet aggregate; the
+                  * rest of the row still switches scope to it. Two actions in
+                  * one row, so the checkbox stops its click from bubbling. */}
+                <Checkbox
+                  size="small"
+                  checked={includedOrgIds.has(org.orgId)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    toggleOrg(org.orgId);
+                  }}
+                  inputProps={{ "aria-label": `Include ${org.canonicalName} in the fleet view` }}
+                  sx={{ p: 0.2, color: colors.text3, "&.Mui-checked": { color: colors.ion } }}
+                />
                 <Box
                   component="span"
                   aria-label={
