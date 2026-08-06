@@ -117,10 +117,20 @@ environment variables override runtime behavior:
 | `GCS_PREFIX` | `raw/crawls` | Object-name prefix. |
 | `GCS_BATCH_MAX_DOCUMENTS` | `100` | Maximum records buffered per part. |
 | `GCS_BATCH_MAX_BYTES` | `67108864` | Maximum uncompressed bytes buffered per part. |
-| `QUERY` | `config.yaml` value | Override the Ahmia query. |
+| `QUERY` | `config.yaml` value | Override the search query sent to every engine. |
+| `SEARCH_ENGINES` | `ahmia,dread` | Comma-separated engines; at least one is required. |
+| `SEARCH_PAGES` | `2` | Result pages taken from each engine. |
+| `DREAD_BASE_URL` | current onion address | Override when Dread rotates its address. |
+| `KEYWORDS` | `config.yaml` value | Comma/newline-separated keyword filter. Empty saves every reachable page. |
+| `ALLOW_FALLBACK_SEEDS` | `false` | Re-enable Ahmia's hardcoded directory list when its search returns nothing. |
+| `INTERSTITIAL_WAIT` | `300` | Seconds to wait out an access queue. `0` disables. |
+| `INTERSTITIAL_POLL` | `15` | Seconds between queue re-checks. |
+| `FETCH_ATTEMPTS` | `2` | Attempts per URL before it counts as unreachable. |
+| `PAGE_WAIT` | `10` | Seconds to let a page settle before reading the DOM. |
+| `PAGE_LOAD_TIMEOUT` | `120` | Selenium page-load timeout. |
 | `ORG_ID` | `config.yaml` value | Required organization slug written to records and GCS paths. |
 | `MAX_DEPTH` | `config.yaml` value | Override BFS depth. |
-| `MAX_PAGES` | `config.yaml` value | Maximum matched pages saved. |
+| `MAX_PAGES` | `config.yaml` value | Maximum matched pages saved **per search engine**. |
 | `MAX_VISITED_URLS` | `1000` | Hard limit on URLs attempted per execution. |
 | `MAX_QUEUE_SIZE` | `2000` | Hard limit on pending BFS URLs. |
 | `TOR_STARTUP_TIMEOUT` | `90` | Seconds to wait for the Tor SOCKS port. |
@@ -128,6 +138,89 @@ environment variables override runtime behavior:
 
 `MAX_VISITED_URLS` and `MAX_QUEUE_SIZE` independently bound crawl work and memory;
 `MAX_PAGES` alone only limits pages that pass the keyword filter.
+
+`MAX_PAGES` is a budget **per engine**, not per run: with both engines enabled and
+`max_pages: 30`, a run stores up to 30 Ahmia pages and 30 Dread pages. All engines
+share one FIFO frontier, so a single global budget would be spent by whichever
+engine was queried first — Ahmia routinely returns dozens of mirror hosts, which
+would starve Dread of the budget entirely even though Dread carries the leak
+threads worth having. Once an engine's budget is spent its remaining URLs are
+dropped without being fetched, and the crawl ends when every engine is done.
+Per-engine totals appear in the manifest under `counts.pages_per_engine`.
+
+## Search engines
+
+Every enabled engine is queried and its results merged into one BFS frontier:
+
+- **Ahmia** indexes broadly across onion services, over clearnet, in its own
+  browser session. Its search page depends on JavaScript that does not always
+  render; when it returns nothing the run continues with the other engines.
+- **Dread** carries the forum threads and leak posts Ahmia never indexes. It is
+  an onion service reached over Tor, and it gates every request behind an access
+  queue, so it runs on the same Tor browser session that performs the crawl —
+  clearing the queue is per-session, so it is cleared once rather than per URL.
+  Only `/post/<id>` and `/d/<board>` results enter the frontier; `/u/`, `/page/`,
+  `/discover/`, `/leaderboard` and `/store/` are site chrome.
+
+Each engine is isolated: one being down, rate-limited, or moved to a new onion
+address does not cost the run the other's results. Per-engine status and error
+text land in the crawl manifest under `search_engine_results`. If *every* engine
+fails, the run fails rather than reporting a clean zero-hit crawl — an outage and
+a genuinely empty result set are different outcomes and must not look alike. For
+the same reason, a Dread search that cannot reach its first result page raises
+instead of returning nothing.
+
+`source` is recorded per page (`ahmia` or `dread`) and participates in `doc_id`
+and `dedupe_key`, so a page found through both engines stays two observations
+rather than one silently overwriting the other. Links discovered mid-crawl
+inherit the provenance of the entry point they were reached from.
+
+Search engines routinely return one site under many mirror addresses — a single
+Ahmia query returned the same forum page under 39 different onion hosts. Those
+differ by host, so they produce different `dedupe_key`s and would survive
+Snowflake's deduplication as separate documents, each classified and extracted
+at full cost. The crawler therefore skips storing content whose SHA-256 it has
+already stored during the same run, while still following its links.
+
+## Driving the crawl from the UI
+
+The organization is configured in one place: the dashboard's Monitored Assets
+page writes it to `NOCTURNE.CONFIG.MONITORED_ORGANIZATIONS`, and the crawl
+derives both its query and its keyword filter from that row.
+
+```bash
+set -a && eval "$(python scripts/org_crawl_config.py --org-id odido)" && set +a
+python -m nocturne_crawler.scraper
+```
+
+`org_crawl_config.py` emits `ORG_ID`, `QUERY`, and `KEYWORDS`:
+
+- **`QUERY`** is the organization's canonical name alone, quoted so a multi-word
+  name cannot match on one word alone. It falls back to the first alias or
+  domain when no canonical name is set.
+- **`KEYWORDS`** carries the canonical name, aliases, domains, and products.
+  This is what enforces relevance: the query only has to surface candidate
+  pages, and the keyword filter decides which are actually stored.
+
+The query is deliberately one term rather than the organization's full term list.
+Neither engine parses `OR` as a boolean operator, so OR'd terms *narrow* results
+instead of widening them — measured on the same organization:
+
+| Query | Dread | Ahmia |
+| --- | --- | --- |
+| `"Odido"` | 14 | 39 |
+| `"Odido" OR "Ben.nl"` | 7 | 39 |
+| `"Odido" OR "Ben.nl" OR "T-Mobile Netherlands" OR "odido.nl"` | 4 | 0 |
+
+Ahmia returns nothing once the query grows past a couple of terms; Dread quietly
+loses recall, which is the more dangerous failure because it still looks like it
+is working. Products stay out of the query for a different reason: they identify
+a page as being about the organization once fetched, but searching for them alone
+surfaces unrelated product chatter.
+
+Monitoring paused for an organization stops the crawl rather than spending money
+collecting pages the pipeline is configured to ignore; `--allow-disabled`
+overrides. Use `--format json` to inspect the resolved profile without running.
 
 ## Test and run locally
 
