@@ -300,33 +300,9 @@ Only `target_confirmed` pages are target-alert eligible.
 
 ### L3 Knowledge Graph schema
 
-```mermaid
-flowchart TB
-  subgraph actors ["THREAT ACTORS"]
-    Actor{{"Seller / Actor"}}
-  end
-
-  subgraph claims ["LEAK CLAIMS"]
-    Claim(["Leak Claim"])
-  end
-
-  subgraph targets ["MONITORED TARGET"]
-    Target[["Target Organization"]]
-    Domain[/"Domain"/]
-  end
-
-  subgraph evidence ["EVIDENCE & ASSETS"]
-    Asset[("Data Asset")]
-    Market>"Marketplace"]
-  end
-
-  Actor ==>|"MADE_CLAIM"| Claim
-  Claim ==>|"ALLEGEDLY_AFFECTS"| Target
-  Claim -.->|"MENTIONS"| Asset
-  Claim -.->|"LISTED_ON"| Market
-  Target -->|"HAS_DOMAIN"| Domain
-  Actor -.->|"OPERATES_ON"| Market
-```
+<p align="center">
+  <img src="assets/knowledge-graph.png" alt="Nocturne Knowledge Graph Schema" width="600">
+</p>
 
 | Edge | Meaning |
 | :--- | :--- |
