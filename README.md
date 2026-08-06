@@ -71,86 +71,84 @@ LIMIT 5;
 ## Architecture
 
 ```mermaid
-flowchart LR
-  A["Ahmia + Tor Crawler"] --> B["GCS Bucket (JSONL.gz)"]
-  B --> C["Snowflake Ingestion"]
-  C --> D["L0-L2: Detect, Classify, Extract"]
-  D --> E["L3-L4: Knowledge Graph + Scoring"]
-  E --> F["Analyst Dashboard"]
+flowchart TB
+  subgraph collect ["COLLECT"]
+    direction LR
+    Ahmia["Ahmia Search"] --> Crawler["Tor Crawler"]
+    Crawler --> GCS[("GCS Bucket\ngzipped JSONL")]
+  end
+
+  subgraph land ["LAND"]
+    direction LR
+    Stage["External Stage"] --> Ingest["5-min Ingest Task"]
+    Ingest --> Raw["CRAWL_PAGES\n(deduplicated)"]
+  end
+
+  subgraph cascade ["CASCADE (AI)"]
+    direction LR
+    L0["L0: Regex Indicators"] --> L1["L1: AI Classify"]
+    L1 --> L2["L2: AI Extract + Ground"]
+  end
+
+  subgraph score ["SCORE"]
+    direction LR
+    LeakType["Leak-Type AI"] --> KG["L3: Knowledge Graph"]
+    KG --> L4["L4: Impact / Confidence / Triage"]
+    L4 --> Insight["Incident Insight AI"]
+  end
+
+  subgraph serve ["SERVE"]
+    direction LR
+    Views["Dashboard Interface Views"] --> Console["Next.js Analyst Console"]
+  end
+
+  collect --> land --> cascade --> score --> serve
 ```
 
-The pipeline cascades through five stages:
-
 | Stage | What happens |
-| --- | --- |
-| **Collect** | Crawler discovers onion URLs, fetches pages via Tor, writes gzipped JSONL to GCS |
-| **Land** | Snowflake ingests from GCS every 5 minutes, deduplicates by `(org_id, dedupe_key)` |
-| **Cascade** | Deterministic indicators (L0), AI classification (L1), AI extraction (L2) |
-| **Score** | Knowledge graph (L3), impact/confidence/triage scoring (L4), incident insights |
+| :---: | :--- |
+| **Collect** | Crawler discovers .onion URLs via Ahmia, fetches pages through Tor, writes gzipped JSONL to GCS |
+| **Land** | Snowflake ingests from GCS every 5 min, deduplicates by `(org_id, dedupe_key)` |
+| **Cascade** | Deterministic regex indicators (L0), AI relationship classification (L1), AI extraction + grounding (L2) |
+| **Score** | Leak-type classification, knowledge graph (L3), impact/confidence/triage scoring (L4), incident insights |
 | **Serve** | Dashboard interface views consumed by the Next.js analyst console |
 
-For the full deep-dive with mermaid diagrams of every layer, see [architecture.md](architecture.md).
+For the full deep-dive with per-layer mermaid diagrams, see [architecture.md](architecture.md).
 
 ---
 
 ## Repository Layout
 
-```text
-.
-├── assets/                        # Project assets (logo, images)
-├── architecture.md                # Full architecture deep-dive with diagrams
-├── config.yaml                    # Crawler configuration
-├── Dockerfile                     # Tor + Chromium crawler container
-├── deploy_pipeline.py             # Snowflake pipeline deployer
-├── cleanup_snowflake.py           # Destructive test-environment teardown
-├── requirements.txt               # Crawler Python dependencies
-├── .env.example                   # Snowflake credential template
-├── .github/
-│   └── workflows/
-│       └── deploy-pipeline.yml    # CI/CD workflow
-├── src/
-│   └── nocturne_crawler/
-│       ├── __init__.py
-│       ├── scraper.py             # BFS crawler with Tor + keyword matching
-│       └── storage.py             # Local and GCS output backends
-├── scripts/
-│   ├── render_diagrams.cjs        # Mermaid diagram renderer
-│   └── org_crawl_config.py        # Multi-org crawl helper
-├── snowflake/
-│   ├── requirements.txt
-│   ├── 01_storage_integration.sql
-│   ├── 02_ingestion_layer.sql
-│   ├── 03_target_configuration.sql
-│   ├── 04_detect_indicators_udf.sql
-│   ├── 05_dt_regex_indicators.sql
-│   ├── 06_build_classification_input_udf.sql
-│   ├── 07_dt_l1_classification_input.sql
-│   ├── 08_dt_relationship_classification.sql
-│   ├── 09_dt_l2_extraction_ai.sql
-│   ├── 10_dt_l2_grounding_routing.sql
-│   ├── 11_dt_leak_type_severity.sql
-│   ├── 12_dt_l3_knowledge_graph.sql
-│   ├── 13_dt_l4_severity.sql
-│   ├── 14_ai_incident_insights.sql
-│   ├── 15_seed_validate_golive.sql
-│   ├── 16_dashboard_interface.sql
-│   ├── 99_cleanup.sql             # Destructive; never deployed normally
-│   └── tests/
-│       ├── 06_build_classification_input_middle_window_test.sql
-│       └── 10_l2_grounding_routing_test.sql
-├── nocturne_dashboard/            # Next.js analyst console (see its own README)
-│   ├── src/
-│   ├── package.json
-│   └── Dockerfile
-├── examples/                      # Test fixtures and sample crawled pages
-│   ├── sample_crawler_pages.jsonl
-│   ├── end-to-end-test/
-│   └── multi-org-test/
-├── plans/                         # Design documents
-├── tests/
-│   └── test_storage.py
-└── logs/                          # Generated timestamped pipeline logs
-```
+<table>
+<tr><td colspan="2"><strong>Crawler</strong></td></tr>
+<tr><td><code>src/nocturne_crawler/scraper.py</code></td><td>BFS dark-web crawler with Tor SOCKS + headless Chromium</td></tr>
+<tr><td><code>src/nocturne_crawler/storage.py</code></td><td>Local file and GCS output backends</td></tr>
+<tr><td><code>config.yaml</code></td><td>Organization slug, query, keywords, depth/page limits</td></tr>
+<tr><td><code>Dockerfile</code></td><td>Tor + Chromium container image</td></tr>
+<tr><td><code>requirements.txt</code></td><td>Crawler Python dependencies</td></tr>
+
+<tr><td colspan="2"><strong>Snowflake Pipeline</strong></td></tr>
+<tr><td><code>snowflake/01-16_*.sql</code></td><td>16 ordered pipeline steps (ingestion through dashboard views)</td></tr>
+<tr><td><code>snowflake/99_cleanup.sql</code></td><td>Destructive teardown (never auto-deployed)</td></tr>
+<tr><td><code>snowflake/tests/</code></td><td>SQL unit tests for UDFs and routing logic</td></tr>
+<tr><td><code>deploy_pipeline.py</code></td><td>Deploys, validates, and reports on the full pipeline</td></tr>
+<tr><td><code>cleanup_snowflake.py</code></td><td>Interactive destructive cleanup wrapper</td></tr>
+
+<tr><td colspan="2"><strong>Analyst Dashboard</strong></td></tr>
+<tr><td><code>nocturne_dashboard/</code></td><td>Next.js 15 + MUI v6 analyst console (<a href="nocturne_dashboard/README.md">its own README</a>)</td></tr>
+
+<tr><td colspan="2"><strong>Infrastructure & CI</strong></td></tr>
+<tr><td><code>.github/workflows/</code></td><td>CI/CD pipeline definitions</td></tr>
+<tr><td><code>.env.example</code></td><td>Snowflake credential template (copy to <code>.env</code>)</td></tr>
+<tr><td><code>scripts/</code></td><td>Diagram renderer, multi-org crawl config helper</td></tr>
+
+<tr><td colspan="2"><strong>Documentation & Tests</strong></td></tr>
+<tr><td><code>architecture.md</code></td><td>Full architecture deep-dive with mermaid diagrams</td></tr>
+<tr><td><code>plans/</code></td><td>Design documents (severity model, L2-L4 design)</td></tr>
+<tr><td><code>examples/</code></td><td>Sample crawler output and multi-org test fixtures</td></tr>
+<tr><td><code>tests/</code></td><td>Python unit tests</td></tr>
+<tr><td><code>logs/</code></td><td>Generated timestamped pipeline/cleanup logs (gitignored)</td></tr>
+</table>
 
 `snowflake/99_cleanup.sql`, Snowflake fixtures under `snowflake/tests/`, and
 `snowflake/queries.sql` are intentionally not executed by `deploy_pipeline.py`.
