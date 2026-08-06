@@ -4,8 +4,22 @@ import snowflake, {
   type ConnectionOptions,
 } from "snowflake-sdk";
 
+import { organizations as consoleTenants } from "@/mocks/organizations";
+import {
+  getDemoBreachMonitor,
+  getDemoCommandCenter,
+  getDemoIncidentDetail,
+  getDemoKnowledgeGraph,
+  getDemoPipeline,
+  getDemoMonitoredOrganization,
+  getDemoThreatActors,
+  isDemoScope,
+  DEMO_ORG_ID,
+} from "@/server/demo-backend";
+
 import type {
   AiStatus,
+  AiStage,
   ClaimStatus,
   ConfidenceBand,
   DataScope,
@@ -20,10 +34,13 @@ import type {
   L2Route,
   LeakType,
   RelationshipLabel,
+  RejectionReason,
   RemediationStatus,
   ScoreReason,
   SeverityBand,
+  TaskHealth,
   ThreatActor,
+  VersionDrift,
 } from "@/types";
 import type {
   BreachMonitorPipelineState,
@@ -45,6 +62,9 @@ import type {
   MonitoredOrganizationRecord,
   MonitoredOrganizationUpdate,
   PendingAlert,
+  PipelineAiCacheStage,
+  PipelineCacheSummary,
+  PipelineResponse,
   ThreatActorsResponse,
   UserProfileRecord,
   UserProfileUpdate,
@@ -55,6 +75,19 @@ if (typeof window !== "undefined") {
 }
 
 type SnowflakeRow = Record<string, unknown>;
+
+async function optionalDashboardQuery(
+  label: string,
+  sql: string,
+  binds?: Binds,
+): Promise<SnowflakeRow[]> {
+  try {
+    return await executeQuery(sql, binds);
+  } catch (error) {
+    console.warn(`[nocturne-dashboard] optional ${label} query unavailable:`, error);
+    return [];
+  }
+}
 
 interface BackendConfig {
   account: string;
@@ -70,10 +103,19 @@ interface BackendConfig {
 }
 
 export interface NocturneBackend {
-  getCommandCenter(scope: DataScope): Promise<CommandCenterResponse>;
+  /**
+   * `include` narrows a fleet request to a chosen subset of tenants. It is a
+   * view preference, not an access control: it can only ever remove rows the
+   * caller was already permitted to see, and org-scoped requests ignore it.
+   */
+  getCommandCenter(
+    scope: DataScope,
+    include?: ReadonlySet<string>,
+  ): Promise<CommandCenterResponse>;
   getBreachMonitor(
     scope: DataScope,
     access?: BreachMonitorAccess,
+    include?: ReadonlySet<string>,
   ): Promise<BreachMonitorResponse>;
   getIncidentDetail(
     scope: DataScope,
@@ -85,6 +127,7 @@ export interface NocturneBackend {
     incidentKey?: string,
   ): Promise<KnowledgeGraphResponse | null>;
   getThreatActors(scope: DataScope): Promise<ThreatActorsResponse>;
+  getPipeline(scope: DataScope): Promise<PipelineResponse>;
 }
 
 export interface BreachMonitorAccess {
@@ -380,6 +423,35 @@ const THREAT_ACTOR_COLUMNS = `
     AS FIRST_SEEN,
   TO_VARCHAR(LAST_SEEN, 'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM')
     AS LAST_SEEN
+`;
+
+const PIPELINE_REJECTION_COLUMNS = `
+  ORG_ID,
+  ELEMENT_KIND,
+  VALIDATION_REASON,
+  REJECTED_COUNT
+`;
+
+const PIPELINE_CACHE_COLUMNS = `
+  ORG_ID,
+  STAGE,
+  CACHE_ROWS,
+  SUCCESS_ROWS,
+  ERROR_ROWS,
+  MISSING_CANDIDATES,
+  TO_VARCHAR(
+    LAST_CALLED_AT,
+    'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM'
+  ) AS LAST_CALLED_AT
+`;
+
+const PIPELINE_DRIFT_COLUMNS = `
+  ORG_ID,
+  STAGE,
+  BASELINE_VERSION,
+  EXPECTED_VERSION,
+  CURRENT_VERSION,
+  ROWS_BEHIND
 `;
 
 let connectionPromise: Promise<Connection> | null = null;
@@ -1067,6 +1139,277 @@ function buildCascade(metrics: CommandCenterMetrics): CommandCenterResponse["cas
   ];
 }
 
+type PipelineCacheStageRow = PipelineAiCacheStage & { orgId: string };
+
+function rowField(row: SnowflakeRow, ...names: string[]): unknown {
+  for (const name of names) {
+    if (Object.prototype.hasOwnProperty.call(row, name)) return row[name];
+  }
+  const entries = Object.entries(row);
+  for (const name of names) {
+    const match = entries.find(([key]) => key.toUpperCase() === name.toUpperCase());
+    if (match) return match[1];
+  }
+  return undefined;
+}
+
+function pipelineStageLabel(stage: AiStage): string {
+  switch (stage) {
+    case "relationship":
+      return "Relationship";
+    case "l2_extraction":
+      return "L2 extraction";
+    case "leak_type":
+      return "Leak type";
+    case "incident_insight":
+      return "Incident insight";
+  }
+}
+
+function rejectionLabel(reason: string): string {
+  return reason
+    .split("_")
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function rejectionSeverity(reason: string): RejectionReason["severity"] {
+  if (reason === "unmatched_evidence") return "critical";
+  if (
+    reason.includes("endpoint")
+    || reason.includes("combination")
+    || reason.includes("source")
+    || reason.includes("target")
+  ) {
+    return "high";
+  }
+  if (reason.includes("cap")) return "low";
+  return "medium";
+}
+
+function aggregateRejectionReasons(rows: SnowflakeRow[]): RejectionReason[] {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const reason = stringValue(row.VALIDATION_REASON, "unknown");
+    counts.set(reason, (counts.get(reason) ?? 0) + numberValue(row.REJECTED_COUNT));
+  }
+  return [...counts.entries()]
+    .map(([reason, count]) => ({
+      reason,
+      label: rejectionLabel(reason),
+      count,
+      severity: rejectionSeverity(reason),
+    }))
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+}
+
+function mapCacheStage(row: SnowflakeRow): PipelineCacheStageRow {
+  return {
+    orgId: stringValue(row.ORG_ID),
+    stage: stringValue(row.STAGE) as AiStage,
+    cacheRows: numberValue(row.CACHE_ROWS),
+    successRows: numberValue(row.SUCCESS_ROWS),
+    errorRows: numberValue(row.ERROR_ROWS),
+    missingCandidates: numberValue(row.MISSING_CANDIDATES),
+    lastCalledAt: nullableString(row.LAST_CALLED_AT),
+  };
+}
+
+function aggregateCacheStages(rows: SnowflakeRow[]): PipelineCacheStageRow[] {
+  const byStage = new Map<AiStage, PipelineCacheStageRow>();
+  for (const row of rows.map(mapCacheStage)) {
+    const current = byStage.get(row.stage);
+    if (!current) {
+      byStage.set(row.stage, { ...row, orgId: "fleet" });
+      continue;
+    }
+    current.cacheRows += row.cacheRows;
+    current.successRows += row.successRows;
+    current.errorRows += row.errorRows;
+    current.missingCandidates += row.missingCandidates;
+    current.lastCalledAt = latestTimestamp([current.lastCalledAt, row.lastCalledAt]);
+  }
+  return [...byStage.values()].sort((a, b) =>
+    pipelineStageLabel(a.stage).localeCompare(pipelineStageLabel(b.stage)),
+  );
+}
+
+function summarizeCache(stages: PipelineAiCacheStage[]): PipelineCacheSummary {
+  return {
+    cacheRows: stages.reduce((total, stage) => total + stage.cacheRows, 0),
+    successRows: stages.reduce((total, stage) => total + stage.successRows, 0),
+    errorRows: stages.reduce((total, stage) => total + stage.errorRows, 0),
+    missingCandidates: stages.reduce(
+      (total, stage) => total + stage.missingCandidates,
+      0,
+    ),
+    repeatCallsAvoided: stages.reduce(
+      (total, stage) => total + stage.successRows,
+      0,
+    ),
+  };
+}
+
+function aggregateVersionDrift(rows: SnowflakeRow[]): VersionDrift[] {
+  const byStage = new Map<string, {
+    baselineVersion: string | null;
+    currentVersions: Set<string>;
+    expectedVersion: string;
+    rowsBehind: number;
+  }>();
+
+  for (const row of rows) {
+    const stage = stringValue(row.STAGE);
+    const current = byStage.get(stage);
+    const currentVersion = stringValue(row.CURRENT_VERSION);
+    if (!current) {
+      byStage.set(stage, {
+        baselineVersion: nullableString(row.BASELINE_VERSION),
+        currentVersions: new Set([currentVersion]),
+        expectedVersion: stringValue(row.EXPECTED_VERSION, currentVersion),
+        rowsBehind: numberValue(row.ROWS_BEHIND),
+      });
+    } else {
+      current.currentVersions.add(currentVersion);
+      current.rowsBehind += numberValue(row.ROWS_BEHIND);
+    }
+  }
+
+  return [...byStage.entries()].map(([stage, value]) => {
+    const versions = [...value.currentVersions].filter(Boolean);
+    return {
+      stage,
+      baselineVersion: value.baselineVersion,
+      currentVersion: versions.length <= 1
+        ? versions[0] ?? value.expectedVersion
+        : "mixed",
+      rowsBehind: value.rowsBehind,
+    };
+  });
+}
+
+function normalizeTaskState(
+  state: string,
+  trigger: TaskHealth["trigger"],
+): TaskHealth["state"] {
+  const normalized = state.toLowerCase();
+  if (normalized.includes("suspend")) return "suspended";
+  if (normalized.includes("fail")) return "failed";
+  if (normalized.includes("queue")) return "queued";
+  if (normalized.includes("start") || normalized.includes("run")) {
+    return trigger === "stream" ? "idle" : "running";
+  }
+  return "idle";
+}
+
+function taskLastRunAt(row: SnowflakeRow, fallback: string | null): string | null {
+  return nullableString(
+    rowField(
+      row,
+      "last_committed_on",
+      "LAST_COMMITTED_ON",
+      "last_run_at",
+      "LAST_RUN_AT",
+      "completed_time",
+      "COMPLETED_TIME",
+      "scheduled_time",
+      "SCHEDULED_TIME",
+    ),
+  ) ?? fallback;
+}
+
+const AI_TASK_STAGE: Record<string, AiStage | null> = {
+  RELATIONSHIP_AI_TASK: "relationship",
+  L2_EXTRACTION_AI_TASK: "l2_extraction",
+  LEAK_TYPE_AI_TASK: "leak_type",
+  INCIDENT_INSIGHT_AI_TASK: "incident_insight",
+  CRAWL_INGEST_TASK: null,
+  INCIDENT_INSIGHT_CANDIDATE_DISCOVERY_TASK: null,
+};
+
+function defaultTasks(cacheStages: PipelineAiCacheStage[]): TaskHealth[] {
+  const byStage = new Map(cacheStages.map((stage) => [stage.stage, stage]));
+  return Object.entries(AI_TASK_STAGE).map(([taskName, stage]) => ({
+    taskName,
+    trigger: taskName === "CRAWL_INGEST_TASK" || taskName === "INCIDENT_INSIGHT_CANDIDATE_DISCOVERY_TASK"
+      ? "schedule"
+      : "stream",
+    scheduleLabel: taskName === "CRAWL_INGEST_TASK" || taskName === "INCIDENT_INSIGHT_CANDIDATE_DISCOVERY_TASK"
+      ? "5 min"
+      : null,
+    state: "idle",
+    lastRunAt: stage ? byStage.get(stage)?.lastCalledAt ?? null : null,
+    pendingCandidates: stage ? byStage.get(stage)?.missingCandidates ?? 0 : null,
+    errorCount: stage ? byStage.get(stage)?.errorRows ?? 0 : 0,
+  }));
+}
+
+function mapTaskRows(
+  rows: SnowflakeRow[],
+  cacheStages: PipelineAiCacheStage[],
+): TaskHealth[] {
+  if (rows.length === 0) return defaultTasks(cacheStages);
+
+  const byStage = new Map(cacheStages.map((stage) => [stage.stage, stage]));
+  const tasks = rows
+    .map((row) => {
+      const taskName = stringValue(rowField(row, "name", "task_name", "NAME", "TASK_NAME"));
+      const stage = AI_TASK_STAGE[taskName];
+      if (stage === undefined) return null;
+      const condition = nullableString(rowField(row, "condition", "CONDITION"));
+      const schedule = nullableString(rowField(row, "schedule", "SCHEDULE"));
+      const trigger: TaskHealth["trigger"] = condition ? "stream" : "schedule";
+      const cacheStage = stage ? byStage.get(stage) : undefined;
+      return {
+        taskName,
+        trigger,
+        scheduleLabel: trigger === "schedule" ? schedule ?? "manual" : null,
+        state: normalizeTaskState(
+          stringValue(rowField(row, "state", "STATE"), "idle"),
+          trigger,
+        ),
+        lastRunAt: taskLastRunAt(row, cacheStage?.lastCalledAt ?? null),
+        pendingCandidates: stage ? cacheStage?.missingCandidates ?? 0 : null,
+        errorCount: stage ? cacheStage?.errorRows ?? 0 : 0,
+      };
+    })
+    .filter((task): task is TaskHealth => task !== null);
+
+  return tasks.length ? tasks : defaultTasks(cacheStages);
+}
+
+function aggregatePipelineHealth(
+  organizations: CommandCenterOrganizationSnapshot[],
+  cacheStages: PipelineCacheStageRow[],
+): PipelineResponse["health"] {
+  return organizations.map((organization) => {
+    const orgCache = cacheStages.filter((stage) => stage.orgId === organization.orgId);
+    const backlogCount = orgCache.reduce(
+      (total, stage) => total + stage.missingCandidates,
+      0,
+    );
+    const aiErrorCount = organization.metrics.downstreamAiErrorCount
+      + orgCache.reduce((total, stage) => total + stage.errorRows, 0);
+    const groundingRate = organization.metrics.grounding.rate;
+    const status: PipelineResponse["health"][number]["status"] = aiErrorCount > 0
+      ? "degraded"
+      : backlogCount > 0
+        ? "lagging"
+        : "healthy";
+    return {
+      orgId: organization.orgId,
+      organizationName: organization.organizationName,
+      lastIngestAt: organization.lastUpdatedAt,
+      groundingRate,
+      quarantinedCount: organization.metrics.grounding.quarantinedCount,
+      totalExtractedCount: organization.metrics.grounding.totalExtractedClaims,
+      aiErrorCount,
+      backlogCount,
+      status,
+    };
+  });
+}
+
 function latestTimestamp(values: Array<string | null>): string | null {
   return values.filter((value): value is string => Boolean(value)).sort().at(-1) ?? null;
 }
@@ -1305,6 +1648,82 @@ export class SnowflakeNocturneBackend implements NocturneBackend {
     };
   }
 
+  async getPipeline(scope: DataScope): Promise<PipelineResponse> {
+    const filter = scopeFilter(scope);
+    const [
+      summaryRows,
+      rejectionRows,
+      cacheRows,
+      driftRows,
+      taskRows,
+    ] = await Promise.all([
+      executeQuery(
+        `SELECT ${SUMMARY_COLUMNS}
+         FROM NOCTURNE.DASHBOARD.VW_COMMAND_CENTER${filter.clause}
+         ORDER BY ORG_ID`,
+        filter.binds,
+      ),
+      optionalDashboardQuery(
+        "pipeline rejection reasons",
+        `SELECT ${PIPELINE_REJECTION_COLUMNS}
+         FROM NOCTURNE.DASHBOARD.VW_PIPELINE_REJECTION_REASONS${filter.clause}
+         ORDER BY REJECTED_COUNT DESC, VALIDATION_REASON`,
+        filter.binds,
+      ),
+      optionalDashboardQuery(
+        "pipeline AI cache health",
+        `SELECT ${PIPELINE_CACHE_COLUMNS}
+         FROM NOCTURNE.DASHBOARD.VW_PIPELINE_AI_CACHE_HEALTH${filter.clause}
+         ORDER BY ORG_ID, STAGE`,
+        filter.binds,
+      ),
+      optionalDashboardQuery(
+        "pipeline version drift",
+        `SELECT ${PIPELINE_DRIFT_COLUMNS}
+         FROM NOCTURNE.DASHBOARD.VW_PIPELINE_VERSION_DRIFT${filter.clause}
+         ORDER BY ORG_ID, STAGE`,
+        filter.binds,
+      ),
+      executeQuery("SHOW TASKS IN SCHEMA NOCTURNE.RAW").catch(() => []),
+    ]);
+
+    const organizations = summaryRows.map(mapOrganization);
+    const totals = aggregateMetrics(organizations, []);
+    const orgCacheStages = cacheRows.map(mapCacheStage);
+    const cacheStagesWithOrg = scope.kind === "fleet"
+      ? aggregateCacheStages(cacheRows)
+      : orgCacheStages.sort((a, b) =>
+          pipelineStageLabel(a.stage).localeCompare(pipelineStageLabel(b.stage)),
+        );
+    const cacheStages = cacheStagesWithOrg.map(({ orgId: _orgId, ...stage }) => stage);
+    const relevance = totals.pipeline.pagesRelevanceChecked || 0;
+    const extracted = totals.pipeline.pagesEvidenceExtracted || 0;
+
+    return {
+      scope,
+      organizations: organizations.map((organization) => ({
+        orgId: organization.orgId,
+        organizationName: organization.organizationName,
+        lastUpdatedAt: organization.lastUpdatedAt,
+      })),
+      cascade: buildCascade(totals),
+      grounding: totals.grounding,
+      deepAnalysisRate: relevance === 0
+        ? 0
+        : Number(((100 * extracted) / relevance).toFixed(1)),
+      cacheSummary: summarizeCache(cacheStages),
+      cacheStages,
+      rejectionReasons: aggregateRejectionReasons(rejectionRows),
+      versionDrift: aggregateVersionDrift(driftRows),
+      health: aggregatePipelineHealth(organizations, orgCacheStages),
+      tasks: mapTaskRows(taskRows, cacheStages),
+      lastUpdatedAt: latestTimestamp(
+        organizations.map((organization) => organization.lastUpdatedAt),
+      ),
+      fetchedAt: new Date().toISOString(),
+    };
+  }
+
   async getThreatActors(scope: DataScope): Promise<ThreatActorsResponse> {
     if (scope.kind !== "org") {
       throw new Error("Threat actor queries require one organization scope.");
@@ -1343,7 +1762,126 @@ export class SnowflakeNocturneBackend implements NocturneBackend {
   }
 }
 
-export const nocturneBackend: NocturneBackend = new SnowflakeNocturneBackend();
+const snowflakeBackend: NocturneBackend = new SnowflakeNocturneBackend();
+
+/**
+ * Tenants this console is configured for.
+ *
+ * MONITORED_ORGANIZATIONS accumulates rows from earlier crawls and experiments,
+ * and VW_INCIDENTS joins it unconditionally — so a retired target keeps
+ * appearing in fleet views with all of its historical incidents. Filtering to
+ * the console's own registry hides them without deleting warehouse data, which
+ * would take the incident history with it. Onboarding a tenant means adding it
+ * to src/mocks/organizations.ts, the same place its login comes from.
+ */
+const CONSOLE_TENANT_IDS = new Set(consoleTenants.map((tenant) => tenant.orgId));
+
+function isConsoleTenant(row: { orgId: string }): boolean {
+  return CONSOLE_TENANT_IDS.has(row.orgId);
+}
+
+/**
+ * Fleet response with retired tenants removed and the demo tenant folded in.
+ *
+ * Totals and the cascade are recomputed from the surviving rows rather than
+ * carried over, so the header cannot disagree with the table beneath it.
+ */
+async function fleetCommandCenter(
+  scope: DataScope,
+  include?: ReadonlySet<string>,
+): Promise<CommandCenterResponse> {
+  const live = await snowflakeBackend.getCommandCenter(scope);
+  const demo = getDemoCommandCenter();
+
+  // The demo tenant's figures are fabricated, so it is opt-in: leaving it in
+  // by default would put invented incidents into the fleet totals a reviewer
+  // reads as real.
+  const selected = (row: { orgId: string }) =>
+    include ? include.has(row.orgId) : row.orgId !== DEMO_ORG_ID;
+
+  const organizations = [
+    ...live.organizations.filter(isConsoleTenant),
+    ...demo.organizations,
+  ].filter(selected);
+  const incidents = [...live.incidents.filter(isConsoleTenant), ...demo.incidents]
+    .filter(selected)
+    .sort((a, b) => (b.triagePriorityScore ?? -1) - (a.triagePriorityScore ?? -1));
+  const totals = aggregateMetrics(organizations, incidents);
+
+  return {
+    ...live,
+    organizations,
+    totals,
+    cascade: buildCascade(totals),
+    incidents,
+  };
+}
+
+
+
+/**
+ * One dispatch point for the synthetic demo tenant.
+ *
+ * Routing here rather than in each API route means a new route cannot forget
+ * the check, and — more importantly — cannot accidentally apply it too widely:
+ * `isDemoScope` is true only for an org-scoped request against DEMO_ORG_ID, so
+ * fleet scope and every real tenant still reach Snowflake. See demo-backend.ts.
+ */
+export const nocturneBackend: NocturneBackend = {
+  getCommandCenter(scope, include) {
+    if (isDemoScope(scope)) return Promise.resolve(getDemoCommandCenter());
+    if (scope.kind === "fleet") return fleetCommandCenter(scope, include);
+    return snowflakeBackend.getCommandCenter(scope);
+  },
+  async getBreachMonitor(scope, access, include) {
+    if (isDemoScope(scope)) return getDemoBreachMonitor();
+    const live = await snowflakeBackend.getBreachMonitor(scope, access);
+    if (scope.kind !== "fleet") return live;
+
+    // Same rule as the command centre: honour an explicit selection, and leave
+    // the fabricated demo tenant out when there is none.
+    const selected = (row: { orgId: string }) =>
+      include ? include.has(row.orgId) : row.orgId !== DEMO_ORG_ID;
+
+    const demo = getDemoBreachMonitor();
+    const rows = [...live.rows.filter(isConsoleTenant), ...demo.rows].filter(selected);
+    const confirmed = rows.filter((row) => row.monitorStatus === "confirmed_yours");
+    return {
+      ...live,
+      rows,
+      summary: {
+        totalRows: rows.length,
+        confirmedLeaks: confirmed.length,
+        recordsClaimed: confirmed.reduce((sum, r) => sum + (r.quantityClaimed ?? 0), 0),
+        exposedDataClassCount: new Set(confirmed.flatMap((r) => r.leakTypes)).size,
+        needsReview: rows.filter((r) => r.monitorStatus === "needs_review").length,
+        anotherCompany: rows.filter((r) => r.monitorStatus === "another_company").length,
+      },
+    };
+  },
+  getIncidentDetail(scope, incidentKey) {
+    if (isDemoScope(scope)) return Promise.resolve(getDemoIncidentDetail(incidentKey));
+    return snowflakeBackend.getIncidentDetail(scope, incidentKey);
+  },
+  getKnowledgeGraph(scope, view, incidentKey) {
+    if (isDemoScope(scope)) return Promise.resolve(getDemoKnowledgeGraph(view, incidentKey));
+    return snowflakeBackend.getKnowledgeGraph(scope, view, incidentKey);
+  },
+  getThreatActors(scope) {
+    if (isDemoScope(scope)) return Promise.resolve(getDemoThreatActors());
+    return snowflakeBackend.getThreatActors(scope);
+  },
+  async getPipeline(scope) {
+    if (isDemoScope(scope)) return getDemoPipeline();
+    const live = await snowflakeBackend.getPipeline(scope);
+    if (scope.kind !== "fleet") return live;
+    return {
+      ...live,
+      organizations: live.organizations.filter(isConsoleTenant),
+      health: live.health.filter((row) => row.orgId === null || isConsoleTenant({ orgId: row.orgId })),
+    };
+  },
+};
 
 /* ── monitored-organization configuration ──────────────────────────────────── */
 
@@ -1444,6 +1982,7 @@ export function normalizeMonitoredOrganizationUpdate(
 export async function listMonitoredOrganizations(
   scope: DataScope,
 ): Promise<MonitoredOrganizationRecord[]> {
+  if (isDemoScope(scope)) return [getDemoMonitoredOrganization()];
   const filter = scopeFilter(scope);
   const rows = await executeQuery(
     `SELECT ${MONITORED_ORG_COLUMNS}
@@ -1465,6 +2004,11 @@ export async function updateMonitoredOrganization(
   orgId: string,
   update: MonitoredOrganizationUpdate,
 ): Promise<MonitoredOrganizationRecord | null> {
+  // The demo tenant has no warehouse row to write. Echo the edit back so the
+  // form round-trips, without pretending it was persisted anywhere.
+  if (orgId === DEMO_ORG_ID) {
+    return { ...getDemoMonitoredOrganization(), ...update, orgId: DEMO_ORG_ID };
+  }
   await executeQuery(
     `UPDATE NOCTURNE.CONFIG.MONITORED_ORGANIZATIONS
      SET ALIASES = CAST(PARSE_JSON(?) AS ARRAY),
@@ -1697,6 +2241,14 @@ export async function findPendingAlerts(
        i.TOP_URL,
        i.IMPACT_SEVERITY_BAND,
        i.IMPACT_SEVERITY_SCORE,
+       i.LEAK_TYPE_LABELS,
+       i.QUANTITY_CLAIMED,
+       i.EVIDENCE_CONFIDENCE_SCORE,
+       i.TRIAGE_PRIORITY_SCORE,
+       i.ACTOR_NAME,
+       i.INSIGHT_HEADLINE,
+       i.EXECUTIVE_SUMMARY,
+       i.RECOMMENDED_ACTIONS,
        TO_VARCHAR(i.FIRST_SEEN, 'YYYY-MM-DD"T"HH24:MI:SSTZH:TZM') AS FIRST_SEEN,
        p.USERNAME,
        p.EMAIL,
@@ -1734,6 +2286,14 @@ export async function findPendingAlerts(
     username: stringValue(row.USERNAME),
     email: stringValue(row.EMAIL),
     displayName: stringValue(row.DISPLAY_NAME),
+    leakTypes: stringArray(row.LEAK_TYPE_LABELS) as LeakType[],
+    quantityClaimed: nullableNumber(row.QUANTITY_CLAIMED),
+    evidenceConfidenceScore: nullableNumber(row.EVIDENCE_CONFIDENCE_SCORE),
+    triagePriorityScore: nullableNumber(row.TRIAGE_PRIORITY_SCORE),
+    actorName: nullableString(row.ACTOR_NAME),
+    insightHeadline: nullableString(row.INSIGHT_HEADLINE),
+    executiveSummary: nullableString(row.EXECUTIVE_SUMMARY),
+    recommendedActions: stringArray(row.RECOMMENDED_ACTIONS),
   }));
 }
 
@@ -1770,4 +2330,37 @@ export async function claimAlertDelivery(alert: PendingAlert): Promise<boolean> 
     (rows[0] as Record<string, unknown> | undefined)?.["number of rows inserted"] ?? 0,
   );
   return inserted > 0;
+}
+
+/**
+ * Starts the ingestion task and reports what is queued behind it.
+ *
+ * EXECUTE TASK returns as soon as the task is submitted, not when it finishes,
+ * so the counts below describe the state at submission — the UI says "started",
+ * never "complete".
+ */
+export async function executePipelineRun(): Promise<{
+  startedAt: string;
+  task: string;
+  pendingCandidates: number | null;
+}> {
+  await executeQuery("EXECUTE TASK NOCTURNE.RAW.CRAWL_INGEST_TASK", []);
+
+  let pendingCandidates: number | null = null;
+  try {
+    const rows = await executeQuery(
+      `SELECT COUNT(*) AS PENDING
+       FROM NOCTURNE.RAW.DT_L1_CLASSIFICATION_INPUT`,
+      [],
+    );
+    pendingCandidates = nullableNumber(rows[0]?.PENDING);
+  } catch {
+    // Informational only — a run that started is still a run that started.
+  }
+
+  return {
+    startedAt: new Date().toISOString(),
+    task: "CRAWL_INGEST_TASK",
+    pendingCandidates,
+  };
 }

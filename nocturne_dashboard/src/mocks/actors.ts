@@ -14,9 +14,9 @@ import type { ThreatActor } from "@/types";
  */
 export const actors: ThreatActor[] = [
   {
-    actorNodeKey: "actor-nightfox-panw",
+    actorNodeKey: "actor-nightfox-odido",
     globalNodeKey: null,
-    orgId: "palo_alto_networks",
+    orgId: "odido",
     actorName: "NightFox",
     totalClaimCount: 4,
     corroboratedClaimCount: 3,
@@ -32,9 +32,9 @@ export const actors: ThreatActor[] = [
     marketplaces: ["darkbay-market", "ghostforum-7x"],
   },
   {
-    actorNodeKey: "actor-m0rpheus-panw",
+    actorNodeKey: "actor-m0rpheus-odido",
     globalNodeKey: null,
-    orgId: "palo_alto_networks",
+    orgId: "odido",
     actorName: "m0rpheus",
     totalClaimCount: 3,
     corroboratedClaimCount: 2,
@@ -50,9 +50,9 @@ export const actors: ThreatActor[] = [
     marketplaces: ["darkbay-market"],
   },
   {
-    actorNodeKey: "actor-vex-panw",
+    actorNodeKey: "actor-vex-odido",
     globalNodeKey: null,
-    orgId: "palo_alto_networks",
+    orgId: "odido",
     actorName: "Vex_Trader",
     totalClaimCount: 2,
     corroboratedClaimCount: 0,
@@ -68,9 +68,9 @@ export const actors: ThreatActor[] = [
     marketplaces: ["ghostforum-7x"],
   },
   {
-    actorNodeKey: "actor-generic-seller-panw",
+    actorNodeKey: "actor-generic-seller-odido",
     globalNodeKey: null,
-    orgId: "palo_alto_networks",
+    orgId: "odido",
     actorName: "seller",
     totalClaimCount: 1,
     corroboratedClaimCount: 0,
@@ -86,9 +86,9 @@ export const actors: ThreatActor[] = [
     marketplaces: ["leakchat-hub"],
   },
   {
-    actorNodeKey: "actor-nightfox-att",
+    actorNodeKey: "actor-nightfox-euc",
     globalNodeKey: null,
-    orgId: "att",
+    orgId: "european_commission",
     actorName: "NightFox",
     totalClaimCount: 6,
     corroboratedClaimCount: 4,
@@ -104,9 +104,9 @@ export const actors: ThreatActor[] = [
     marketplaces: ["darkbay-market", "ghostforum-7x", "leakchat-hub"],
   },
   {
-    actorNodeKey: "actor-m0rpheus-att",
+    actorNodeKey: "actor-m0rpheus-euc",
     globalNodeKey: null,
-    orgId: "att",
+    orgId: "european_commission",
     actorName: "m0rpheus",
     totalClaimCount: 3,
     corroboratedClaimCount: 2,
@@ -124,7 +124,7 @@ export const actors: ThreatActor[] = [
   {
     actorNodeKey: "actor-nightfox-bob",
     globalNodeKey: null,
-    orgId: "bank_of_baroda",
+    orgId: "demo_org",
     actorName: "NightFox",
     totalClaimCount: 2,
     corroboratedClaimCount: 1,
@@ -138,24 +138,6 @@ export const actors: ThreatActor[] = [
     lastSeen: "2026-07-30T11:15:00Z",
     contactChannels: ["tox:8f2c…"],
     marketplaces: ["darkbay-market"],
-  },
-  {
-    actorNodeKey: "actor-vex-contoso",
-    globalNodeKey: null,
-    orgId: "contoso_logistics",
-    actorName: "Vex_Trader",
-    totalClaimCount: 2,
-    corroboratedClaimCount: 1,
-    disputedClaimCount: 0,
-    docCount: 1,
-    sightingCount: 2,
-    mirrorSightingCount: 1,
-    marketplaceCount: 1,
-    credibilityScore: 54,
-    firstSeen: "2026-07-29T09:48:00Z",
-    lastSeen: "2026-07-29T09:48:00Z",
-    contactChannels: [],
-    marketplaces: ["leakchat-hub"],
   },
 ];
 
@@ -179,7 +161,7 @@ export interface CrossTenantActor {
 export const crossTenantActors: CrossTenantActor[] = [
   {
     actorName: "NightFox",
-    affectedOrgIds: ["palo_alto_networks", "att", "bank_of_baroda"],
+    affectedOrgIds: ["odido", "european_commission", "demo_org"],
     totalClaims: 12,
     corroboratedClaims: 8,
     marketplaceCount: 3,
@@ -189,7 +171,7 @@ export const crossTenantActors: CrossTenantActor[] = [
   },
   {
     actorName: "m0rpheus",
-    affectedOrgIds: ["palo_alto_networks", "att"],
+    affectedOrgIds: ["odido", "european_commission"],
     totalClaims: 6,
     corroboratedClaims: 4,
     marketplaceCount: 2,
@@ -199,7 +181,7 @@ export const crossTenantActors: CrossTenantActor[] = [
   },
   {
     actorName: "Vex_Trader",
-    affectedOrgIds: ["palo_alto_networks", "contoso_logistics"],
+    affectedOrgIds: ["odido", "demo_org"],
     totalClaims: 4,
     corroboratedClaims: 1,
     marketplaceCount: 1,

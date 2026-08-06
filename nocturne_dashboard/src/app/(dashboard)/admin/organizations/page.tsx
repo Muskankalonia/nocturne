@@ -11,7 +11,7 @@ import { orgPostures } from "@/mocks/fleet";
 import { Panel } from "@/components/ui/Panel";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader, StatCard, StatGrid, Tag } from "@/components/ui/Primitives";
-import { colors, fonts, severityColor } from "@/theme/tokens";
+import { colors, fonts, severityColor , layout as layoutTokens} from "@/theme/tokens";
 import { formatDate } from "@/lib/format";
 import AdminOnly from "@/components/layout/AdminOnly";
 import type { Organization } from "@/types";
@@ -170,7 +170,7 @@ export default function OrganizationsPage() {
 
   return (
     <AdminOnly>
-      <Stack gap={2}>
+      <Stack gap={2} sx={{ minHeight: `calc(100dvh - ${layoutTokens.headerHeight + (layoutTokens.gutter - 4) * 2}px)`, pb: 1 }}>
         <PageHeader
           title="Organizations"
           subtitle="Tenant identity and crawl configuration. These values drive ownership matching."

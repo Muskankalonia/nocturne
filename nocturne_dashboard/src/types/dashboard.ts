@@ -1,5 +1,6 @@
 import type {
   AiStatus,
+  AiStage,
   BreachRecord,
   CascadeStage,
   ClaimStatus,
@@ -15,8 +16,11 @@ import type {
   LeakType,
   RelationshipLabel,
   RemediationStatus,
+  RejectionReason,
   SeverityBand,
+  TaskHealth,
   ThreatActor,
+  VersionDrift,
 } from "@/types";
 
 /**
@@ -304,6 +308,76 @@ export interface CommandCenterResponse {
   fetchedAt: string;
 }
 
+export interface PipelineOrganizationSummary {
+  orgId: string;
+  organizationName: string;
+  lastUpdatedAt: string | null;
+}
+
+export interface PipelineAiCacheStage {
+  stage: AiStage;
+  cacheRows: number;
+  successRows: number;
+  errorRows: number;
+  missingCandidates: number;
+  lastCalledAt: string | null;
+}
+
+export interface PipelineCacheSummary {
+  cacheRows: number;
+  successRows: number;
+  errorRows: number;
+  missingCandidates: number;
+  repeatCallsAvoided: number;
+}
+
+/**
+ * Precision / recall / calibration against a labelled gold set.
+ *
+ * Optional because it is only meaningful where a gold set exists. Live tenants
+ * have none, so this is absent and the Accuracy panel does not render — an
+ * invented accuracy figure is worse than no figure.
+ */
+export interface PipelineAccuracyMetrics {
+  goldSetSize: number;
+  precision: number;
+  recall: number;
+  f1: number;
+  falsePositiveRate: number;
+  calibrationError: number;
+  lastEvaluatedAt: string;
+  /** Free-text provenance, rendered verbatim so the source is never implied. */
+  basis: string;
+}
+
+export interface PipelineResponse {
+  scope: DataScope;
+  /** Present only when a labelled gold set backs the numbers. */
+  accuracy?: PipelineAccuracyMetrics | null;
+  organizations: PipelineOrganizationSummary[];
+  cascade: CascadeStage[];
+  grounding: DashboardGroundingSummary;
+  deepAnalysisRate: number;
+  cacheSummary: PipelineCacheSummary;
+  cacheStages: PipelineAiCacheStage[];
+  rejectionReasons: RejectionReason[];
+  versionDrift: VersionDrift[];
+  health: Array<{
+    orgId: string | null;
+    organizationName: string;
+    lastIngestAt: string | null;
+    groundingRate: number;
+    quarantinedCount: number;
+    totalExtractedCount: number;
+    aiErrorCount: number;
+    backlogCount: number;
+    status: "healthy" | "lagging" | "degraded" | "failed";
+  }>;
+  tasks: TaskHealth[];
+  lastUpdatedAt: string | null;
+  fetchedAt: string;
+}
+
 /**
  * Monitored-organization configuration, read from and written back to
  * NOCTURNE.CONFIG.MONITORED_ORGANIZATIONS. This is the one table the console
@@ -371,6 +445,16 @@ export interface PendingAlert {
   username: string;
   email: string;
   displayName: string;
+  /* Context for the alert body. None of this is leaked material: it is the
+     classification and the model's own summary, never a verbatim excerpt. */
+  leakTypes: LeakType[];
+  quantityClaimed: number | null;
+  evidenceConfidenceScore: number | null;
+  triagePriorityScore: number | null;
+  actorName: string | null;
+  insightHeadline: string | null;
+  executiveSummary: string | null;
+  recommendedActions: string[];
 }
 
 export interface AlertDispatchResult {

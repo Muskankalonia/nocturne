@@ -3,7 +3,8 @@ const puppeteer = require("puppeteer");
 const BASE = process.env.BASE || "http://localhost:3113";
 const route = process.argv[2] || "/";
 const out = process.argv[3] || "shot.png";
-const user = process.argv[4] || "palo_alto_networks";
+const user = process.argv[4] || "odido";
+const pass = user + (process.env.SUFFIX || "_769187");
 
 (async () => {
   const b = await puppeteer.launch({
@@ -23,7 +24,7 @@ const user = process.argv[4] || "palo_alto_networks";
     await p.goto(`${BASE}/login`, { waitUntil: "networkidle2" });
     const ins = await p.$$("input");
     await ins[0].type(user);
-    await ins[1].type(user);
+    await ins[1].type(pass);
     await Promise.all([
       p.waitForFunction(() => !location.pathname.startsWith("/login"), { timeout: 15000 }),
       p.click('button[type="submit"]'),

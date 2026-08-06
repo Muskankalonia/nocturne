@@ -76,7 +76,7 @@ export default function GraphPage() {
   const [edge, setEdge] = useState<GraphEdge | null>(null);
 
   const [layout, setLayout] = useState<GraphLayout>("spine");
-  const [stopIndex, setStopIndex] = useState(0);
+  const [stopIndex, setStopIndex] = useState(Number.MAX_SAFE_INTEGER);
 
   const load = useCallback(async (signal?: AbortSignal, background = false) => {
     if (!session || session.scope.kind !== "org") return;
@@ -157,8 +157,12 @@ export default function GraphPage() {
     };
   }, [isAuthLoading, load, session]);
 
+  // Both views default to the spine. Force is still selectable, but on the
+  // actors view — ~19 nodes, most of them claims carrying a whole sentence —
+  // it packs labels on top of each other, while the dagre spine stays legible
+  // at the same node count.
   useEffect(() => {
-    setLayout(view === "actors" ? "force" : "spine");
+    setLayout("spine");
   }, [view]);
 
   useEffect(() => {

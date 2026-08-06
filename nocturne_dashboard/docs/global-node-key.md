@@ -29,7 +29,7 @@ END AS NODE_KEY
 Per tenant this is exactly right — it is what guarantees that one customer's
 graph can never join another's.
 
-But it means the actor `NightFox`, seen while crawling for `palo_alto_networks`
+But it means the actor `NightFox`, seen while crawling for `odido`
 and seen again while crawling for `att`, produces **two different node keys that
 cannot be joined**. The single most valuable fleet-level insight — *"this actor
 is hitting three of your five tenants"* — is currently uncomputable.

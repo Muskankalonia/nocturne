@@ -5,8 +5,8 @@ import { crossTenantActors } from "@/mocks/actors";
 import { findOrganization } from "@/mocks/organizations";
 import { Panel } from "@/components/ui/Panel";
 import { SeverityChip } from "@/components/ui/SeverityChip";
-import { DataGapNote, PageHeader, StatCard, StatGrid, Tag } from "@/components/ui/Primitives";
-import { bandForScore, colors, fonts, severityColor } from "@/theme/tokens";
+import { PageHeader, StatCard, StatGrid, Tag } from "@/components/ui/Primitives";
+import { bandForScore, colors, fonts, severityColor , layout as layoutTokens} from "@/theme/tokens";
 import { formatDate } from "@/lib/format";
 import AdminOnly from "@/components/layout/AdminOnly";
 
@@ -51,21 +51,11 @@ export default function CrossTenantActorsPage() {
 
   return (
     <AdminOnly>
-      <Stack gap={2}>
+      <Stack gap={2} sx={{ minHeight: `calc(100dvh - ${layoutTokens.headerHeight + (layoutTokens.gutter - 4) * 2}px)`, pb: 1 }}>
         <PageHeader
           title="Cross-Tenant Actors"
           subtitle="One actor, several customers — a shape no single-tenant view can produce."
         />
-
-        <DataGapNote>
-          <b>This page needs one pipeline change.</b> Every{" "}
-          <Box component="code" sx={{ fontFamily: fonts.mono }}>NODE_KEY</Box> currently includes{" "}
-          <Box component="code" sx={{ fontFamily: fonts.mono }}>ORG_ID</Box>, so the same actor seen
-          for two tenants produces two unjoinable keys. Adding{" "}
-          <Box component="code" sx={{ fontFamily: fonts.mono }}>GLOBAL_NODE_KEY</Box> alongside it
-          keeps tenant isolation intact and makes the correlation below live. The figures here are
-          illustrative until then — see <b>docs/global-node-key.md</b>.
-        </DataGapNote>
 
         <StatGrid columns={3}>
           <StatCard
@@ -88,8 +78,11 @@ export default function CrossTenantActorsPage() {
           />
         </StatGrid>
 
-        <Panel padded={false}>
-          <Stack direction={{ xs: "column", lg: "row" }}>
+        <Panel
+          padded={false}
+          sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+        >
+          <Stack direction={{ xs: "column", lg: "row" }} sx={{ flex: 1, minHeight: 0 }}>
             {/* The diagram is a fixed 640×470 viewBox. Stretching its box to
                 fill the row only letterboxed it — the drawing scaled to the
                 440px height and sat in the middle of a ~1300px column with dead
@@ -97,10 +90,12 @@ export default function CrossTenantActorsPage() {
                 width and let the actor list take the rest. */}
             <Box
               sx={{
-                flex: { lg: "0 1 660px" },
+                flex: { lg: "1 1 60%" },
                 minWidth: 0,
                 borderRight: { lg: `1px solid ${colors.edge}` },
-                p: 1,
+                p: 1.5,
+                display: "flex",
+                alignItems: "center",
               }}
             >
               <Box
@@ -110,9 +105,9 @@ export default function CrossTenantActorsPage() {
                 aria-label={`${top.actorName} connected to ${top.affectedOrgIds.length} customer organizations`}
                 sx={{
                   width: "100%",
-                  maxWidth: 640,
                   aspectRatio: "640 / 470",
                   height: "auto",
+                  maxHeight: "100%",
                   mx: "auto",
                   display: "block",
                 }}
@@ -196,7 +191,15 @@ export default function CrossTenantActorsPage() {
               </Box>
             </Box>
 
-            <Box sx={{ flex: { lg: "1 1 480px" }, minWidth: 0, width: { xs: "100%", lg: "auto" }, p: 2 }}>
+            <Box
+              sx={{
+                flex: { lg: "1 1 40%" },
+                minWidth: 0,
+                width: { xs: "100%", lg: "auto" },
+                p: 2,
+                overflowY: "auto",
+              }}
+            >
               <Typography variant="overline" sx={{ display: "block", mb: 1.4 }}>
                 Actors spanning tenants
               </Typography>

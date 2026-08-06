@@ -18,7 +18,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Panel } from "@/components/ui/Panel";
 import { PageHeader, Tag } from "@/components/ui/Primitives";
 import { SeverityChip } from "@/components/ui/SeverityChip";
-import { colors, fonts, layout, severityColor } from "@/theme/tokens";
+import { colors, fonts, layout, layout as layoutTokens, severityColor } from "@/theme/tokens";
 import type { MonitoredOrganizationRecord } from "@/types/dashboard";
 import type { SeverityBand } from "@/types";
 
@@ -247,7 +247,7 @@ export default function SettingsPage() {
 
   if (isFleetScope || !activeOrg) {
     return (
-      <Stack gap={2}>
+      <Stack gap={2} sx={{ minHeight: `calc(100dvh - ${layoutTokens.headerHeight + (layoutTokens.gutter - 4) * 2}px)`, pb: 1 }}>
         <PageHeader
           title="Monitored Assets"
           subtitle="Pick a specific organization from the switcher to edit its identity."
@@ -352,7 +352,7 @@ export default function SettingsPage() {
               draft={draft.alias}
               onDraft={(v) => setDraft({ ...draft, alias: v })}
               onAdd={() => addTo("alias", aliases, setAliases)}
-              placeholder="e.g. PANW"
+              placeholder="e.g. EC"
               tone="ion"
             />
 
@@ -363,7 +363,7 @@ export default function SettingsPage() {
               draft={draft.domain}
               onDraft={(v) => setDraft({ ...draft, domain: v })}
               onAdd={() => addTo("domain", domains, setDomains)}
-              placeholder="e.g. panw.com"
+              placeholder="e.g. example.com"
               tone="ok"
             />
 
@@ -473,25 +473,6 @@ export default function SettingsPage() {
                 </Typography>
               </Stack>
 
-              {/* An alert with nowhere to go is the failure mode worth naming
-                * loudly: the switches look armed but nothing would ever send. */}
-              {!alertEmail && (
-                <Box
-                  sx={{
-                    mt: 0.5,
-                    px: 1.5,
-                    py: 1.1,
-                    border: `1px dashed ${alpha(severityColor.medium, 0.35)}`,
-                    borderRadius: `${layout.radiusSm}px`,
-                    backgroundColor: alpha(severityColor.medium, 0.05),
-                    fontSize: 11.5,
-                    color: colors.text2,
-                    lineHeight: 1.6,
-                  }}
-                >
-                  Add an email address in <b>your profile</b> to enable breach alerts.
-                </Box>
-              )}
               {alertError && (
                 <Typography sx={{ fontSize: 11.5, color: colors.critical }}>
                   {alertError}

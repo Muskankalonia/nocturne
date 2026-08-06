@@ -5,7 +5,7 @@ import { cacheSavings, costByStage, costByTenant, fleetSummary } from "@/mocks/f
 import { fleetCascade } from "@/mocks/pipeline";
 import { Panel } from "@/components/ui/Panel";
 import { BarList, PageHeader, StatCard, StatGrid } from "@/components/ui/Primitives";
-import { colors, fonts, severityColor } from "@/theme/tokens";
+import { colors, fonts, severityColor , layout as layoutTokens} from "@/theme/tokens";
 import AdminOnly from "@/components/layout/AdminOnly";
 
 export default function FleetCostPage() {
@@ -22,7 +22,7 @@ export default function FleetCostPage() {
 
   return (
     <AdminOnly>
-      <Stack gap={2}>
+      <Stack gap={2} sx={{ minHeight: `calc(100dvh - ${layoutTokens.headerHeight + (layoutTokens.gutter - 4) * 2}px)`, pb: 1 }}>
         <PageHeader
           title="Fleet Cost and Usage"
           subtitle="What each tenant costs, where it goes, and what the caches saved."

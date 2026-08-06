@@ -19,6 +19,8 @@ const RESPONSE_HEADERS = {
   Vary: "Cookie",
 };
 const ORG_ID_PATTERN = /^[a-z0-9]+(?:_[a-z0-9]+)*$/;
+/** Bounds the cache-key space so a hostile client cannot blow up the cache. */
+const MAX_FLEET_SELECTION = 50;
 
 function invalidSessionResponse() {
   const response = NextResponse.json(
@@ -72,9 +74,32 @@ export async function GET(request: Request) {
     scope = { kind: "org", orgId: requestedOrgId };
   }
 
+  // Fleet subset selection. Only meaningful for a fleet request, and only ever
+  // subtractive — it filters rows this session was already entitled to, so it
+  // is safe to take from the client. Org scope ignores it entirely.
+  let include: ReadonlySet<string> | undefined;
+  if (scope.kind === "fleet") {
+    const raw = new URL(request.url).searchParams.get("orgIds");
+    if (raw !== null) {
+      const ids = raw.split(",").map((id) => id.trim()).filter(Boolean);
+      if (ids.length > MAX_FLEET_SELECTION || ids.some((id) => !ORG_ID_PATTERN.test(id))) {
+        return NextResponse.json(
+          { error: "The requested organization selection is invalid." },
+          { status: 400, headers: RESPONSE_HEADERS },
+        );
+      }
+      include = new Set(ids);
+    }
+  }
+
+  // The selection is part of the cache key: without it a narrowed fleet result
+  // would be served to the next caller asking for the whole fleet.
+  const selectionKey = include ? [...include].sort().join("+") : "default";
+
   try {
-    const data = await cachedQuery(`command-center:${scopeKey(scope)}`, () =>
-      nocturneBackend.getCommandCenter(scope),
+    const data = await cachedQuery(
+      `command-center:${scopeKey(scope)}:sel=${selectionKey}`,
+      () => nocturneBackend.getCommandCenter(scope, include),
     );
     if (scope.kind === "org" && data.organizations.length === 0) {
       return NextResponse.json(

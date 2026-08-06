@@ -19,7 +19,6 @@ const RESPONSE_HEADERS = {
   Vary: "Cookie",
 };
 const ORG_ID_PATTERN = /^[a-z0-9]+(?:_[a-z0-9]+)*$/;
-const MAX_FLEET_SELECTION = 50;
 
 function invalidSessionResponse() {
   const response = NextResponse.json(
@@ -49,8 +48,8 @@ export async function GET(request: Request) {
   const user = users.find((candidate) => candidate.username === verified.username);
   const identityMatches = Boolean(
     user
-    && user.role === verified.role
-    && user.orgId === verified.orgId,
+      && user.role === verified.role
+      && user.orgId === verified.orgId,
   );
   if (!user || !identityMatches) return invalidSessionResponse();
 
@@ -70,51 +69,27 @@ export async function GET(request: Request) {
         { status: 400, headers: RESPONSE_HEADERS },
       );
     }
-    const organization = organizations.find(
-      (candidate) => candidate.orgId === requestedOrgId && candidate.enabled,
-    );
-    if (!organization) {
-      return NextResponse.json(
-        { error: "The requested organization is not enabled." },
-        { status: 404, headers: RESPONSE_HEADERS },
-      );
-    }
     scope = { kind: "org", orgId: requestedOrgId };
   }
 
-  // Fleet subset selection: subtractive only, and ignored outside fleet scope.
-  let include: ReadonlySet<string> | undefined;
-  if (scope.kind === "fleet") {
-    const raw = new URL(request.url).searchParams.get("orgIds");
-    if (raw !== null) {
-      const ids = raw.split(",").map((id) => id.trim()).filter(Boolean);
-      if (ids.length > MAX_FLEET_SELECTION || ids.some((id) => !ORG_ID_PATTERN.test(id))) {
-        return NextResponse.json(
-          { error: "The requested organization selection is invalid." },
-          { status: 400, headers: RESPONSE_HEADERS },
-        );
-      }
-      include = new Set(ids);
-    }
-  }
-  const selectionKey = include ? [...include].sort().join("+") : "default";
-
   try {
-    // The external-context flag changes the payload, so it belongs in the key —
-    // otherwise a tenant could be served a super-admin's richer result.
-    const includeExternalContext = user.role === "SUPER_ADMIN";
-    const data = await cachedQuery(
-      `breach-monitor:${scopeKey(scope)}:ext=${includeExternalContext}:sel=${selectionKey}`,
-      () => nocturneBackend.getBreachMonitor(scope, { includeExternalContext }, include),
+    const data = await cachedQuery(`pipeline:${scopeKey(scope)}`, () =>
+      nocturneBackend.getPipeline(scope),
     );
+    if (scope.kind === "org" && data.organizations.length === 0) {
+      return NextResponse.json(
+        { error: "No enabled dashboard organization was found for this scope." },
+        { status: 404, headers: RESPONSE_HEADERS },
+      );
+    }
     return NextResponse.json(data, { headers: RESPONSE_HEADERS });
   } catch (error) {
     console.error(
-      "[nocturne-breach-monitor] live query failed:",
+      "[nocturne-pipeline] live query failed:",
       error instanceof Error ? error.message : "unknown server error",
     );
     return NextResponse.json(
-      { error: "Live breach-monitor data is temporarily unavailable." },
+      { error: "Live pipeline data is temporarily unavailable." },
       { status: 503, headers: RESPONSE_HEADERS },
     );
   }

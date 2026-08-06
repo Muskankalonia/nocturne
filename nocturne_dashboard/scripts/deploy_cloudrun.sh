@@ -39,6 +39,9 @@ ALLOWED_HOSTS="${ALLOWED_HOSTS:-}"
 # environment, so omitting it would silently undo the Firebase step.
 PROXY_HOPS="${PROXY_HOPS:-0}"
 
+# Absolute base for links inside alert emails. Must be the public hostname.
+CONSOLE_URL="${CONSOLE_URL:-https://nocturne-console.web.app}"
+
 # 0 means scale to nothing when idle, which is free but pays the ~4.3s Snowflake
 # connect on every cold start. For the demo, opt in explicitly:
 #
@@ -130,6 +133,12 @@ ENV_VARS+="@NOCTURNE_ALLOWED_IPS=${ALLOWED_IPS}"
 ENV_VARS+="@NOCTURNE_ALLOWED_HOSTS=${ALLOWED_HOSTS}"
 ENV_VARS+="@NOCTURNE_PROXY_HOPS=${PROXY_HOPS}"
 ENV_VARS+="@NOCTURNE_DEMO_PASSWORD_SUFFIX=$(read_env NOCTURNE_DEMO_PASSWORD_SUFFIX)"
+# Breach-alert delivery. Deliberately NOT read from .env.local: that file holds
+# the local console URL, and shipping it would point every "Open in Nocturne"
+# link in a real alert email at someone's laptop.
+ENV_VARS+="@NOCTURNE_CONSOLE_URL=${CONSOLE_URL}"
+ENV_VARS+="@FIREBASE_PROJECT_ID=${PROJECT_ID}"
+ENV_VARS+="@FIREBASE_MAIL_COLLECTION=$(read_env FIREBASE_MAIL_COLLECTION)"
 ENV_VARS="^@^${ENV_VARS}"
 
 echo "==> building and deploying (Cloud Build compiles remotely; no local Docker needed)"
@@ -151,7 +160,7 @@ gcloud run deploy "$SERVICE" \
   --max-instances 3 \
   --timeout 60 \
   --set-env-vars "$ENV_VARS" \
-  --set-secrets "SNOWFLAKE_TOKEN=nocturne-snowflake-token:latest,NOCTURNE_SESSION_SECRET=nocturne-session-secret:latest"
+  --set-secrets "SNOWFLAKE_TOKEN=nocturne-snowflake-token:latest,NOCTURNE_SESSION_SECRET=nocturne-session-secret:latest,NOCTURNE_ALERT_DISPATCH_TOKEN=NOCTURNE_ALERT_DISPATCH_TOKEN:latest"
 
 URL="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
 echo

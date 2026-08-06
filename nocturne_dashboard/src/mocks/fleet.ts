@@ -12,8 +12,8 @@ import type {
 /** SQL: VW_L4_ORG_POSTURE, one row per tenant. */
 export const orgPostures: OrgPosture[] = [
   {
-    orgId: "att",
-    canonicalName: "AT&T",
+    orgId: "european_commission",
+    canonicalName: "European Commission",
     topImpactSeverityScore: 93,
     topImpactSeverityBand: "critical",
     topTriagePriorityScore: 92,
@@ -29,8 +29,8 @@ export const orgPostures: OrgPosture[] = [
     groundingRate: 96,
   },
   {
-    orgId: "palo_alto_networks",
-    canonicalName: "Palo Alto Networks",
+    orgId: "odido",
+    canonicalName: "Odido",
     topImpactSeverityScore: 96,
     topImpactSeverityBand: "critical",
     topTriagePriorityScore: 94,
@@ -46,8 +46,8 @@ export const orgPostures: OrgPosture[] = [
     groundingRate: 94,
   },
   {
-    orgId: "bank_of_baroda",
-    canonicalName: "Bank of Baroda",
+    orgId: "demo_org",
+    canonicalName: "Demo Organization",
     topImpactSeverityScore: 74,
     topImpactSeverityBand: "high",
     topTriagePriorityScore: 73,
@@ -62,58 +62,27 @@ export const orgPostures: OrgPosture[] = [
     trend: [88, 85, 86, 79, 74, 76, 70, 68],
     groundingRate: 92,
   },
-  {
-    orgId: "contoso_logistics",
-    canonicalName: "Contoso Logistics",
-    topImpactSeverityScore: 51,
-    topImpactSeverityBand: "medium",
-    topTriagePriorityScore: 52,
-    topTriagePriorityBand: "medium",
-    incidentCount: 12,
-    criticalIncidents: 2,
-    highIncidents: 2,
-    distinctActors: 5,
-    totalSightings: 15,
-    totalMirrorSightings: 3,
-    lastActivity: "2026-08-01T15:59:00Z",
-    trend: [49, 51, 48, 52, 50, 51, 52, 51],
-    groundingRate: 89,
-  },
-  {
-    orgId: "northwind_traders",
-    canonicalName: "Northwind Traders",
-    topImpactSeverityScore: 38,
-    topImpactSeverityBand: "low",
-    topTriagePriorityScore: 38,
-    topTriagePriorityBand: "low",
-    incidentCount: 5,
-    criticalIncidents: 2,
-    highIncidents: 0,
-    distinctActors: 2,
-    totalSightings: 6,
-    totalMirrorSightings: 1,
-    lastActivity: "2026-08-01T13:05:00Z",
-    trend: [36, 37, 36, 38, 37, 36, 38, 38],
-    groundingRate: 88,
-  },
 ];
 
+// Aggregates recomputed from the three remaining tenants above, so the fleet
+// header agrees with the rows underneath it. Grounding rate is incident
+// weighted, not a flat mean.
 export const fleetSummary: FleetSummary = {
-  tenantCount: 5,
-  totalIncidents: 89,
-  criticalIncidents: 17,
-  fleetGroundingRate: 93.1,
+  tenantCount: 3,
+  totalIncidents: 72,
+  criticalIncidents: 13,
+  fleetGroundingRate: 94.4,
   crossTenantActorCount: 3,
-  totalActorCount: 41,
-  spendUsd30d: 14.2,
-  pagesProcessed30d: 34610,
+  totalActorCount: 34,
+  spendUsd30d: 12.05,
+  pagesProcessed30d: 28369,
 };
 
 /** SQL: derived from DT_L2_* validation reasons + task/COPY history. */
 export const pipelineHealthByTenant: PipelineHealth[] = [
   {
-    orgId: "att",
-    organizationName: "AT&T",
+    orgId: "european_commission",
+    organizationName: "European Commission",
     lastIngestAt: "2026-08-01T16:01:00Z",
     groundingRate: 96,
     exactGroundingRate: 84,
@@ -125,8 +94,8 @@ export const pipelineHealthByTenant: PipelineHealth[] = [
     status: "healthy",
   },
   {
-    orgId: "palo_alto_networks",
-    organizationName: "Palo Alto Networks",
+    orgId: "odido",
+    organizationName: "Odido",
     lastIngestAt: "2026-08-01T16:03:00Z",
     groundingRate: 94.2,
     exactGroundingRate: 81.4,
@@ -138,8 +107,8 @@ export const pipelineHealthByTenant: PipelineHealth[] = [
     status: "healthy",
   },
   {
-    orgId: "bank_of_baroda",
-    organizationName: "Bank of Baroda",
+    orgId: "demo_org",
+    organizationName: "Demo Organization",
     lastIngestAt: "2026-08-01T15:54:00Z",
     groundingRate: 92,
     exactGroundingRate: 78,
@@ -149,32 +118,6 @@ export const pipelineHealthByTenant: PipelineHealth[] = [
     aiErrorCount: 0,
     backlogCount: 0,
     status: "healthy",
-  },
-  {
-    orgId: "contoso_logistics",
-    organizationName: "Contoso Logistics",
-    lastIngestAt: "2026-08-01T15:59:00Z",
-    groundingRate: 89,
-    exactGroundingRate: 74,
-    normalizedGroundingRate: 15,
-    quarantinedCount: 31,
-    totalExtractedCount: 282,
-    aiErrorCount: 0,
-    backlogCount: 0,
-    status: "healthy",
-  },
-  {
-    orgId: "northwind_traders",
-    organizationName: "Northwind Traders",
-    lastIngestAt: "2026-08-01T13:05:00Z",
-    groundingRate: 88,
-    exactGroundingRate: 71,
-    normalizedGroundingRate: 17,
-    quarantinedCount: 9,
-    totalExtractedCount: 76,
-    aiErrorCount: 0,
-    backlogCount: 14,
-    status: "lagging",
   },
 ];
 
@@ -321,20 +264,16 @@ export const costByStage: CostBreakdown[] = [
 ];
 
 export const costByTenant: TenantCost[] = [
-  { orgId: "att", organizationName: "AT&T", pagesProcessed: 11204, deepAnalyses: 462, spendUsd: 4.9, costPerIncidentUsd: 0.16 },
-  { orgId: "palo_alto_networks", organizationName: "Palo Alto Networks", pagesProcessed: 9847, deepAnalyses: 418, spendUsd: 4.1, costPerIncidentUsd: 0.18 },
-  { orgId: "bank_of_baroda", organizationName: "Bank of Baroda", pagesProcessed: 7318, deepAnalyses: 301, spendUsd: 3.05, costPerIncidentUsd: 0.17 },
-  { orgId: "contoso_logistics", organizationName: "Contoso Logistics", pagesProcessed: 4102, deepAnalyses: 164, spendUsd: 1.6, costPerIncidentUsd: 0.13 },
-  { orgId: "northwind_traders", organizationName: "Northwind Traders", pagesProcessed: 2139, deepAnalyses: 73, spendUsd: 0.55, costPerIncidentUsd: 0.11 },
+  { orgId: "european_commission", organizationName: "European Commission", pagesProcessed: 11204, deepAnalyses: 462, spendUsd: 4.9, costPerIncidentUsd: 0.16 },
+  { orgId: "odido", organizationName: "Odido", pagesProcessed: 9847, deepAnalyses: 418, spendUsd: 4.1, costPerIncidentUsd: 0.18 },
+  { orgId: "demo_org", organizationName: "Demo Organization", pagesProcessed: 7318, deepAnalyses: 301, spendUsd: 3.05, costPerIncidentUsd: 0.17 },
 ];
 
 export const cacheSavings = { callsAvoided: 21608, usdAvoided: 61 };
 
 /** Exposure heatmap: tenant × leak type. */
 export const exposureMatrix: { orgId: string; label: string; counts: Record<string, number> }[] = [
-  { orgId: "att", label: "AT&T", counts: { credential: 14, corporate_data: 9, pii: 11, financial: 5, malware_exploit: 2 } },
-  { orgId: "palo_alto_networks", label: "Palo Alto", counts: { credential: 12, corporate_data: 7, pii: 6, financial: 8, malware_exploit: 3 } },
-  { orgId: "bank_of_baroda", label: "B. Baroda", counts: { credential: 6, corporate_data: 2, pii: 7, financial: 9, malware_exploit: 0 } },
-  { orgId: "contoso_logistics", label: "Contoso", counts: { credential: 3, corporate_data: 4, pii: 5, financial: 1, malware_exploit: 0 } },
-  { orgId: "northwind_traders", label: "Northwind", counts: { credential: 1, corporate_data: 2, pii: 0, financial: 1, malware_exploit: 1 } },
+  { orgId: "european_commission", label: "European Commission", counts: { credential: 14, corporate_data: 9, pii: 11, financial: 5, malware_exploit: 2 } },
+  { orgId: "odido", label: "Odido", counts: { credential: 12, corporate_data: 7, pii: 6, financial: 8, malware_exploit: 3 } },
+  { orgId: "demo_org", label: "Demo Org", counts: { credential: 6, corporate_data: 2, pii: 7, financial: 9, malware_exploit: 0 } },
 ];
