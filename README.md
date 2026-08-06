@@ -36,19 +36,19 @@ flowchart TB
 
   subgraph land ["LAND"]
     direction LR
-    Stage["External Stage"] --> Ingest["5-min Ingest Task"]
+    Stage["GCS_CRAWL_STAGE"] --> Ingest["CRAWL_INGEST_TASK"]
     Ingest --> Raw["CRAWL_PAGES\n(deduplicated)"]
   end
 
   subgraph cascade ["CASCADE (AI)"]
     direction LR
-    L0["L0: Regex Indicators"] --> L1["L1: AI Classify"]
-    L1 --> L2["L2: AI Extract + Ground"]
+    L0["L0: DLP Classifier"] --> L1["L1: AI Classify"]
+    L1 --> L2["L2: Entity Extraction + Grounding"]
   end
 
   subgraph score ["SCORE"]
     direction LR
-    LeakType["Leak-Type AI"] --> KG["L3: Knowledge Graph"]
+    LeakType["DLP AI Classifier"] --> KG["L3: Knowledge Graph"]
     KG --> L4["L4: Impact / Confidence / Triage"]
     L4 --> Insight["Incident Insight AI"]
   end
