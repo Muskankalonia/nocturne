@@ -1,21 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Box, Stack, Typography, alpha } from "@mui/material";
-import { scopeOrgId, useAuth } from "@/contexts/AuthContext";
-import { cascadeForScope, groundingStats } from "@/mocks/pipeline";
-import {
-  cacheSavings,
-  costByStage,
-  pipelineHealthByTenant,
-  rejectionReasons,
-  tasks,
-  versionDrift,
-} from "@/mocks/fleet";
+import { Box, Button, Stack, Typography, alpha } from "@mui/material";
+import { RefreshCw } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
 import { Panel } from "@/components/ui/Panel";
 import { DonutChart } from "@/components/ui/DonutChart";
 import { Cascade } from "@/components/ui/Cascade";
+import { BarListSkeleton, StatGridSkeleton } from "@/components/ui/Skeletons";
 import {
   DataGapNote,
   PageHeader,
@@ -25,8 +18,15 @@ import {
 } from "@/components/ui/Primitives";
 import { colors, fonts, layout as layoutTokens, severityColor } from "@/theme/tokens";
 import { relativeTime } from "@/lib/format";
+import type { PipelineResponse } from "@/types/dashboard";
 
-const NOW = Date.parse("2026-08-01T16:05:00Z");
+const configuredRefreshMs = Number(
+  process.env.NEXT_PUBLIC_DASHBOARD_REFRESH_MS ?? "300000",
+);
+const refreshIntervalMs =
+  Number.isFinite(configuredRefreshMs) && configuredRefreshMs >= 30_000
+    ? configuredRefreshMs
+    : 300_000;
 
 /**
  * The three sidebar links under Pipeline are three different questions for three
@@ -53,10 +53,51 @@ function isPipelineTab(value: string | null): value is PipelineTab {
 }
 
 export default function PipelinePage() {
-  const { session, isFleetScope } = useAuth();
+  const { session, isLoading: isAuthLoading, isFleetScope } = useAuth();
   const router = useRouter();
   const params = useSearchParams();
   const [tab, setTab] = useState<PipelineTab>("cascade");
+  const [data, setData] = useState<PipelineResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async (signal?: AbortSignal, background = false) => {
+    if (!session) return;
+    if (background) setIsRefreshing(true);
+    const query = new URLSearchParams();
+    if (session.user.role === "SUPER_ADMIN" && session.scope.kind === "org") {
+      query.set("orgId", session.scope.orgId);
+    }
+    const url = query.size ? `/api/pipeline?${query.toString()}` : "/api/pipeline";
+
+    try {
+      const response = await fetch(url, {
+        cache: "no-store",
+        credentials: "same-origin",
+        signal,
+      });
+      const body = (await response.json()) as PipelineResponse | { error?: string };
+      if (!response.ok || !("cascade" in body) || !("cacheSummary" in body)) {
+        throw new Error(
+          "error" in body && body.error
+            ? body.error
+            : "Unable to load live pipeline data.",
+        );
+      }
+      setData(body);
+      setError(null);
+    } catch (loadError) {
+      if (loadError instanceof DOMException && loadError.name === "AbortError") return;
+      setError(
+        loadError instanceof Error
+          ? loadError.message
+          : "Unable to load live pipeline data.",
+      );
+    } finally {
+      if (background) setIsRefreshing(false);
+    }
+  }, [session]);
 
   // Statically prerendered, so `useSearchParams()` is empty on first render and
   // a useState initializer would pin the tab forever. Sync after hydration so
@@ -77,21 +118,119 @@ export default function PipelinePage() {
     [router],
   );
 
-  const stats = isFleetScope ? groundingStats.fleet : groundingStats.org;
-  const cascade = session ? cascadeForScope(session.scope) : [];
+  useEffect(() => {
+    if (isAuthLoading) return;
+    if (!session) {
+      setData(null);
+      setIsLoading(false);
+      return;
+    }
 
-  const health = useMemo(() => {
-    if (!session) return [];
-    const orgId = scopeOrgId(session.scope);
-    return orgId === null
-      ? pipelineHealthByTenant
-      : pipelineHealthByTenant.filter((h) => h.orgId === orgId);
-  }, [session]);
+    const controller = new AbortController();
+    setData(null);
+    setError(null);
+    setIsLoading(true);
+    void load(controller.signal).finally(() => {
+      if (!controller.signal.aborted) setIsLoading(false);
+    });
 
-  const totalSpend = costByStage.reduce((s, c) => s + c.spendUsd, 0);
-  const extracted = cascade.find((s) => s.id === "extracted")?.count ?? 0;
-  const relevance = cascade.find((s) => s.id === "relevance")?.count ?? 1;
-  const deepPct = ((extracted / relevance) * 100).toFixed(1);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") {
+        void load(controller.signal, true);
+      }
+    };
+    const interval = window.setInterval(refreshWhenVisible, refreshIntervalMs);
+    window.addEventListener("focus", refreshWhenVisible);
+
+    return () => {
+      controller.abort();
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refreshWhenVisible);
+    };
+  }, [isAuthLoading, load, session]);
+
+  const visibleData = data && session && (
+    data.scope.kind === session.scope.kind
+    && (
+      data.scope.kind === "fleet"
+      || (
+        session.scope.kind === "org"
+        && data.scope.orgId === session.scope.orgId
+      )
+    )
+  ) ? data : null;
+
+  const stats = visibleData?.grounding ?? {
+    rate: 0,
+    exactCount: 0,
+    normalizedCount: 0,
+    verifiedCount: 0,
+    quarantinedCount: 0,
+    totalExtractedClaims: 0,
+  };
+  const cascade = visibleData?.cascade ?? [];
+  const health = visibleData?.health ?? [];
+  const versionDriftRows = visibleData?.versionDrift ?? [];
+  const taskRows = visibleData?.tasks ?? [];
+  const relativeNow = visibleData ? Date.parse(visibleData.fetchedAt) : Date.now();
+  const driftRowsBehind = versionDriftRows.reduce(
+    (total, row) => total + row.rowsBehind,
+    0,
+  );
+  const rejectedGraphElementCount = visibleData?.rejectionReasons.reduce(
+    (total, reason) => total + reason.count,
+    0,
+  ) ?? 0;
+  const scheduledTaskCount = taskRows.filter((task) => task.trigger === "schedule").length;
+  const streamTaskCount = taskRows.filter((task) => task.trigger === "stream").length;
+  const headerRight = (
+    <Stack direction="row" gap={1} alignItems="center">
+      {visibleData && (
+        <Typography sx={{ fontFamily: fonts.mono, fontSize: 9.5, color: colors.text3 }}>
+          LIVE SNOWFLAKE · {new Date(visibleData.fetchedAt).toLocaleString()}
+        </Typography>
+      )}
+      <Button
+        size="small"
+        variant="outlined"
+        startIcon={<RefreshCw size={13} />}
+        disabled={!session || isLoading || isRefreshing}
+        onClick={() => void load(undefined, true)}
+      >
+        {isRefreshing ? "Refreshing" : "Refresh"}
+      </Button>
+    </Stack>
+  );
+
+  if (isAuthLoading || isLoading) {
+    return (
+      <Stack gap={2}>
+        <PageHeader title="Pipeline" subtitle={TAB_SUBTITLE[tab]} right={headerRight} />
+        <StatGridSkeleton cards={4} />
+        <Panel title="Detection Cascade">
+          <BarListSkeleton rows={9} />
+        </Panel>
+      </Stack>
+    );
+  }
+
+  if (!visibleData) {
+    return (
+      <Stack gap={2}>
+        <PageHeader title="Pipeline" subtitle={TAB_SUBTITLE[tab]} right={headerRight} />
+        <Panel>
+          <Stack alignItems="center" gap={1.5} sx={{ py: 8 }}>
+            <Typography sx={{ color: colors.text1 }}>
+              Live pipeline data is unavailable.
+            </Typography>
+            {error && (
+              <Typography sx={{ color: colors.critical, fontSize: 12 }}>{error}</Typography>
+            )}
+          </Stack>
+        </Panel>
+      </Stack>
+    );
+  }
 
   return (
     <Stack
@@ -100,7 +239,23 @@ export default function PipelinePage() {
         minHeight: `calc(100dvh - ${layoutTokens.headerHeight + (layoutTokens.gutter - 4) * 2}px)`,
       }}
     >
-      <PageHeader title="Pipeline" subtitle={TAB_SUBTITLE[tab]} />
+      <PageHeader title="Pipeline" subtitle={TAB_SUBTITLE[tab]} right={headerRight} />
+
+      {error && (
+        <Box
+          sx={{
+            border: `1px solid ${alpha(colors.critical, 0.35)}`,
+            backgroundColor: alpha(colors.critical, 0.06),
+            borderRadius: "6px",
+            px: 1.5,
+            py: 1,
+            color: colors.text2,
+            fontSize: 11.5,
+          }}
+        >
+          Refresh failed: {error}. Displaying the last successful response.
+        </Box>
+      )}
 
       <Stack direction="row" gap={1} flexWrap="wrap" role="tablist" aria-label="Pipeline views">
         {TABS.map(([key, label]) => (
@@ -132,29 +287,29 @@ export default function PipelinePage() {
 
       <StatGrid>
         <StatCard
-          label="Evidence verified verbatim"
+          label="Evidence claims verified"
           value={`${stats.rate}%`}
-          sub={`${stats.verified.toLocaleString()} quotes · ${stats.quarantined} quarantined`}
+          sub={`${stats.verifiedCount.toLocaleString()} accepted claims · ${stats.quarantinedCount} quarantined claims`}
           accent={colors.verified}
           valueColor={colors.verified}
         />
         <StatCard
           label="Sent to expensive analysis"
-          value={`${deepPct}%`}
-          sub={`${extracted.toLocaleString()} of ${relevance.toLocaleString()} pages`}
+          value={`${visibleData.deepAnalysisRate}%`}
+          sub={`${(cascade.find((s) => s.id === "extracted")?.count ?? 0).toLocaleString()} of ${(cascade.find((s) => s.id === "relevance")?.count ?? 0).toLocaleString()} pages`}
           accent={severityColor.critical}
         />
         <StatCard
-          label="Repeat calls avoided"
-          value={cacheSavings.callsAvoided.toLocaleString()}
-          sub={`≈ $${cacheSavings.usdAvoided} not spent`}
+          label="Cached AI results"
+          value={visibleData.cacheSummary.repeatCallsAvoided.toLocaleString()}
+          sub={`${visibleData.cacheSummary.missingCandidates.toLocaleString()} candidates pending`}
           accent={colors.ion}
           valueColor={colors.ion}
         />
         <StatCard
-          label="Spend · 30 days"
-          value={`$${totalSpend.toFixed(2)}`}
-          sub="across all AI stages"
+          label="Stored AI errors"
+          value={visibleData.cacheSummary.errorRows.toLocaleString()}
+          sub="cached and not retried automatically"
           accent={severityColor.medium}
         />
       </StatGrid>
@@ -180,7 +335,7 @@ export default function PipelinePage() {
         }}
       >
         <Panel
-          title="Quarantined Extractions"
+          title="Rejected Graph Elements"
           meta="WHY THEY WERE REJECTED"
           sx={{ display: "flex", flexDirection: "column", minHeight: 0 }}
         >
@@ -198,8 +353,8 @@ export default function PipelinePage() {
               // hold that space rather than float in the middle of it — the
               // same reason the cascade opts into `fill`.
               size={240}
-              totalLabel="QUARANTINED"
-              data={rejectionReasons.map((r) => ({
+              totalLabel="REJECTED"
+              data={visibleData.rejectionReasons.map((r) => ({
                 key: r.reason,
                 label: (
                   <>
@@ -242,10 +397,14 @@ export default function PipelinePage() {
             }}
           >
             <b style={{ color: colors.text1 }}>
-              {stats.quarantined} of {(stats.verified + stats.quarantined).toLocaleString()}
+              {rejectedGraphElementCount.toLocaleString()} rejected graph elements
             </b>{" "}
-            extracted elements failed verbatim verification and never reached the graph. None of
-            them appear in any score.
+            were stopped before graph promotion. Separately,{" "}
+            <b style={{ color: colors.text1 }}>
+              {stats.verifiedCount.toLocaleString()} of {stats.totalExtractedClaims.toLocaleString()}
+            </b>{" "}
+            extracted claims were accepted as grounded evidence. Rejected elements do not appear in
+            severity scores.
           </Box>
         </Panel>
 
@@ -266,7 +425,7 @@ export default function PipelinePage() {
         <Panel title="Version drift" meta="BASELINE VS CURRENT">
           <Box sx={{ overflowX: "auto" }}>
             <Table headers={["Stage", "Baseline", "Current", "Rows behind"]}>
-              {versionDrift.map((d) => (
+              {versionDriftRows.map((d) => (
                 <Box component="tr" key={d.stage}>
                   <Td>{d.stage}</Td>
                   <Td>
@@ -290,8 +449,8 @@ export default function PipelinePage() {
           </Box>
           <Box sx={{ mt: 1.8 }}>
             <DataGapNote>
-              <b>14 rows</b> were scored with the previous method version and are not directly
-              comparable to today&apos;s ranking until they are recomputed.
+              <b>{driftRowsBehind} rows</b> carry an older method version and are not directly
+              comparable to today&apos;s ranking until they are intentionally recomputed.
             </DataGapNote>
           </Box>
         </Panel>
@@ -322,7 +481,7 @@ export default function PipelinePage() {
                   {isFleetScope && <Td>{h.organizationName}</Td>}
                   <Td>
                     <Mono color={h.status === "healthy" ? colors.text2 : severityColor.medium}>
-                      {relativeTime(h.lastIngestAt, NOW)}
+                      {h.lastIngestAt ? relativeTime(h.lastIngestAt, relativeNow) : "never"}
                     </Mono>
                   </Td>
                   <Td>
@@ -338,7 +497,11 @@ export default function PipelinePage() {
                   </Td>
                   <Td>
                     <Tag tone={h.status === "healthy" ? "ok" : "medium"}>
-                      {h.status === "healthy" ? "Healthy" : "Ingest Lagging"}
+                      {h.status === "healthy"
+                        ? "Healthy"
+                        : h.status === "degraded"
+                          ? "Degraded"
+                          : "Ingest Lagging"}
                     </Tag>
                   </Td>
                 </Box>
@@ -348,10 +511,10 @@ export default function PipelinePage() {
         </Panel>
       </Box>
 
-      <Panel title="Task health" meta="2 SCHEDULED · 4 STREAM-TRIGGERED">
+      <Panel title="Task health" meta={`${scheduledTaskCount} SCHEDULED · ${streamTaskCount} STREAM-TRIGGERED`}>
         <Box sx={{ overflowX: "auto" }}>
           <Table headers={["Task", "Trigger", "State", "Last run", "Pending", "Errors"]}>
-            {tasks.map((t) => (
+            {taskRows.map((t) => (
               <Box component="tr" key={t.taskName}>
                 <Td>
                   <Mono size={11}>{t.taskName}</Mono>
@@ -368,7 +531,7 @@ export default function PipelinePage() {
                 </Td>
                 <Td>
                   <Mono color={colors.text2}>
-                    {t.lastRunAt ? relativeTime(t.lastRunAt, NOW) : "never"}
+                    {t.lastRunAt ? relativeTime(t.lastRunAt, relativeNow) : "never"}
                   </Mono>
                 </Td>
                 <Td>

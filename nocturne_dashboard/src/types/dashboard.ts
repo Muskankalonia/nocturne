@@ -1,5 +1,6 @@
 import type {
   AiStatus,
+  AiStage,
   BreachRecord,
   CascadeStage,
   ClaimStatus,
@@ -15,8 +16,11 @@ import type {
   LeakType,
   RelationshipLabel,
   RemediationStatus,
+  RejectionReason,
   SeverityBand,
+  TaskHealth,
   ThreatActor,
+  VersionDrift,
 } from "@/types";
 
 /**
@@ -300,6 +304,55 @@ export interface CommandCenterResponse {
   totals: CommandCenterMetrics;
   cascade: CascadeStage[];
   incidents: DashboardIncident[];
+  lastUpdatedAt: string | null;
+  fetchedAt: string;
+}
+
+export interface PipelineOrganizationSummary {
+  orgId: string;
+  organizationName: string;
+  lastUpdatedAt: string | null;
+}
+
+export interface PipelineAiCacheStage {
+  stage: AiStage;
+  cacheRows: number;
+  successRows: number;
+  errorRows: number;
+  missingCandidates: number;
+  lastCalledAt: string | null;
+}
+
+export interface PipelineCacheSummary {
+  cacheRows: number;
+  successRows: number;
+  errorRows: number;
+  missingCandidates: number;
+  repeatCallsAvoided: number;
+}
+
+export interface PipelineResponse {
+  scope: DataScope;
+  organizations: PipelineOrganizationSummary[];
+  cascade: CascadeStage[];
+  grounding: DashboardGroundingSummary;
+  deepAnalysisRate: number;
+  cacheSummary: PipelineCacheSummary;
+  cacheStages: PipelineAiCacheStage[];
+  rejectionReasons: RejectionReason[];
+  versionDrift: VersionDrift[];
+  health: Array<{
+    orgId: string | null;
+    organizationName: string;
+    lastIngestAt: string | null;
+    groundingRate: number;
+    quarantinedCount: number;
+    totalExtractedCount: number;
+    aiErrorCount: number;
+    backlogCount: number;
+    status: "healthy" | "lagging" | "degraded" | "failed";
+  }>;
+  tasks: TaskHealth[];
   lastUpdatedAt: string | null;
   fetchedAt: string;
 }
