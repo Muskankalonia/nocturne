@@ -303,30 +303,39 @@ Only `target_confirmed` pages are target-alert eligible.
 ```mermaid
 flowchart TB
   subgraph actors ["THREAT ACTORS"]
-    Actor(["Seller / Actor"])
+    Actor{{"Seller / Actor"}}
   end
 
-  subgraph claims ["CLAIMS"]
+  subgraph claims ["LEAK CLAIMS"]
     Claim(["Leak Claim"])
   end
 
-  subgraph targets ["TARGET"]
-    Target(["Target Organization"])
-    Domain(["Domain"])
+  subgraph targets ["MONITORED TARGET"]
+    Target[["Target Organization"]]
+    Domain[/"Domain"/]
   end
 
-  subgraph assets ["EVIDENCE"]
-    Asset(["Data Asset"])
-    Market(["Marketplace"])
+  subgraph evidence ["EVIDENCE & ASSETS"]
+    Asset[("Data Asset")]
+    Market>"Marketplace"]
   end
 
-  Actor -->|"MADE_CLAIM"| Claim
-  Claim -->|"ALLEGEDLY_AFFECTS"| Target
-  Claim -->|"MENTIONS"| Asset
-  Claim -->|"LISTED_ON"| Market
+  Actor ==>|"MADE_CLAIM"| Claim
+  Claim ==>|"ALLEGEDLY_AFFECTS"| Target
+  Claim -.->|"MENTIONS"| Asset
+  Claim -.->|"LISTED_ON"| Market
   Target -->|"HAS_DOMAIN"| Domain
-  Actor -->|"OPERATES_ON"| Market
+  Actor -.->|"OPERATES_ON"| Market
 ```
+
+| Edge | Meaning |
+| :--- | :--- |
+| `MADE_CLAIM` | Actor posted or advertised the leak |
+| `ALLEGEDLY_AFFECTS` | Claim targets a specific organization |
+| `MENTIONS` | Claim references a data asset (credentials, PII, source code) |
+| `LISTED_ON` | Claim appeared on a specific marketplace or forum |
+| `HAS_DOMAIN` | Organization owns a domain seen in evidence |
+| `OPERATES_ON` | Actor has presence on a marketplace |
 
 Nodes represent entities extracted from dark-web pages. Edges represent
 relationships resolved against configured organization profiles. Only claims
