@@ -73,7 +73,6 @@ flowchart TB
 | **Score** | Leak-type classification, knowledge graph (L3), impact/confidence/triage scoring (L4), incident insights |
 | **Serve** | Dashboard interface views consumed by the Next.js analyst console |
 
-For the full deep-dive with per-layer mermaid diagrams, see [architecture.md](architecture.md).
 
 ---
 
@@ -331,17 +330,6 @@ crawler execution and a matching configuration row in
 bucket and Snowflake tables — paths, hashes, cache keys, graph keys, and final
 views are all scoped by `ORG_ID`.
 
-### Inspect the final output
-
-```sql
-SELECT
-  ORG_ID, INCIDENT_KEY, INSIGHT_HEADLINE,
-  INCIDENT_TRIAGE_PRIORITY_SCORE, INCIDENT_TRIAGE_PRIORITY_BAND,
-  EXECUTIVE_SUMMARY, RECOMMENDED_ACTIONS
-FROM NOCTURNE.RAW.VW_L4_INCIDENT_INSIGHTS
-ORDER BY INCIDENT_TRIAGE_PRIORITY_SCORE DESC;
-```
-
 ---
 
 ## Analyst Dashboard
@@ -355,5 +343,3 @@ npm install
 npm run dev          # http://localhost:3000
 ```
 
-See [nocturne_dashboard/README.md](nocturne_dashboard/README.md) for sign-in
-credentials, deployment, and feature details.
