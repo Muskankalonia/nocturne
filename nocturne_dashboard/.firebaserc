@@ -1,5 +1,13 @@
 {
   "projects": {
     "default": "nocturne-502617"
+  },
+  "targets": {},
+  "etags": {
+    "nocturne-502617": {
+      "extensionInstances": {
+        "firestore-send-email": "c5e6053887b5d321f709bf49569eae1faadb5227c36cbb65b674d33c56259aa2"
+      }
+    }
   }
 }

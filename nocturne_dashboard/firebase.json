@@ -2,7 +2,11 @@
   "hosting": {
     "site": "nocturne-console",
     "public": "firebase-public",
-    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
     "rewrites": [
       {
         "source": "**",
@@ -12,5 +16,8 @@
         }
       }
     ]
+  },
+  "extensions": {
+    "firestore-send-email": "firebase/firestore-send-email@0.2.10"
   }
 }

@@ -18,3 +18,6 @@ snowflake.log
 
 # Firebase CLI deploy cache — local state, not source.
 .firebase/
+
+# Extension secret overrides used by the emulator
+extensions/*.secret.local
