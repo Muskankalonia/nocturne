@@ -12,16 +12,16 @@ npm run dev          # http://localhost:3000
 
 ## Sign in
 
-Demo scheme: **username is the organization, password is the same string**.
+Demo scheme: the username is the organization slug, and the password is that
+slug plus a shared suffix. The suffix is `NOCTURNE_DEMO_PASSWORD_SUFFIX` — it is
+deployment configuration, so it lives in `.env.local` and Cloud Run, never in
+this repository. Ask a maintainer for the current value.
 
-| Username             | Password             | Lands on                         |
-| -------------------- | -------------------- | -------------------------------- |
-| `palo_alto_networks` | `palo_alto_networks` | `/` scoped to Palo Alto Networks |
-| `att`                | `att`                | `/` scoped to AT&T               |
-| `admin`              | `admin`              | `/admin/fleet`, all tenants      |
+`admin` is the fleet account and lands on `/admin/fleet`; every other account is
+an org user scoped to its own tenant. The account list is
+`src/mocks/organizations.ts`.
 
-`northwind_traders` exists but is disabled, so it demonstrates the
-monitoring-paused rejection path.
+Login is rate limited to five failed attempts per source IP per 15 minutes.
 
 > **This is a demo credential scheme and must not ship.** Separately and more
 > importantly: the hidden Fleet menu and the locked org badge are conveniences,

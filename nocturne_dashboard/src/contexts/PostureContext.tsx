@@ -49,6 +49,12 @@ export interface OrgPostureSummary {
 }
 
 export interface PostureContextValue {
+  /**
+   * Tenants included in the fleet view. Null means "the server default", which
+   * is every real tenant with the fabricated demo tenant left out.
+   */
+  fleetSelection: string[] | null;
+  setFleetSelection: (orgIds: string[] | null) => void;
   /** Null until the first successful load, or while the scope is mismatched. */
   data: CommandCenterResponse | null;
   incidents: DashboardIncident[];
@@ -67,6 +73,8 @@ const PostureContext = createContext<PostureContextValue | null>(null);
 /** Statuses that take an incident off the queue. Anything else still counts. */
 const CLOSED_STATUSES = new Set(["resolved", "false_positive", "suppressed"]);
 
+const FLEET_SELECTION_KEY = "nocturne.fleet-selection";
+
 function bandForScore(score: number): SeverityBand {
   if (score >= 80) return "critical";
   if (score >= 60) return "high";
@@ -81,6 +89,27 @@ export function PostureProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Persisted so a chosen fleet view survives a reload. Read after mount to
+  // avoid a hydration mismatch on the prerendered shell.
+  const [fleetSelection, setFleetSelectionState] = useState<string[] | null>(null);
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(FLEET_SELECTION_KEY);
+      if (stored) setFleetSelectionState(JSON.parse(stored) as string[]);
+    } catch {
+      /* unreadable or malformed — fall back to the server default */
+    }
+  }, []);
+
+  const setFleetSelection = useCallback((orgIds: string[] | null) => {
+    setFleetSelectionState(orgIds);
+    try {
+      if (orgIds) window.localStorage.setItem(FLEET_SELECTION_KEY, JSON.stringify(orgIds));
+      else window.localStorage.removeItem(FLEET_SELECTION_KEY);
+    } catch {
+      /* storage unavailable — the selection just will not persist */
+    }
+  }, []);
 
   const load = useCallback(
     async (signal?: AbortSignal, background = false) => {
@@ -89,6 +118,9 @@ export function PostureProvider({ children }: { children: ReactNode }) {
       const params = new URLSearchParams();
       if (session.user.role === "SUPER_ADMIN" && session.scope.kind === "org") {
         params.set("orgId", session.scope.orgId);
+      }
+      if (session.scope.kind === "fleet" && fleetSelection) {
+        params.set("orgIds", fleetSelection.join(","));
       }
       const url = params.size
         ? `/api/command-center?${params.toString()}`
@@ -123,7 +155,7 @@ export function PostureProvider({ children }: { children: ReactNode }) {
         if (background) setIsRefreshing(false);
       }
     },
-    [session],
+    [session, fleetSelection],
   );
 
   useEffect(() => {
@@ -217,8 +249,10 @@ export function PostureProvider({ children }: { children: ReactNode }) {
       refresh: () => void load(undefined, true),
       openCriticalCount,
       summaryFor,
+      fleetSelection,
+      setFleetSelection,
     };
-  }, [visibleData, isLoading, isRefreshing, error, load]);
+  }, [visibleData, isLoading, isRefreshing, error, load, fleetSelection, setFleetSelection]);
 
   return <PostureContext.Provider value={value}>{children}</PostureContext.Provider>;
 }

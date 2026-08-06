@@ -32,6 +32,8 @@ import type { DataScope, Organization, Session, User } from "@/types";
 export interface AuthContextValue {
   session: Session | null;
   isAuthenticated: boolean;
+  /** Presentation-only: whether to paint the signed-in shape while loading. */
+  hadSessionHint: boolean;
   isSuperAdmin: boolean;
   isLoading: boolean;
 
@@ -73,8 +75,52 @@ export function scopeOrgId(scope: DataScope): string | null {
   return scope.kind === "org" ? scope.orgId : null;
 }
 
+/**
+ * Which skeleton to draw before the session check returns.
+ *
+ * The real session cookie is HttpOnly, so the client cannot read it and cannot
+ * know whether it is signed in until /api/auth/session answers. Without a hint
+ * the app has to guess, and it guessed "dashboard" — so a logged-out visitor
+ * got a full dashboard skeleton before being bounced to /login.
+ *
+ * This flag records only that a session existed at some point. It is NOT an
+ * authentication signal and grants nothing: every route still verifies the
+ * signed cookie server-side. Forging it changes which placeholder is painted
+ * for a few hundred milliseconds and nothing else.
+ */
+const SESSION_HINT_KEY = "nocturne.had-session";
+
+function readSessionHint(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(SESSION_HINT_KEY) === "1";
+  } catch {
+    // Private browsing and blocked storage both throw. Fall back to the
+    // logged-out shape, which is the safer thing to show a stranger.
+    return false;
+  }
+}
+
+function writeSessionHint(hasSession: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (hasSession) window.localStorage.setItem(SESSION_HINT_KEY, "1");
+    else window.localStorage.removeItem(SESSION_HINT_KEY);
+  } catch {
+    /* storage unavailable — the hint is optional, so carry on */
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
+  // Read after mount rather than in a useState initializer: this tree is
+  // prerendered, and localStorage is unreadable on the server, so seeding it
+  // inline would produce a hydration mismatch. The update lands well before
+  // the session fetch resolves, which is the window that matters.
+  const [hadSessionHint, setHadSessionHint] = useState(false);
+  useEffect(() => {
+    setHadSessionHint(readSessionHint());
+  }, []);
   const [isLoading, setIsLoading] = useState(true);
 
   // Restore only from the server-verified HttpOnly cookie. No identity, role,
@@ -90,10 +136,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
         const body = (await response.json()) as SessionApiResponse;
         if (!controller.signal.aborted) {
-          setSession(response.ok && body.session ? body.session : null);
+          const resolved = response.ok && body.session ? body.session : null;
+          setSession(resolved);
+          writeSessionHint(Boolean(resolved));
         }
       } catch {
-        if (!controller.signal.aborted) setSession(null);
+        if (!controller.signal.aborted) {
+          setSession(null);
+          writeSessionHint(false);
+        }
       } finally {
         if (!controller.signal.aborted) setIsLoading(false);
       }
@@ -120,6 +171,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           };
         }
         setSession(body.session);
+        writeSessionHint(true);
         return { ok: true, user: body.session.user };
       } catch {
         return {
@@ -140,6 +192,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
     } finally {
       setSession(null);
+      writeSessionHint(false);
     }
   }, []);
 
@@ -190,6 +243,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return {
       session,
       isAuthenticated: Boolean(session),
+      hadSessionHint,
       isSuperAdmin: Boolean(isSuperAdmin),
       isLoading,
       activeOrg,

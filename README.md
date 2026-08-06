@@ -86,7 +86,7 @@ Objects use this layout:
 
 ```text
 raw/crawls/
-  org_id=palo_alto_networks/
+  org_id=odido/
     crawl_date=YYYY-MM-DD/
       run_id=EXECUTION/
         task=0/
@@ -102,7 +102,7 @@ maximum depth, and maximum matched pages:
 
 ```yaml
 organization:
-  org_id: palo_alto_networks
+  org_id: odido
 ```
 
 The slug must contain lowercase letters/numbers separated by underscores. The
@@ -344,7 +344,7 @@ gcloud run jobs deploy "$NOCTURNE_JOB" \
   --memory=2Gi \
   --task-timeout=2h \
   --max-retries=1 \
-  --set-env-vars="OUTPUT_BACKEND=gcs,GCS_BUCKET=${NOCTURNE_BUCKET},GCS_PREFIX=raw/crawls,ORG_ID=palo_alto_networks,GCS_BATCH_MAX_DOCUMENTS=100,GCS_BATCH_MAX_BYTES=67108864,MAX_VISITED_URLS=1000,MAX_QUEUE_SIZE=2000"
+  --set-env-vars="OUTPUT_BACKEND=gcs,GCS_BUCKET=${NOCTURNE_BUCKET},GCS_PREFIX=raw/crawls,ORG_ID=odido,GCS_BATCH_MAX_DOCUMENTS=100,GCS_BATCH_MAX_BYTES=67108864,MAX_VISITED_URLS=1000,MAX_QUEUE_SIZE=2000"
 ```
 
 Only one task is used because the current Ahmia result set is not partitioned across
@@ -444,7 +444,7 @@ for that slug.
 | --- | --- | --- |
 | 01 | `01_storage_integration.sql` | Creates the Snowflake GCS storage integration and displays its generated GCP service account. |
 | 02 | `02_ingestion_layer.sql` | Creates the gzip JSON format, stage, organization-aware raw table, and five-minute ingestion task. It uses `ABORT_STATEMENT` and leaves GCS deletion disabled. |
-| 03 | `03_target_configuration.sql` | Creates the monitored-organization configuration and seeds Palo Alto Networks, `PANW`, and `paloaltonetworks.com`. |
+| 03 | `03_target_configuration.sql` | Creates the monitored-organization configuration and seeds the demo tenants (`european_commission`, `odido`, `demo_org`). |
 | 04 | `04_detect_indicators_udf.sql` | Creates the deterministic JavaScript indicator detector. It finds and scores validated cards, credentials, tokens, private-key markers, hashes, CVEs, emails, domains, and other indicators. |
 | 05 | `05_dt_regex_indicators.sql` | Rejects invalid organization scope, runs the detector once per page, and preserves unchanged `RAW_TEXT`. |
 | 06 | `06_build_classification_input_udf.sql` | Builds a target-aware L1 input and a target-profile-free L2 evidence input from ranked windows, with a deterministic fallback. |

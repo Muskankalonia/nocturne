@@ -25,51 +25,38 @@ CREATE TABLE IF NOT EXISTS NOCTURNE.CONFIG.MONITORED_ORGANIZATIONS (
 );
 
 -- Seed the hackathon organizations only when they are absent. These rows match
--- the dashboard's multi-organization examples. Re-running deployment does not
--- overwrite aliases, domains, products, or enabled state maintained later.
--- Northwind Traders is intentionally disabled and has no normal ingestion
--- fixture; it exercises monitoring-paused behavior without entering paid AI.
+-- the dashboard's tenant list in nocturne_dashboard/src/mocks/organizations.ts.
+-- Re-running deployment does not overwrite aliases, domains, products, or
+-- enabled state maintained later.
+--
+-- Note that this MERGE only inserts. Retiring a tenant means deleting its row
+-- here explicitly; removing it from this list leaves the deployed row in place
+-- along with every incident already keyed to its ORG_ID.
 MERGE INTO NOCTURNE.CONFIG.MONITORED_ORGANIZATIONS AS TARGET
 USING (
   SELECT
-    'palo_alto_networks' AS ORG_ID,
-    'Palo Alto Networks' AS CANONICAL_NAME,
-    ARRAY_CONSTRUCT('PANW', 'Palo Alto') AS ALIASES,
-    ARRAY_CONSTRUCT('paloaltonetworks.com', 'panw.com') AS DOMAINS,
-    ARRAY_CONSTRUCT('GlobalProtect', 'Cortex XDR', 'Prisma') AS PRODUCTS,
+    'european_commission' AS ORG_ID,
+    'European Commission' AS CANONICAL_NAME,
+    ARRAY_CONSTRUCT('European Commission', 'EC') AS ALIASES,
+    ARRAY_CONSTRUCT('ec.europa.eu') AS DOMAINS,
+    ARRAY_CONSTRUCT() AS PRODUCTS,
     TRUE AS ENABLED
   UNION ALL
   SELECT
-    'att',
-    'AT&T',
-    ARRAY_CONSTRUCT('AT&T', 'ATT'),
-    ARRAY_CONSTRUCT('att.com'),
+    'odido',
+    'Odido',
+    ARRAY_CONSTRUCT('Ben.nl', 'T-Mobile Netherlands'),
+    ARRAY_CONSTRUCT('odido.nl', 'ben.nl'),
     ARRAY_CONSTRUCT(),
     TRUE
   UNION ALL
   SELECT
-    'bank_of_baroda',
-    'Bank of Baroda',
-    ARRAY_CONSTRUCT('BOB'),
-    ARRAY_CONSTRUCT('bankofbaroda.in'),
+    'demo_org',
+    'Demo Organization',
+    ARRAY_CONSTRUCT('Demo'),
+    ARRAY_CONSTRUCT('demo-org.example'),
     ARRAY_CONSTRUCT(),
     TRUE
-  UNION ALL
-  SELECT
-    'contoso_logistics',
-    'Contoso Logistics',
-    ARRAY_CONSTRUCT('Contoso'),
-    ARRAY_CONSTRUCT('contoso.com'),
-    ARRAY_CONSTRUCT(),
-    TRUE
-  UNION ALL
-  SELECT
-    'northwind_traders',
-    'Northwind Traders',
-    ARRAY_CONSTRUCT(),
-    ARRAY_CONSTRUCT('northwind.co'),
-    ARRAY_CONSTRUCT(),
-    FALSE
 ) AS SOURCE
 ON TARGET.ORG_ID = SOURCE.ORG_ID
 WHEN NOT MATCHED THEN

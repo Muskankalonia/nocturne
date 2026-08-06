@@ -32,9 +32,9 @@ WITH fixture_parts AS (
       12500
     ) AS prefix_text,
     '\nMIDDLE_EVIDENCE_BEGIN\n'
-      || 'Synthetic regression fixture only. Palo Alto Networks employee '
+      || 'Synthetic regression fixture only. Odido employee '
       || 'credentials for sale are alleged in this controlled test record.\n'
-      || 'account=nocturne-fixture-do-not-use@paloaltonetworks.com\n'
+      || 'account=nocturne-fixture-do-not-use@odido.nl\n'
       || 'password=SYNTHETIC_TEST_PASSWORD_DO_NOT_USE\n'
       || 'card=4532015112830366\n'
       || 'MIDDLE_EVIDENCE_END\n' AS evidence_text,
@@ -68,9 +68,9 @@ built AS (
       raw_text,
       title,
       indicators,
-      'Palo Alto Networks',
-      ARRAY_CONSTRUCT('PANW', 'CONFIG_ONLY_ALIAS'),
-      ARRAY_CONSTRUCT('paloaltonetworks.com'),
+      'Odido',
+      ARRAY_CONSTRUCT('ODIDO', 'CONFIG_ONLY_ALIAS'),
+      ARRAY_CONSTRUCT('odido.nl'),
       ARRAY_CONSTRUCT(
         'Cortex',
         'Prisma Cloud',
@@ -208,7 +208,7 @@ checks AS (
     ) AS masked_test_card,
     CONTAINS(
       build_result:classification_input::STRING,
-      '[REDACTED_EMAIL_LOCAL_PART]@paloaltonetworks.com'
+      '[REDACTED_EMAIL_LOCAL_PART]@odido.nl'
     ) AS masked_email_local_part,
     CONTAINS(
       build_result:evidence_input::STRING,
@@ -220,7 +220,7 @@ checks AS (
       )
       AND CONTAINS(
         build_result:evidence_input::STRING,
-        '[REDACTED_EMAIL_LOCAL_PART]@paloaltonetworks.com'
+        '[REDACTED_EMAIL_LOCAL_PART]@odido.nl'
       ) AS evidence_input_masked_sensitive_values,
     NOT CONTAINS(
       build_result:classification_input::STRING,

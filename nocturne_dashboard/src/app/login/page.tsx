@@ -32,7 +32,7 @@ const LOCKUP_SIZE = { xs: "30px", md: "40px" };
 
 export default function LoginPage() {
   const router = useRouter();
-  const { login, isAuthenticated, isLoading, isSuperAdmin } = useAuth();
+  const { login, isAuthenticated, isLoading } = useAuth();
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -41,9 +41,9 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
-      router.replace(isSuperAdmin ? "/admin/fleet" : "/");
+      router.replace("/");
     }
-  }, [isLoading, isAuthenticated, isSuperAdmin, router]);
+  }, [isLoading, isAuthenticated, router]);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -55,7 +55,7 @@ export default function LoginPage() {
       setError(result.error);
       return;
     }
-    router.replace(result.user.role === "SUPER_ADMIN" ? "/admin/fleet" : "/");
+    router.replace("/");
   }
 
   return (

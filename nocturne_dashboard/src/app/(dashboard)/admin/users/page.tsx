@@ -1,11 +1,11 @@
 "use client";
 
-import { Box, Stack, Typography } from "@mui/material";
+import { Box, Stack } from "@mui/material";
 import type { ICellRendererParams } from "ag-grid-community";
 import { findOrganization, users } from "@/mocks/organizations";
 import { Panel } from "@/components/ui/Panel";
 import { DataTable } from "@/components/ui/DataTable";
-import { DataGapNote, PageHeader, StatCard, StatGrid, Tag } from "@/components/ui/Primitives";
+import { PageHeader, StatCard, StatGrid, Tag } from "@/components/ui/Primitives";
 import { colors, fonts, severityColor } from "@/theme/tokens";
 import { relativeTime } from "@/lib/format";
 import AdminOnly from "@/components/layout/AdminOnly";
@@ -19,7 +19,7 @@ export default function UsersPage() {
 
   return (
     <AdminOnly>
-      <Stack gap={2}>
+      <Stack gap={2} sx={{ pb: 3 }}>
         <PageHeader
           title="Users and Access"
           subtitle="Who can sign in, and which tenant each account is pinned to."
@@ -47,7 +47,7 @@ export default function UsersPage() {
             rowData={users}
             getRowId={(p) => p.data.username}
             searchPlaceholder="Filter by username, organization, role…"
-            height={330}
+            height={560}
             getRowClass={(p) => (p.data?.role === "SUPER_ADMIN" ? "row-critical" : "")}
             columnDefs={[
               {
@@ -105,33 +105,7 @@ export default function UsersPage() {
             ]}
           />
         </Panel>
-
-        <Panel title="Authentication">
-          <DataGapNote>
-            <b>The current credential scheme is username = password, for demo only.</b> Replace it
-            with real identity before anyone outside the team signs in. Independent of that: hiding
-            the Fleet menu and locking the organization badge are conveniences, not access controls
-            — the session must carry the tenant scope and every API route must filter on it. If a
-            route ever trusts an organization id sent by the browser, any tenant can read any
-            other tenant&apos;s breaches.
-          </DataGapNote>
-          <Stack gap={1} sx={{ mt: 2 }}>
-            <Rule>ORG_USER → scope forced to their own organization, client input ignored</Rule>
-            <Rule>SUPER_ADMIN → may narrow to one organization, or omit for fleet scope</Rule>
-            <Rule>Every query filtered by the session scope, server-side, without exception</Rule>
-          </Stack>
-        </Panel>
       </Stack>
     </AdminOnly>
   );
 }
-
-function Rule({ children }: { children: React.ReactNode }) {
-  return (
-    <Stack direction="row" gap={1.2} alignItems="flex-start">
-      <Box sx={{ color: colors.verified, fontFamily: fonts.mono, fontSize: 12, mt: 0.1 }}>✓</Box>
-      <Typography sx={{ fontSize: 12, color: colors.text2, lineHeight: 1.6 }}>{children}</Typography>
-    </Stack>
-  );
-}
-

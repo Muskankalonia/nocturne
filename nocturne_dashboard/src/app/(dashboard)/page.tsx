@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import NextLink from "next/link";
 import { useRouter } from "next/navigation";
 import { Box, Button, Stack, Typography, alpha } from "@mui/material";
@@ -16,12 +16,12 @@ import {
   TableSkeleton,
 } from "@/components/ui/Skeletons";
 import { SeverityChip } from "@/components/ui/SeverityChip";
-import { colors, fonts, severityColor } from "@/theme/tokens";
+import { colors, fonts, severityColor , layout as layoutTokens} from "@/theme/tokens";
 import { hostOf } from "@/lib/format";
 
 export default function CommandCenterPage() {
   const router = useRouter();
-  const { isFleetScope, activeOrg, switchableOrgs } = useAuth();
+  const { isFleetScope, activeOrg, switchableOrgs, isSuperAdmin } = useAuth();
   // The fetch, the scope guard and the auto-refresh live in PostureContext so
   // the sidebar badge and the tenant switcher read the same numbers this page
   // renders, off one query rather than three.
@@ -32,6 +32,46 @@ export default function CommandCenterPage() {
     error,
     refresh,
   } = usePosture();
+
+  // Manual pipeline kick. Available at every scope a fleet admin can reach,
+  // including a single tenant — the run itself is account-wide, so the button
+  // means the same thing wherever it is pressed.
+  const [runState, setRunState] = useState({
+    busy: false,
+    message: null as string | null,
+    error: false,
+  });
+
+  const runPipeline = useCallback(async () => {
+    setRunState({ busy: true, message: "Starting pipeline run…", error: false });
+    try {
+      const response = await fetch("/api/pipeline/run", {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+      const body = (await response.json()) as
+        | { startedAt: string; task: string; pendingCandidates: number | null }
+        | { error?: string };
+      if (!response.ok || !("task" in body)) {
+        setRunState({
+          busy: false,
+          error: true,
+          message: "error" in body && body.error ? body.error : "Could not start the run.",
+        });
+        return;
+      }
+      setRunState({
+        busy: false,
+        error: false,
+        message: `${body.task} started · results appear as stages complete`,
+      });
+      // Give the task a moment to land rows before pulling fresh numbers.
+      window.setTimeout(() => refresh(), 8000);
+    } catch {
+      setRunState({ busy: false, error: true, message: "Could not reach the server." });
+    }
+  }, [refresh]);
 
   const scored = visibleData?.incidents.filter(
     (incident) => incident.triagePriorityScore !== null,
@@ -73,7 +113,7 @@ export default function CommandCenterPage() {
   // real heading and skeleton only the boxes that are waiting on Snowflake.
   if (!visibleData && isLoading) {
     return (
-      <Stack gap={2}>
+      <Stack gap={2} sx={{ minHeight: `calc(100dvh - ${layoutTokens.headerHeight + (layoutTokens.gutter - 4) * 2}px)`, pb: 1 }}>
         <PageHeading
           title={`${organizationName} posture`}
           subtitle={
@@ -183,6 +223,8 @@ export default function CommandCenterPage() {
         lastUpdatedAt={visibleData.lastUpdatedAt}
         isRefreshing={isRefreshing}
         onRefresh={refresh}
+        onRunPipeline={isSuperAdmin ? runPipeline : undefined}
+        runState={runState}
       />
 
       {error && (
@@ -566,12 +608,16 @@ function PageHeading({
   lastUpdatedAt,
   isRefreshing = false,
   onRefresh,
+  onRunPipeline,
+  runState,
 }: {
   title: string;
   subtitle: string;
   lastUpdatedAt?: string | null;
   isRefreshing?: boolean;
   onRefresh?: () => void;
+  onRunPipeline?: () => void;
+  runState?: { busy: boolean; message: string | null; error: boolean };
 }) {
   return (
     <Stack
@@ -597,10 +643,22 @@ function PageHeading({
               textTransform: "uppercase",
             }}
           >
-            {isRefreshing
-              ? "Querying Snowflake…"
-              : `Live Snowflake · updated ${formatTimestamp(lastUpdatedAt ?? null)}`}
+            {runState?.message
+              ? runState.message
+              : isRefreshing
+                ? "Querying Snowflake…"
+                : `Live Snowflake · updated ${formatTimestamp(lastUpdatedAt ?? null)}`}
           </Typography>
+          {onRunPipeline && (
+            <Button
+              size="small"
+              variant="contained"
+              disabled={runState?.busy}
+              onClick={onRunPipeline}
+            >
+              {runState?.busy ? "Starting…" : "Run pipeline"}
+            </Button>
+          )}
           <Button
             size="small"
             variant="outlined"

@@ -960,11 +960,11 @@ $$;
 
 -- Safe smoke test with synthetic text and no exact indicator values.
 -- SELECT NOCTURNE.RAW.BUILD_CLASSIFICATION_INPUT(
---   'A database allegedly belonging to PANW is advertised for sale.',
+--   'A database allegedly belonging to ODIDO is advertised for sale.',
 --   'Synthetic listing',
 --   PARSE_JSON('{"matches":[],"summary_text":"email_count=4","strong_count":0,"medium_count":0,"weak_count":4,"evidence_score":4}'),
---   'Palo Alto Networks',
---   ARRAY_CONSTRUCT('PANW'),
---   ARRAY_CONSTRUCT('paloaltonetworks.com'),
+--   'Odido',
+--   ARRAY_CONSTRUCT('ODIDO'),
+--   ARRAY_CONSTRUCT('odido.nl'),
 --   ARRAY_CONSTRUCT()
 -- );

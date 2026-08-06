@@ -7,12 +7,13 @@ import { Download, RefreshCw } from "lucide-react";
 import type { AgGridReact } from "ag-grid-react";
 import type { ColDef, ICellRendererParams, RowClassParams } from "ag-grid-community";
 import { useAuth } from "@/contexts/AuthContext";
+import { usePosture } from "@/contexts/PostureContext";
 import { DataTable } from "@/components/ui/DataTable";
 import { Panel } from "@/components/ui/Panel";
 import { StatGridSkeleton, TableSkeleton } from "@/components/ui/Skeletons";
 import { SeverityChip } from "@/components/ui/SeverityChip";
 import { PageHeader, StatCard, StatGrid, Tag } from "@/components/ui/Primitives";
-import { colors, fonts, layout, severityColor } from "@/theme/tokens";
+import { colors, fonts, layout, layout as layoutTokens, severityColor } from "@/theme/tokens";
 import {
   formatCount,
   hostOf,
@@ -56,6 +57,7 @@ export default function BreachMonitorPage() {
   const params = useSearchParams();
   const gridRef = useRef<AgGridReact<BreachMonitorRecord>>(null);
   const { session, isFleetScope } = useAuth();
+  const { fleetSelection } = usePosture();
   const canViewExternalContext = session?.user.role === "SUPER_ADMIN";
 
   const [status, setStatus] = useState<StatusFilter>("all");
@@ -70,6 +72,11 @@ export default function BreachMonitorPage() {
     const query = new URLSearchParams();
     if (session.user.role === "SUPER_ADMIN" && session.scope.kind === "org") {
       query.set("orgId", session.scope.orgId);
+    }
+    // Fleet rows must honour the same tenant selection as the command centre,
+    // or the two screens disagree about which tenants are in view.
+    if (session.scope.kind === "fleet" && fleetSelection) {
+      query.set("orgIds", fleetSelection.join(","));
     }
     const url = query.size
       ? `/api/breach-monitor?${query.toString()}`
@@ -103,7 +110,7 @@ export default function BreachMonitorPage() {
     } finally {
       if (background) setIsRefreshing(false);
     }
-  }, [session]);
+  }, [session, fleetSelection]);
 
   // The page is statically prerendered, so `useSearchParams()` is empty on the
   // first render and a useState initializer would capture "all" forever. Sync
@@ -420,7 +427,7 @@ export default function BreachMonitorPage() {
   // to matter. Keep the heading real and mirror the grid's shape underneath.
   if (!visibleData && isLoading) {
     return (
-      <Stack gap={2}>
+      <Stack gap={2} sx={{ minHeight: `calc(100dvh - ${layoutTokens.headerHeight + (layoutTokens.gutter - 4) * 2}px)`, pb: 1 }}>
         <PageHeader
           title="Breach Monitor"
         />

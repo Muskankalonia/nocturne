@@ -209,7 +209,7 @@ export function UserSettingsDialog({
               <TextField
                 value={displayName}
                 onChange={(event) => setDisplayName(event.target.value)}
-                placeholder="Kurt Meyers"
+                placeholder="Your name"
                 fullWidth
                 autoFocus
                 inputProps={{ maxLength: 80 }}

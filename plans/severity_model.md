@@ -49,7 +49,7 @@ and you already compute that distinction.
 
 ### 1.4 No credibility, no recency, no scale
 
-A bare boast ("I have PANW creds, DM me") and a post carrying a verifiable
+A bare boast ("I have ODIDO creds, DM me") and a post carrying a verifiable
 sample with 40 real credential patterns score identically. So does an
 18-month-old listing. And a 500-record breach scores the same as a
 5-million-record one.

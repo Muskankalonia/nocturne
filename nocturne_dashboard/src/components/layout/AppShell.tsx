@@ -17,17 +17,24 @@ import Sidebar from "./Sidebar";
  */
 export function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, hadSessionHint } = useAuth();
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) router.replace("/login");
   }, [isLoading, isAuthenticated, router]);
 
-  // The one place a whole-page skeleton is honest: until the session resolves we
-  // do not know the role, so we cannot draw the correct navigation. Sketching
-  // the chrome keeps the first paint in the right shape instead of flashing a
-  // centred spinner and then snapping into a full layout.
-  if (isLoading || !isAuthenticated) {
+  // A signed-out visitor is on their way to /login, so drawing dashboard chrome
+  // for them is a lie that resolves into a redirect. Two cases are not the same
+  // thing and must not share a placeholder:
+  //
+  //   - resolved and signed out, or no prior session on this device: the next
+  //     screen is /login, so sketch that instead;
+  //   - still resolving with a prior session here: the next screen is the
+  //     dashboard, so sketching the chrome keeps the first paint in shape.
+  if (!isLoading && !isAuthenticated) return <LoginSkeleton />;
+  if (isLoading && !hadSessionHint) return <LoginSkeleton />;
+
+  if (isLoading) {
     return (
       <Box sx={{ display: "flex", minHeight: "100vh", backgroundColor: colors.void }}>
         <Box
@@ -143,3 +150,60 @@ function Chrome({ children }: { children: ReactNode }) {
 }
 
 export default AppShell;
+
+/**
+ * Placeholder in the shape of /login, for visitors who are on their way there.
+ * Deliberately structural — two panes and a card outline — so it reads as the
+ * same page arriving rather than as different content being replaced.
+ */
+function LoginSkeleton() {
+  return (
+    <Stack
+      direction={{ xs: "column", md: "row" }}
+      sx={{ minHeight: "100dvh", width: "100%", backgroundColor: colors.void }}
+    >
+      <Stack
+        sx={{
+          flex: { md: 1.15 },
+          p: { xs: 3.5, sm: 5, md: 7, lg: 10 },
+          borderRight: { md: `1px solid ${colors.edge}` },
+          borderBottom: { xs: `1px solid ${colors.edge}`, md: "none" },
+        }}
+      >
+        <Stack direction="row" alignItems="center" gap={1.8}>
+          <Skeleton variant="rounded" width={40} height={40} sx={{ borderRadius: "10px" }} />
+          <Skeleton variant="text" width={150} height={28} />
+        </Stack>
+        <Stack gap={1.2} sx={{ mt: "auto" }}>
+          <Skeleton variant="text" width="60%" height={40} />
+          <Skeleton variant="text" width="80%" height={14} />
+          <Skeleton variant="text" width="70%" height={14} />
+        </Stack>
+      </Stack>
+
+      <Stack
+        justifyContent="center"
+        alignItems="center"
+        sx={{ flex: { md: 1 }, p: { xs: 3, sm: 4, md: 6 } }}
+      >
+        <Box
+          sx={{
+            width: "100%",
+            maxWidth: 400,
+            p: { xs: 2.5, sm: 3.5 },
+            borderRadius: `${layout.radius}px`,
+            border: `1px solid ${colors.edge}`,
+            backgroundImage: gradients.panel,
+          }}
+        >
+          <Stack gap={2}>
+            <Skeleton variant="text" width={120} height={22} />
+            <Skeleton variant="rounded" height={40} sx={{ borderRadius: "8px" }} />
+            <Skeleton variant="rounded" height={40} sx={{ borderRadius: "8px" }} />
+            <Skeleton variant="rounded" height={38} sx={{ borderRadius: "8px" }} />
+          </Stack>
+        </Box>
+      </Stack>
+    </Stack>
+  );
+}
