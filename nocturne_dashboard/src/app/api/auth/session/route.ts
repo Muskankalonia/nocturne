@@ -2,6 +2,8 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { organizations, users } from "@/mocks/organizations";
+import { getUserProfile } from "@/server/nocturne-backend";
+import { initialsFromName } from "@/lib/format";
 import {
   checkLoginRate,
   clientKey,
@@ -38,6 +40,34 @@ function sessionForUser(user: User, issuedAt: string): Session {
     scope: scopeForUser(user),
     issuedAt,
   };
+}
+
+/**
+ * Overlay the saved profile onto the directory record.
+ *
+ * A profile lookup must never be able to sign someone out: if the warehouse is
+ * unreachable, the session still issues with directory defaults. Presentation
+ * degrades, authentication does not.
+ */
+async function withStoredProfile(user: User): Promise<User> {
+  try {
+    const profile = await getUserProfile(user.username);
+    if (!profile) return user;
+    const displayName = profile.displayName ?? user.displayName;
+    return {
+      ...user,
+      displayName,
+      initials: initialsFromName(displayName, user.initials),
+      email: profile.email ?? user.email,
+      position: profile.position ?? user.position,
+    };
+  } catch (error) {
+    console.error(
+      "[nocturne-auth] profile overlay unavailable, using directory defaults:",
+      error instanceof Error ? error.message : "unknown server error",
+    );
+    return user;
+  }
 }
 
 /**
@@ -145,7 +175,7 @@ export async function POST(request: Request) {
   }
 
   const response = NextResponse.json(
-    { session: sessionForUser(user, now.toISOString()) },
+    { session: sessionForUser(await withStoredProfile(user), now.toISOString()) },
     { headers: NO_STORE_HEADERS },
   );
   response.cookies.set(SESSION_COOKIE_NAME, token, sessionCookieOptions);
@@ -186,7 +216,7 @@ export async function GET() {
   }
 
   return NextResponse.json(
-    { session: sessionForUser(user, verified.issuedAt) },
+    { session: sessionForUser(await withStoredProfile(user), verified.issuedAt) },
     { headers: NO_STORE_HEADERS },
   );
 }

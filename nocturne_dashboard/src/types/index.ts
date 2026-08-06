@@ -137,6 +137,14 @@ export interface User {
   /** null for SUPER_ADMIN — they are not bound to a single tenant. */
   orgId: string | null;
   lastSignInAt: string | null;
+  /**
+   * Self-service profile fields, overlaid from NOCTURNE.CONFIG.USER_PROFILES.
+   * Null means the user has never saved one and the directory default stands.
+   * Note what is *not* editable here: `role` and `orgId` decide what the user
+   * may read and come from the signed session, never from these fields.
+   */
+  email: string | null;
+  position: string | null;
 }
 
 /** SQL: NOCTURNE.CONFIG.MONITORED_ORGANIZATIONS */

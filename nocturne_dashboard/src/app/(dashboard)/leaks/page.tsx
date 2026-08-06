@@ -29,9 +29,9 @@ import type {
 type StatusFilter = "all" | "confirmed" | "ambiguous" | "other";
 
 const monitorStatusLabel: Record<BreachMonitorStatus, string> = {
-  confirmed_yours: "Confirmed yours",
-  needs_review: "Needs review",
-  another_company: "Another company",
+  confirmed_yours: "Confirmed Breach",
+  needs_review: "Needs Review",
+  another_company: "Other Company Breach ",
 };
 
 const monitorStatusTone: Record<
@@ -234,10 +234,10 @@ export default function BreachMonitorPage() {
     }
 
     return {
-      primaryLabel: "Confirmed leaks",
+      primaryLabel: "Confirmed Leaks",
       primaryValue: confirmed.length,
       primaryAccent: severityColor.critical,
-      fourthLabel: status === "confirmed" ? "Detail ready" : "Needs review",
+      fourthLabel: status === "confirmed" ? "Detail Ready" : "Needs Review",
       fourthValue: status === "confirmed"
         ? confirmed.filter((row) => row.detailAvailable).length
         : needsReview.length,
@@ -423,7 +423,6 @@ export default function BreachMonitorPage() {
       <Stack gap={2}>
         <PageHeader
           title="Breach Monitor"
-          subtitle="Confirmed leaks, plus the pages we refused to confirm and why."
         />
         <StatGridSkeleton cards={4} />
         <Panel padded={false}>
@@ -447,7 +446,6 @@ export default function BreachMonitorPage() {
       <Stack gap={2}>
         <PageHeader
           title="Breach Monitor"
-          subtitle="Confirmed leaks, plus the pages we refused to confirm and why."
         />
         <Panel>
           <Stack alignItems="center" gap={1.5} sx={{ py: 6 }}>
@@ -470,11 +468,6 @@ export default function BreachMonitorPage() {
     <Stack gap={2}>
       <PageHeader
         title="Breach Monitor"
-        subtitle={
-          isFleetScope
-            ? "Confirmed leaks and stopped candidates across every permitted organization."
-            : "Confirmed leaks, plus the pages we refused to confirm and why."
-        }
         right={
           <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
             <Typography sx={{ fontFamily: fonts.mono, fontSize: 9.5, color: colors.verified }}>
@@ -515,13 +508,13 @@ export default function BreachMonitorPage() {
           accent={selectedMetrics.primaryAccent}
         />
         <StatCard
-          label="Records claimed"
+          label="Leaked Records Claimed"
           value={selectedMetrics.recordsClaimed
             ? selectedMetrics.recordsClaimed.toLocaleString()
             : "—"}
         />
         <StatCard
-          label="Exposed data classes"
+          label="Exposed Data Classes"
           value={`${selectedMetrics.exposedDataClasses}/5`}
         />
         <StatCard

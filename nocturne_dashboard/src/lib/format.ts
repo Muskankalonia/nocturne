@@ -105,3 +105,22 @@ export function relativeTime(iso: string, now = Date.now()): string {
   if (h < 24) return `${h} h ago`;
   return `${Math.round(h / 24)} d ago`;
 }
+
+/**
+ * Avatar initials from a display name.
+ *
+ * Shared by the session overlay on the server and by the in-memory profile
+ * update on the client: if only one of them recomputed initials, renaming
+ * yourself would leave the previous person's letters in the avatar until the
+ * next sign-in.
+ */
+export function initialsFromName(name: string, fallback = ""): string {
+  const letters = name
+    .replace(/[^A-Za-z ]/g, "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((word) => word[0]!.toUpperCase())
+    .join("");
+  return letters || fallback;
+}

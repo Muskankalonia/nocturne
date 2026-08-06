@@ -33,6 +33,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import urllib.request
+
 import snowflake.connector
 
 
@@ -1658,6 +1660,48 @@ def generate_report(
     print(f"Metadata-only report saved to: {output_path}")
 
 
+def dispatch_breach_alerts() -> None:
+    """Ask the console to email any newly confirmed breaches.
+
+    Fire-and-report: alerting is a downstream convenience, so a failure here is
+    logged and never fails a deployment that otherwise succeeded. The endpoint
+    is idempotent — it claims each incident/recipient pair before sending — so
+    calling it after every run cannot produce duplicate mail, and the scheduled
+    sweep still covers runs that happen outside this script.
+    """
+    endpoint = os.environ.get("NOCTURNE_ALERT_DISPATCH_URL", "").strip()
+    token = os.environ.get("NOCTURNE_ALERT_DISPATCH_TOKEN", "").strip()
+    if not endpoint or not token:
+        log.info(
+            "  Breach alert dispatch skipped "
+            "(set NOCTURNE_ALERT_DISPATCH_URL and NOCTURNE_ALERT_DISPATCH_TOKEN to enable)."
+        )
+        return
+
+    request = urllib.request.Request(
+        endpoint,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        data=b"{}",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            payload = json.loads(response.read().decode("utf-8") or "{}")
+        log.info(
+            "  Breach alerts: %s scanned, %s queued, %s already sent.",
+            payload.get("scanned", 0),
+            payload.get("queued", 0),
+            payload.get("skipped", 0),
+        )
+        for message in payload.get("errors", [])[:5]:
+            log.warning("  Alert dispatch issue: %s", message)
+    except Exception as exc:  # noqa: BLE001 - never fail a deploy on alerting
+        log.warning("  Breach alert dispatch failed: %s", exc)
+
+
 def main():
     log_path = configure_logging()
     parser = argparse.ArgumentParser(description="Deploy Nocturne Snowflake pipeline")
@@ -1814,6 +1858,7 @@ def main():
             log_ai_inputs=args.log_ai_inputs,
         )
         log.info("Pipeline deployment complete.")
+        dispatch_breach_alerts()
         if 15 in selected_steps:
             log.info(
                 "AI tasks run asynchronously. Use --verify-only after the "

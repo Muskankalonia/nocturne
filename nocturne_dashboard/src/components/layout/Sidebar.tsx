@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePosture } from "@/contexts/PostureContext";
+import { UserSettingsDialog } from "./UserSettingsDialog";
 import { navigationForRole, sectionLabels, sectionOrder } from "@/config/navigation";
 import { colors, fonts, gradients, layout } from "@/theme/tokens";
 import type { NavChild, NavItem, NavSection } from "@/types";
@@ -77,6 +78,7 @@ export function Sidebar({ badges }: SidebarProps) {
   // Cleared as soon as the pointer genuinely leaves.
   const [hoverSuppressed, setHoverSuppressed] = useState(false);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  const [profileOpen, setProfileOpen] = useState(false);
 
   useEffect(() => {
     setPinned(window.localStorage.getItem(PIN_STORAGE_KEY) === "true");
@@ -498,7 +500,31 @@ export function Sidebar({ badges }: SidebarProps) {
 
       {/* user + sign out */}
       <Box sx={{ borderTop: `1px solid ${colors.edge}`, p: 1.2, flexShrink: 0 }}>
-        <Stack direction="row" alignItems="center" gap={1.2} sx={{ px: 0.4, pb: expanded ? 1.2 : 0 }}>
+        <Tooltip title={expanded ? "" : "Profile settings"} placement="right">
+        <Stack
+          component="button"
+          type="button"
+          onClick={() => setProfileOpen(true)}
+          aria-label="Profile settings"
+          direction="row"
+          alignItems="center"
+          gap={1.2}
+          sx={{
+            width: "100%",
+            px: 0.4,
+            pb: expanded ? 1.2 : 0,
+            cursor: "pointer",
+            font: "inherit",
+            border: "none",
+            background: "transparent",
+            borderRadius: `${layout.radiusSm}px`,
+            "&:hover .nocturne-profile-name": { color: colors.ion },
+            "&:focus-visible": {
+              outline: `2px solid ${alpha(colors.ion, 0.7)}`,
+              outlineOffset: 2,
+            },
+          }}
+        >
           <Box
             sx={{
               width: 28,
@@ -521,8 +547,18 @@ export function Sidebar({ badges }: SidebarProps) {
             {session?.user.initials}
           </Box>
           {expanded && (
-            <Box sx={{ minWidth: 0 }}>
-              <Typography sx={{ fontSize: 11.5, color: colors.text1, whiteSpace: "nowrap" }}>
+            <Box sx={{ minWidth: 0, textAlign: "left" }}>
+              <Typography
+                className="nocturne-profile-name"
+                sx={{
+                  fontSize: 11.5,
+                  color: colors.text1,
+                  transition: "color 120ms ease",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
                 {session?.user.displayName}
               </Typography>
               <Typography
@@ -531,13 +567,21 @@ export function Sidebar({ badges }: SidebarProps) {
                   fontSize: 9.5,
                   color: isSuperAdmin ? colors.critical : colors.text3,
                   whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
                 }}
               >
-                {isSuperAdmin ? "FLEET ACCESS" : "ORG ANALYST"}
+                {/* A saved position replaces the role wording, but only for an
+                  * org user. Fleet access is a privilege boundary and keeps
+                  * saying so no matter what someone types in their profile. */}
+                {isSuperAdmin
+                  ? "FLEET ACCESS"
+                  : (session?.user.position?.toUpperCase() ?? "ORG ANALYST")}
               </Typography>
             </Box>
           )}
         </Stack>
+        </Tooltip>
 
         <Tooltip title={expanded ? "" : "Sign out"} placement="right">
           <Box
@@ -579,6 +623,8 @@ export function Sidebar({ badges }: SidebarProps) {
           </Box>
         </Tooltip>
       </Box>
+
+      <UserSettingsDialog open={profileOpen} onClose={() => setProfileOpen(false)} />
     </Box>
   );
 }

@@ -89,6 +89,9 @@ export const users: User[] = [
     role: "SUPER_ADMIN",
     orgId: null,
     lastSignInAt: "2026-08-01T16:05:00Z",
+    // Directory defaults. A saved profile row in Snowflake overrides these.
+    email: null,
+    position: null,
   },
   ...organizations.map<User>((org) => ({
     username: org.orgId,
@@ -99,5 +102,7 @@ export const users: User[] = [
     orgId: org.orgId,
     lastSignInAt:
       org.orgId === "palo_alto_networks" ? "2026-08-01T15:53:00Z" : null,
+    email: null,
+    position: null,
   })),
 ];
