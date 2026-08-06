@@ -43,7 +43,7 @@ flowchart TB
   subgraph cascade ["CASCADE (AI)"]
     direction LR
     L0["L0: DLP Classifier"] --> L1["L1: AI Classify"]
-    L1 --> L2["L2: Entity Extraction + Grounding"]
+    L1 --> L2["L2: Entity Extraction + Resolution"]
   end
 
   subgraph score ["SCORE"]
@@ -297,6 +297,23 @@ data, and a waiting triggered task does not keep its warehouse active.
    reach leak-type AI, L3, target severity, or incident insights.
 
 Only `target_confirmed` pages are target-alert eligible.
+
+### L3 Knowledge Graph schema
+
+```mermaid
+graph LR
+  Actor["Seller / Actor"] -->|MADE_CLAIM| Claim["Leak Claim"]
+  Claim -->|ALLEGEDLY_AFFECTS| Target["Target Organization"]
+  Claim -->|MENTIONS| Asset["Data Asset"]
+  Claim -->|LISTED_ON| Market["Marketplace"]
+  Target -->|HAS_DOMAIN| Domain["Domain"]
+  Actor -->|OPERATES_ON| Market
+```
+
+Nodes represent entities extracted from dark-web pages. Edges represent
+relationships grounded against configured organization profiles. Only claims
+connected to the monitored target via `ALLEGEDLY_AFFECTS` are promoted into the
+graph and scored.
 
 ### L4 scores
 
