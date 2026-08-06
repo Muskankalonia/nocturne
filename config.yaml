@@ -1,6 +1,26 @@
 # Dark Web Scraper Configuration
 
-search_engine: ahmia  # Options: ahmia (default)
+# Every enabled engine is queried and its results merged into one crawl
+# frontier. Ahmia indexes broadly across onion services; Dread carries the
+# forum discussion and leak threads Ahmia never indexes. Each engine's failure
+# is isolated, so one being down does not cost the run the other's results.
+search_engines:
+  - ahmia
+  - dread
+
+# Pages of results to take from each engine.
+search_pages: 2
+
+# Dread rotates its onion address; override here or with DREAD_BASE_URL when
+# it moves. A stale address fails the run rather than silently returning zero.
+dread_base_url: "https://dreadytofatroptsdj6io7l3xptbet6onoyno2yv7jicoxknyazubrad.onion"
+
+# Dread gates every request behind an access queue. These control how long the
+# crawler waits to be forwarded, rather than discarding the page.
+interstitial_wait: 300
+interstitial_poll: 15
+fetch_attempts: 2
+
 query: "palo alto networks"
 
 # Stable identifier carried with every crawled page from GCS through Snowflake.

@@ -107,42 +107,53 @@ def as_list(value) -> list[str]:
     return []
 
 
-def build_query(row: dict, max_terms: int) -> str:
-    """Canonical name first, then aliases, then domains — most to least specific.
+def build_query(row: dict) -> str:
+    """Search for the organization's name alone, quoted.
 
-    Ahmia matches on plain text, so the terms are quoted and OR-joined rather
-    than concatenated; an unquoted multi-word name would otherwise match pages
-    containing only one of its words.
+    Do not OR-join the aliases and domains: neither engine treats OR as a
+    boolean operator, so extra terms narrowed the results instead of widening
+    them, and Ahmia returned nothing at all. Relevance comes from the keyword
+    filter, not the query.
     """
-    terms: list[str] = []
-    seen: set[str] = set()
-    for value in [row.get("CANONICAL_NAME"), *as_list(row.get("ALIASES")), *as_list(row.get("DOMAINS"))]:
+    for value in [
+        row.get("CANONICAL_NAME"),
+        *as_list(row.get("ALIASES")),
+        *as_list(row.get("DOMAINS")),
+    ]:
         term = str(value or "").strip()
-        if not term:
-            continue
-        key = term.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        terms.append(term)
-        if len(terms) >= max_terms:
-            break
-    if not terms:
-        raise SystemExit(
-            f"{row.get('ORG_ID')} has no canonical name, aliases, or domains to search for."
-        )
-    return " OR ".join(f'"{term}"' for term in terms)
+        if term:
+            # Quoted so a multi-word name cannot match on one of its words.
+            return f'"{term}"'
+    raise SystemExit(
+        f"{row.get('ORG_ID')} has no canonical name, aliases, or domains to search for."
+    )
+
+
+def build_keywords(row: dict) -> str:
+    """Comma-separated keyword filter derived from the organization profile.
+
+    Products are included here but deliberately not in the search query: they
+    make a page recognisably about this organization once fetched, while
+    searching for them alone would surface unrelated product chatter.
+    """
+    keywords: list[str] = []
+    seen: set[str] = set()
+    for value in [
+        row.get("CANONICAL_NAME"),
+        *as_list(row.get("ALIASES")),
+        *as_list(row.get("DOMAINS")),
+        *as_list(row.get("PRODUCTS")),
+    ]:
+        term = str(value or "").strip()
+        if term and term.lower() not in seen:
+            seen.add(term.lower())
+            keywords.append(term)
+    return ",".join(keywords)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--org-id", required=True, help="lowercase slug, e.g. palo_alto_networks")
-    parser.add_argument(
-        "--max-terms",
-        type=int,
-        default=6,
-        help="cap on OR'd search terms (default: 6)",
-    )
     parser.add_argument(
         "--format",
         choices=("env", "json"),
@@ -158,8 +169,6 @@ def main() -> int:
 
     if not ORG_ID_PATTERN.fullmatch(args.org_id):
         raise SystemExit("--org-id must be a lowercase slug of letters, numbers and single underscores.")
-    if args.max_terms < 1:
-        raise SystemExit("--max-terms must be at least 1.")
 
     load_env_file(PROJECT_ROOT / ".env")
     load_env_file(PROJECT_ROOT / "nocturne_dashboard" / ".env.local")
@@ -179,7 +188,7 @@ def main() -> int:
             f"or pass --allow-disabled to override."
         )
 
-    query = build_query(row, args.max_terms)
+    query = build_query(row)
 
     if args.format == "json":
         print(json.dumps({
@@ -190,10 +199,16 @@ def main() -> int:
             "products": as_list(row.get("PRODUCTS")),
             "enabled": enabled,
             "query": query,
+            "keywords": build_keywords(row).split(",") if build_keywords(row) else [],
         }, indent=2))
     else:
         print(f"ORG_ID={shlex.quote(str(row['ORG_ID']))}")
         print(f"QUERY={shlex.quote(query)}")
+        # Keywords decide which crawled pages are stored at all. Deriving them
+        # from the same row means the UI is the single place an organization is
+        # configured; without this the deployed job would still filter on
+        # whatever keywords were baked into the image's config.yaml.
+        print(f"KEYWORDS={shlex.quote(build_keywords(row))}")
     return 0
 
 
