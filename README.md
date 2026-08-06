@@ -301,17 +301,35 @@ Only `target_confirmed` pages are target-alert eligible.
 ### L3 Knowledge Graph schema
 
 ```mermaid
-graph LR
-  Actor["Seller / Actor"] -->|MADE_CLAIM| Claim["Leak Claim"]
-  Claim -->|ALLEGEDLY_AFFECTS| Target["Target Organization"]
-  Claim -->|MENTIONS| Asset["Data Asset"]
-  Claim -->|LISTED_ON| Market["Marketplace"]
-  Target -->|HAS_DOMAIN| Domain["Domain"]
-  Actor -->|OPERATES_ON| Market
+flowchart TB
+  subgraph actors ["THREAT ACTORS"]
+    Actor(["Seller / Actor"])
+  end
+
+  subgraph claims ["CLAIMS"]
+    Claim(["Leak Claim"])
+  end
+
+  subgraph targets ["TARGET"]
+    Target(["Target Organization"])
+    Domain(["Domain"])
+  end
+
+  subgraph assets ["EVIDENCE"]
+    Asset(["Data Asset"])
+    Market(["Marketplace"])
+  end
+
+  Actor -->|"MADE_CLAIM"| Claim
+  Claim -->|"ALLEGEDLY_AFFECTS"| Target
+  Claim -->|"MENTIONS"| Asset
+  Claim -->|"LISTED_ON"| Market
+  Target -->|"HAS_DOMAIN"| Domain
+  Actor -->|"OPERATES_ON"| Market
 ```
 
 Nodes represent entities extracted from dark-web pages. Edges represent
-relationships grounded against configured organization profiles. Only claims
+relationships resolved against configured organization profiles. Only claims
 connected to the monitored target via `ALLEGEDLY_AFFECTS` are promoted into the
 graph and scored.
 
