@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/nocturne-logo.jpeg" alt="Nocturne" width="400">
+  <img src="assets/nocturne-logo.png" alt="Nocturne" width="400">
 </p>
 
 <h3 align="center">Dark-web breach intelligence, from crawl to analyst dashboard</h3>
