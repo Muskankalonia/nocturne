@@ -6,6 +6,7 @@ import snowflake, {
 
 import type {
   AiStatus,
+  AiStage,
   ClaimStatus,
   ConfidenceBand,
   DataScope,
@@ -20,10 +21,13 @@ import type {
   L2Route,
   LeakType,
   RelationshipLabel,
+  RejectionReason,
   RemediationStatus,
   ScoreReason,
   SeverityBand,
+  TaskHealth,
   ThreatActor,
+  VersionDrift,
 } from "@/types";
 import type {
   BreachMonitorPipelineState,
@@ -45,6 +49,9 @@ import type {
   MonitoredOrganizationRecord,
   MonitoredOrganizationUpdate,
   PendingAlert,
+  PipelineAiCacheStage,
+  PipelineCacheSummary,
+  PipelineResponse,
   ThreatActorsResponse,
   UserProfileRecord,
   UserProfileUpdate,
@@ -55,6 +62,19 @@ if (typeof window !== "undefined") {
 }
 
 type SnowflakeRow = Record<string, unknown>;
+
+async function optionalDashboardQuery(
+  label: string,
+  sql: string,
+  binds?: Binds,
+): Promise<SnowflakeRow[]> {
+  try {
+    return await executeQuery(sql, binds);
+  } catch (error) {
+    console.warn(`[nocturne-dashboard] optional ${label} query unavailable:`, error);
+    return [];
+  }
+}
 
 interface BackendConfig {
   account: string;
@@ -85,6 +105,7 @@ export interface NocturneBackend {
     incidentKey?: string,
   ): Promise<KnowledgeGraphResponse | null>;
   getThreatActors(scope: DataScope): Promise<ThreatActorsResponse>;
+  getPipeline(scope: DataScope): Promise<PipelineResponse>;
 }
 
 export interface BreachMonitorAccess {
@@ -380,6 +401,35 @@ const THREAT_ACTOR_COLUMNS = `
     AS FIRST_SEEN,
   TO_VARCHAR(LAST_SEEN, 'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM')
     AS LAST_SEEN
+`;
+
+const PIPELINE_REJECTION_COLUMNS = `
+  ORG_ID,
+  ELEMENT_KIND,
+  VALIDATION_REASON,
+  REJECTED_COUNT
+`;
+
+const PIPELINE_CACHE_COLUMNS = `
+  ORG_ID,
+  STAGE,
+  CACHE_ROWS,
+  SUCCESS_ROWS,
+  ERROR_ROWS,
+  MISSING_CANDIDATES,
+  TO_VARCHAR(
+    LAST_CALLED_AT,
+    'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM'
+  ) AS LAST_CALLED_AT
+`;
+
+const PIPELINE_DRIFT_COLUMNS = `
+  ORG_ID,
+  STAGE,
+  BASELINE_VERSION,
+  EXPECTED_VERSION,
+  CURRENT_VERSION,
+  ROWS_BEHIND
 `;
 
 let connectionPromise: Promise<Connection> | null = null;
@@ -1067,6 +1117,277 @@ function buildCascade(metrics: CommandCenterMetrics): CommandCenterResponse["cas
   ];
 }
 
+type PipelineCacheStageRow = PipelineAiCacheStage & { orgId: string };
+
+function rowField(row: SnowflakeRow, ...names: string[]): unknown {
+  for (const name of names) {
+    if (Object.prototype.hasOwnProperty.call(row, name)) return row[name];
+  }
+  const entries = Object.entries(row);
+  for (const name of names) {
+    const match = entries.find(([key]) => key.toUpperCase() === name.toUpperCase());
+    if (match) return match[1];
+  }
+  return undefined;
+}
+
+function pipelineStageLabel(stage: AiStage): string {
+  switch (stage) {
+    case "relationship":
+      return "Relationship";
+    case "l2_extraction":
+      return "L2 extraction";
+    case "leak_type":
+      return "Leak type";
+    case "incident_insight":
+      return "Incident insight";
+  }
+}
+
+function rejectionLabel(reason: string): string {
+  return reason
+    .split("_")
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function rejectionSeverity(reason: string): RejectionReason["severity"] {
+  if (reason === "unmatched_evidence") return "critical";
+  if (
+    reason.includes("endpoint")
+    || reason.includes("combination")
+    || reason.includes("source")
+    || reason.includes("target")
+  ) {
+    return "high";
+  }
+  if (reason.includes("cap")) return "low";
+  return "medium";
+}
+
+function aggregateRejectionReasons(rows: SnowflakeRow[]): RejectionReason[] {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const reason = stringValue(row.VALIDATION_REASON, "unknown");
+    counts.set(reason, (counts.get(reason) ?? 0) + numberValue(row.REJECTED_COUNT));
+  }
+  return [...counts.entries()]
+    .map(([reason, count]) => ({
+      reason,
+      label: rejectionLabel(reason),
+      count,
+      severity: rejectionSeverity(reason),
+    }))
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+}
+
+function mapCacheStage(row: SnowflakeRow): PipelineCacheStageRow {
+  return {
+    orgId: stringValue(row.ORG_ID),
+    stage: stringValue(row.STAGE) as AiStage,
+    cacheRows: numberValue(row.CACHE_ROWS),
+    successRows: numberValue(row.SUCCESS_ROWS),
+    errorRows: numberValue(row.ERROR_ROWS),
+    missingCandidates: numberValue(row.MISSING_CANDIDATES),
+    lastCalledAt: nullableString(row.LAST_CALLED_AT),
+  };
+}
+
+function aggregateCacheStages(rows: SnowflakeRow[]): PipelineCacheStageRow[] {
+  const byStage = new Map<AiStage, PipelineCacheStageRow>();
+  for (const row of rows.map(mapCacheStage)) {
+    const current = byStage.get(row.stage);
+    if (!current) {
+      byStage.set(row.stage, { ...row, orgId: "fleet" });
+      continue;
+    }
+    current.cacheRows += row.cacheRows;
+    current.successRows += row.successRows;
+    current.errorRows += row.errorRows;
+    current.missingCandidates += row.missingCandidates;
+    current.lastCalledAt = latestTimestamp([current.lastCalledAt, row.lastCalledAt]);
+  }
+  return [...byStage.values()].sort((a, b) =>
+    pipelineStageLabel(a.stage).localeCompare(pipelineStageLabel(b.stage)),
+  );
+}
+
+function summarizeCache(stages: PipelineAiCacheStage[]): PipelineCacheSummary {
+  return {
+    cacheRows: stages.reduce((total, stage) => total + stage.cacheRows, 0),
+    successRows: stages.reduce((total, stage) => total + stage.successRows, 0),
+    errorRows: stages.reduce((total, stage) => total + stage.errorRows, 0),
+    missingCandidates: stages.reduce(
+      (total, stage) => total + stage.missingCandidates,
+      0,
+    ),
+    repeatCallsAvoided: stages.reduce(
+      (total, stage) => total + stage.successRows,
+      0,
+    ),
+  };
+}
+
+function aggregateVersionDrift(rows: SnowflakeRow[]): VersionDrift[] {
+  const byStage = new Map<string, {
+    baselineVersion: string | null;
+    currentVersions: Set<string>;
+    expectedVersion: string;
+    rowsBehind: number;
+  }>();
+
+  for (const row of rows) {
+    const stage = stringValue(row.STAGE);
+    const current = byStage.get(stage);
+    const currentVersion = stringValue(row.CURRENT_VERSION);
+    if (!current) {
+      byStage.set(stage, {
+        baselineVersion: nullableString(row.BASELINE_VERSION),
+        currentVersions: new Set([currentVersion]),
+        expectedVersion: stringValue(row.EXPECTED_VERSION, currentVersion),
+        rowsBehind: numberValue(row.ROWS_BEHIND),
+      });
+    } else {
+      current.currentVersions.add(currentVersion);
+      current.rowsBehind += numberValue(row.ROWS_BEHIND);
+    }
+  }
+
+  return [...byStage.entries()].map(([stage, value]) => {
+    const versions = [...value.currentVersions].filter(Boolean);
+    return {
+      stage,
+      baselineVersion: value.baselineVersion,
+      currentVersion: versions.length <= 1
+        ? versions[0] ?? value.expectedVersion
+        : "mixed",
+      rowsBehind: value.rowsBehind,
+    };
+  });
+}
+
+function normalizeTaskState(
+  state: string,
+  trigger: TaskHealth["trigger"],
+): TaskHealth["state"] {
+  const normalized = state.toLowerCase();
+  if (normalized.includes("suspend")) return "suspended";
+  if (normalized.includes("fail")) return "failed";
+  if (normalized.includes("queue")) return "queued";
+  if (normalized.includes("start") || normalized.includes("run")) {
+    return trigger === "stream" ? "idle" : "running";
+  }
+  return "idle";
+}
+
+function taskLastRunAt(row: SnowflakeRow, fallback: string | null): string | null {
+  return nullableString(
+    rowField(
+      row,
+      "last_committed_on",
+      "LAST_COMMITTED_ON",
+      "last_run_at",
+      "LAST_RUN_AT",
+      "completed_time",
+      "COMPLETED_TIME",
+      "scheduled_time",
+      "SCHEDULED_TIME",
+    ),
+  ) ?? fallback;
+}
+
+const AI_TASK_STAGE: Record<string, AiStage | null> = {
+  RELATIONSHIP_AI_TASK: "relationship",
+  L2_EXTRACTION_AI_TASK: "l2_extraction",
+  LEAK_TYPE_AI_TASK: "leak_type",
+  INCIDENT_INSIGHT_AI_TASK: "incident_insight",
+  CRAWL_INGEST_TASK: null,
+  INCIDENT_INSIGHT_CANDIDATE_DISCOVERY_TASK: null,
+};
+
+function defaultTasks(cacheStages: PipelineAiCacheStage[]): TaskHealth[] {
+  const byStage = new Map(cacheStages.map((stage) => [stage.stage, stage]));
+  return Object.entries(AI_TASK_STAGE).map(([taskName, stage]) => ({
+    taskName,
+    trigger: taskName === "CRAWL_INGEST_TASK" || taskName === "INCIDENT_INSIGHT_CANDIDATE_DISCOVERY_TASK"
+      ? "schedule"
+      : "stream",
+    scheduleLabel: taskName === "CRAWL_INGEST_TASK" || taskName === "INCIDENT_INSIGHT_CANDIDATE_DISCOVERY_TASK"
+      ? "5 min"
+      : null,
+    state: "idle",
+    lastRunAt: stage ? byStage.get(stage)?.lastCalledAt ?? null : null,
+    pendingCandidates: stage ? byStage.get(stage)?.missingCandidates ?? 0 : null,
+    errorCount: stage ? byStage.get(stage)?.errorRows ?? 0 : 0,
+  }));
+}
+
+function mapTaskRows(
+  rows: SnowflakeRow[],
+  cacheStages: PipelineAiCacheStage[],
+): TaskHealth[] {
+  if (rows.length === 0) return defaultTasks(cacheStages);
+
+  const byStage = new Map(cacheStages.map((stage) => [stage.stage, stage]));
+  const tasks = rows
+    .map((row) => {
+      const taskName = stringValue(rowField(row, "name", "task_name", "NAME", "TASK_NAME"));
+      const stage = AI_TASK_STAGE[taskName];
+      if (stage === undefined) return null;
+      const condition = nullableString(rowField(row, "condition", "CONDITION"));
+      const schedule = nullableString(rowField(row, "schedule", "SCHEDULE"));
+      const trigger: TaskHealth["trigger"] = condition ? "stream" : "schedule";
+      const cacheStage = stage ? byStage.get(stage) : undefined;
+      return {
+        taskName,
+        trigger,
+        scheduleLabel: trigger === "schedule" ? schedule ?? "manual" : null,
+        state: normalizeTaskState(
+          stringValue(rowField(row, "state", "STATE"), "idle"),
+          trigger,
+        ),
+        lastRunAt: taskLastRunAt(row, cacheStage?.lastCalledAt ?? null),
+        pendingCandidates: stage ? cacheStage?.missingCandidates ?? 0 : null,
+        errorCount: stage ? cacheStage?.errorRows ?? 0 : 0,
+      };
+    })
+    .filter((task): task is TaskHealth => task !== null);
+
+  return tasks.length ? tasks : defaultTasks(cacheStages);
+}
+
+function aggregatePipelineHealth(
+  organizations: CommandCenterOrganizationSnapshot[],
+  cacheStages: PipelineCacheStageRow[],
+): PipelineResponse["health"] {
+  return organizations.map((organization) => {
+    const orgCache = cacheStages.filter((stage) => stage.orgId === organization.orgId);
+    const backlogCount = orgCache.reduce(
+      (total, stage) => total + stage.missingCandidates,
+      0,
+    );
+    const aiErrorCount = organization.metrics.downstreamAiErrorCount
+      + orgCache.reduce((total, stage) => total + stage.errorRows, 0);
+    const groundingRate = organization.metrics.grounding.rate;
+    const status: PipelineResponse["health"][number]["status"] = aiErrorCount > 0
+      ? "degraded"
+      : backlogCount > 0
+        ? "lagging"
+        : "healthy";
+    return {
+      orgId: organization.orgId,
+      organizationName: organization.organizationName,
+      lastIngestAt: organization.lastUpdatedAt,
+      groundingRate,
+      quarantinedCount: organization.metrics.grounding.quarantinedCount,
+      totalExtractedCount: organization.metrics.grounding.totalExtractedClaims,
+      aiErrorCount,
+      backlogCount,
+      status,
+    };
+  });
+}
+
 function latestTimestamp(values: Array<string | null>): string | null {
   return values.filter((value): value is string => Boolean(value)).sort().at(-1) ?? null;
 }
@@ -1301,6 +1622,82 @@ export class SnowflakeNocturneBackend implements NocturneBackend {
       incidentCount: numberValue(countRows[0]?.INCIDENT_COUNT),
       nodes: nodeRows.map(mapKnowledgeGraphNode),
       edges: edgeRows.map(mapKnowledgeGraphEdge),
+      fetchedAt: new Date().toISOString(),
+    };
+  }
+
+  async getPipeline(scope: DataScope): Promise<PipelineResponse> {
+    const filter = scopeFilter(scope);
+    const [
+      summaryRows,
+      rejectionRows,
+      cacheRows,
+      driftRows,
+      taskRows,
+    ] = await Promise.all([
+      executeQuery(
+        `SELECT ${SUMMARY_COLUMNS}
+         FROM NOCTURNE.DASHBOARD.VW_COMMAND_CENTER${filter.clause}
+         ORDER BY ORG_ID`,
+        filter.binds,
+      ),
+      optionalDashboardQuery(
+        "pipeline rejection reasons",
+        `SELECT ${PIPELINE_REJECTION_COLUMNS}
+         FROM NOCTURNE.DASHBOARD.VW_PIPELINE_REJECTION_REASONS${filter.clause}
+         ORDER BY REJECTED_COUNT DESC, VALIDATION_REASON`,
+        filter.binds,
+      ),
+      optionalDashboardQuery(
+        "pipeline AI cache health",
+        `SELECT ${PIPELINE_CACHE_COLUMNS}
+         FROM NOCTURNE.DASHBOARD.VW_PIPELINE_AI_CACHE_HEALTH${filter.clause}
+         ORDER BY ORG_ID, STAGE`,
+        filter.binds,
+      ),
+      optionalDashboardQuery(
+        "pipeline version drift",
+        `SELECT ${PIPELINE_DRIFT_COLUMNS}
+         FROM NOCTURNE.DASHBOARD.VW_PIPELINE_VERSION_DRIFT${filter.clause}
+         ORDER BY ORG_ID, STAGE`,
+        filter.binds,
+      ),
+      executeQuery("SHOW TASKS IN SCHEMA NOCTURNE.RAW").catch(() => []),
+    ]);
+
+    const organizations = summaryRows.map(mapOrganization);
+    const totals = aggregateMetrics(organizations, []);
+    const orgCacheStages = cacheRows.map(mapCacheStage);
+    const cacheStagesWithOrg = scope.kind === "fleet"
+      ? aggregateCacheStages(cacheRows)
+      : orgCacheStages.sort((a, b) =>
+          pipelineStageLabel(a.stage).localeCompare(pipelineStageLabel(b.stage)),
+        );
+    const cacheStages = cacheStagesWithOrg.map(({ orgId: _orgId, ...stage }) => stage);
+    const relevance = totals.pipeline.pagesRelevanceChecked || 0;
+    const extracted = totals.pipeline.pagesEvidenceExtracted || 0;
+
+    return {
+      scope,
+      organizations: organizations.map((organization) => ({
+        orgId: organization.orgId,
+        organizationName: organization.organizationName,
+        lastUpdatedAt: organization.lastUpdatedAt,
+      })),
+      cascade: buildCascade(totals),
+      grounding: totals.grounding,
+      deepAnalysisRate: relevance === 0
+        ? 0
+        : Number(((100 * extracted) / relevance).toFixed(1)),
+      cacheSummary: summarizeCache(cacheStages),
+      cacheStages,
+      rejectionReasons: aggregateRejectionReasons(rejectionRows),
+      versionDrift: aggregateVersionDrift(driftRows),
+      health: aggregatePipelineHealth(organizations, orgCacheStages),
+      tasks: mapTaskRows(taskRows, cacheStages),
+      lastUpdatedAt: latestTimestamp(
+        organizations.map((organization) => organization.lastUpdatedAt),
+      ),
       fetchedAt: new Date().toISOString(),
     };
   }
