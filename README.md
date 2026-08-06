@@ -2,19 +2,15 @@
   <img src="assets/nocturne-logo.png" alt="Nocturne" width="400">
 </p>
 
-<h3 align="center">Dark-web breach intelligence, from crawl to analyst dashboard</h3>
+<h3 align="center">AI-powered dark web threat intelligence platform</h3>
 
 <p align="center">
-  Bounded Tor crawler &rarr; GCS landing &rarr; Snowflake AI pipeline &rarr; Next.js analyst console
+  Dark web discovery &rarr; GCS ingestion &rarr; Snowflake AI classification pipeline &rarr; Real-time analyst dashboard
 </p>
 
 ---
 
-Nocturne is a bounded dark-web crawler that discovers onion URLs through Ahmia,
-fetches matching pages through Tor, and writes raw page records to
-gzip-compressed JSONL batches in Google Cloud Storage. A multi-stage Snowflake
-pipeline then classifies, extracts, grounds, and scores each page into
-actionable breach incidents — surfaced through a real-time analyst dashboard.
+Nocturne is an AI-powered dark web threat intelligence platform that continuously discovers and ingests breach-related data from dark web sources, then processes it through a multi-stage classification pipeline built on Snowflake. The pipeline combines regex-based indicator extraction, AI-driven leak-type classification, knowledge graph construction, and cross-document severity scoring to surface verified data breach incidents in real time — giving analysts a single, high-fidelity dashboard for triage and response.
 
 ---
 
