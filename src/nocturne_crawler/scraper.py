@@ -18,6 +18,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 
+from .org_config import resolve_organizations
 from .storage import create_output_sink
 
 
@@ -60,8 +61,6 @@ def env_list(name, fallback):
     return [item.strip() for item in re.split(r"[,\n]+", raw_value) if item.strip()]
 
 
-KEYWORDS = [kw.lower() for kw in env_list("KEYWORDS", config.get("keywords"))]
-
 # The crawl frontier comes entirely from search. Production default is both
 # engines — Ahmia indexes broadly but shallowly, Dread carries the forum
 # discussion and leak threads Ahmia never indexes.
@@ -96,7 +95,6 @@ SEARCH_ENGINES = configured_search_engines()
 # `source` participates in doc_id and dedupe_key, so it is recorded per page
 # rather than per run: a page found through both engines stays two
 # observations instead of one silently deduplicating the other.
-QUERY = os.getenv("QUERY", config.get("query", "security research"))
 SEARCH_PAGES = env_int("SEARCH_PAGES", config.get("search_pages", 2), 1)
 
 # Dread's onion address changes when the operators rotate it, so it is
@@ -109,6 +107,13 @@ DREAD_BASE_URL = (
 
 # Seconds to let a page settle after load before reading the DOM.
 PAGE_WAIT = env_int("PAGE_WAIT", config.get("page_wait", 10), 0)
+
+# Timeouts for the clearnet search browser. Ahmia is slower under Cloud Run and
+# under emulation than on a laptop, and a tight limit turns a slow search into a
+# silent zero-result run rather than an error.
+SEARCH_PAGE_LOAD_TIMEOUT = env_int(
+    "SEARCH_PAGE_LOAD_TIMEOUT", config.get("search_page_load_timeout", 120), 1
+)
 
 # Queue/interstitial handling. Dread gates every request behind an access
 # queue, so with it in the default engine list this must be on by default.
@@ -154,24 +159,66 @@ INTERSTITIAL_PATTERNS = (
 )
 TOR_STARTUP_TIMEOUT = env_int("TOR_STARTUP_TIMEOUT", 90, 1)
 
+# A crashed renderer takes the whole WebDriver session with it, so every later
+# page would fail too. These identify that state so the session can be rebuilt
+# instead of losing the rest of an unattended run.
+SESSION_DEAD_MARKERS = (
+    "tab crashed",
+    "invalid session id",
+    "session deleted",
+    "no such session",
+    "disconnected: not connected to DevTools",
+    "chrome not reachable",
+    "unable to connect to renderer",
+)
+MAX_BROWSER_RESTARTS = env_int("MAX_BROWSER_RESTARTS", 5, 0)
 
-def configured_org_id():
-    organization = config.get("organization") or {}
-    raw_value = os.getenv("ORG_ID", organization.get("org_id", ""))
-    org_id = str(raw_value).strip()
-    if not org_id:
-        raise ValueError(
-            "organization.org_id is required in config.yaml or through ORG_ID"
+
+def is_session_dead(error) -> bool:
+    message = str(error).lower()
+    return any(marker in message for marker in SESSION_DEAD_MARKERS)
+
+
+class TorBrowser:
+    """Owns the Tor Chrome session so a crash can be recovered from.
+
+    The session is shared across organizations and engines, which is what keeps
+    Dread's access queue cleared once rather than per URL; rebuilding it costs
+    that queue position, so it is only done when the session is genuinely dead.
+    """
+
+    def __init__(self):
+        self.driver = None
+        self.restarts = 0
+
+    def start(self):
+        self.driver = create_tor_driver()
+        return self.driver
+
+    def restart(self):
+        if self.restarts >= MAX_BROWSER_RESTARTS:
+            raise RuntimeError(
+                f"Tor browser crashed more than {MAX_BROWSER_RESTARTS} times; "
+                f"the task is most likely out of memory"
+            )
+        self.restarts += 1
+        print(
+            f"    RECOVERING: rebuilding the browser session "
+            f"({self.restarts}/{MAX_BROWSER_RESTARTS})",
+            flush=True,
         )
-    if not re.fullmatch(r"[a-z0-9]+(?:_[a-z0-9]+)*", org_id):
-        raise ValueError(
-            "ORG_ID must be a lowercase slug containing letters, numbers, "
-            "and single underscores"
-        )
-    return org_id
+        self.quit()
+        return self.start()
+
+    def quit(self):
+        if self.driver is not None:
+            try:
+                self.driver.quit()
+            except Exception:
+                pass
+            self.driver = None
 
 
-ORG_ID = configured_org_id()
 
 
 def utc_now():
@@ -194,11 +241,27 @@ def wait_for_tor(host="127.0.0.1", port=9050, timeout=TOR_STARTUP_TIMEOUT):
     raise TimeoutError(f"Tor did not become ready at {host}:{port} within {timeout}s")
 
 
+# Chromium dies with "tab crashed" when the renderer runs out of memory, and a
+# Cloud Run task shares its allowance with Tor and Python. The crawler only ever
+# reads text, so everything that costs memory to render is turned off.
+LEAN_RENDER_ARGS = (
+    "--headless=new",
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--disable-extensions",
+    "--disable-software-rasterizer",
+    "--disable-background-networking",
+    "--blink-settings=imagesEnabled=false",
+    "--mute-audio",
+    "--renderer-process-limit=1",
+)
+
+
 def create_tor_driver():
     options = ChromeOptions()
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
+    for argument in LEAN_RENDER_ARGS:
+        options.add_argument(argument)
     options.add_argument("--proxy-server=socks5://127.0.0.1:9050")
     options.add_argument("--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1")
     # Onion services routinely serve self-signed certificates; the hidden
@@ -213,9 +276,8 @@ def create_tor_driver():
 
 def create_direct_driver():
     options = ChromeOptions()
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
+    for argument in LEAN_RENDER_ARGS:
+        options.add_argument(argument)
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
     options.binary_location = "/usr/bin/chromium"
@@ -225,7 +287,10 @@ def create_direct_driver():
     driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
         "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
     })
-    driver.set_page_load_timeout(30)
+    driver.set_page_load_timeout(SEARCH_PAGE_LOAD_TIMEOUT)
+    # Submitting the search form navigates, and that wait is governed by the
+    # script timeout, which defaults to 30s independently of the page-load one.
+    driver.set_script_timeout(SEARCH_PAGE_LOAD_TIMEOUT)
     return driver
 
 
@@ -389,7 +454,7 @@ def fetch_page(driver, url):
 DREAD_RESULT_PATH = re.compile(r"^/(post|d)/[^/]+")
 
 
-def search_dread(driver, query, pages=None):
+def search_dread(browser, query, pages=None):
     """Search Dread over Tor, sitting through its access queue.
 
     Runs on the shared Tor browser rather than its own: clearing the queue is
@@ -402,7 +467,7 @@ def search_dread(driver, query, pages=None):
 
     for page in range(1, pages + 1):
         url = f"{DREAD_BASE_URL}/search/?q={quote(query)}&p={page}"
-        page_source, outcome = fetch_page(driver, url)
+        page_source, outcome = fetch_page(browser.driver, url)
 
         if outcome != "ok":
             if page == 1:
@@ -433,7 +498,7 @@ def search_dread(driver, query, pages=None):
     return results
 
 
-def run_search_engines(query, tor_driver):
+def run_search_engines(query, browser):
     """Query every enabled engine, keeping each one's failure to itself.
 
     One engine being down, rate-limited, or moved must not cost the run the
@@ -447,7 +512,7 @@ def run_search_engines(query, tor_driver):
             if engine == "ahmia":
                 urls = search_ahmia(query, pages=SEARCH_PAGES)
             elif engine == "dread":
-                urls = search_dread(tor_driver, query, pages=SEARCH_PAGES)
+                urls = search_dread(browser, query, pages=SEARCH_PAGES)
             else:  # pragma: no cover - configured_search_engines rejects these
                 raise ValueError(f"Unhandled engine {engine!r}")
             statuses[engine] = {"status": "ok", "results": len(urls)}
@@ -458,6 +523,8 @@ def run_search_engines(query, tor_driver):
                 "results": 0,
                 "error": f"{type(exc).__name__}: {exc}"[:300],
             }
+            if is_session_dead(exc):
+                browser.restart()
             print(
                 f"  WARNING: {engine} search failed: {type(exc).__name__}: {exc}",
                 flush=True,
@@ -466,12 +533,12 @@ def run_search_engines(query, tor_driver):
     return discovered, statuses
 
 
-def keyword_match(text):
-    """Check if text contains any of the configured keywords."""
-    if not KEYWORDS:
+def keyword_match(text, keywords):
+    """Check if text contains any of this organization's keywords."""
+    if not keywords:
         return True, []  # No keywords = save everything
     text_lower = text.lower()
-    matched = [kw for kw in KEYWORDS if kw in text_lower]
+    matched = [kw for kw in keywords if kw in text_lower]
     return len(matched) > 0, matched
 
 
@@ -502,24 +569,25 @@ def build_page_record(
     depth,
     matched_keywords,
     links_found,
-    source=None,
+    source,
+    org,
 ):
-    page_source = source or SEARCH_ENGINE
+    page_source = source
     fetched_at = format_utc(utc_now())
     canonical_url = canonicalize_url(url)
     content_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
     return {
         "schema_version": 2,
-        "org_id": ORG_ID,
+        "org_id": org.org_id,
         "doc_id": sha256_parts(
-            ORG_ID, page_source, canonical_url, fetched_at
+            org.org_id, page_source, canonical_url, fetched_at
         ),
         "dedupe_key": sha256_parts(
-            ORG_ID, page_source, canonical_url, content_sha256
+            org.org_id, page_source, canonical_url, content_sha256
         ),
         "run_id": run_id,
         "source": page_source,
-        "query": QUERY,
+        "query": org.query,
         "url": url,
         "title": title,
         "fetched_at": fetched_at,
@@ -569,14 +637,14 @@ def extract_onion_links(soup, current_url):
     return links
 
 
-def bfs_crawl(driver, seed_entries, sink, run_id):
+def bfs_crawl(browser, seed_entries, sink, run_id, org):
+    keywords = [kw.lower() for kw in org.keywords]
     print(
-        f"\n[STEP 2 & 3] BFS Crawl "
-        f"(max_depth={MAX_DEPTH}, max_pages={MAX_PAGES} per engine)",
+        f"\n  BFS crawl (max_depth={MAX_DEPTH}, max_pages={MAX_PAGES} per engine)",
         flush=True,
     )
     print(
-        f"  Keywords filter: {KEYWORDS if KEYWORDS else 'NONE (saving all)'}\n",
+        f"  Keywords filter: {keywords if keywords else 'NONE (saving all)'}\n",
         flush=True,
     )
 
@@ -649,7 +717,7 @@ def bfs_crawl(driver, seed_entries, sink, run_id):
         )
 
         try:
-            page_source, outcome = fetch_page(driver, url)
+            page_source, outcome = fetch_page(browser.driver, url)
 
             if outcome == "queued":
                 queued_pages += 1
@@ -676,11 +744,15 @@ def bfs_crawl(driver, seed_entries, sink, run_id):
                     added += 1
 
             # Keyword filtering determines whether this page enters the raw dump.
-            has_match, matched_keywords = keyword_match(text)
+            has_match, matched_keywords = keyword_match(text, keywords)
 
         except Exception as e:
             failed_pages += 1
             print(f"    FAILED: {type(e).__name__}: {str(e)[:100]}", flush=True)
+            if is_session_dead(e):
+                # The renderer died, taking the session with it. Without a
+                # rebuild every remaining URL would fail the same way.
+                browser.restart()
             time.sleep(5)
             continue
 
@@ -710,6 +782,7 @@ def bfs_crawl(driver, seed_entries, sink, run_id):
                 matched_keywords=matched_keywords,
                 links_found=len(new_links),
                 source=source,
+                org=org,
             )
 
             # Storage failures are deliberately not swallowed as crawl failures.
@@ -786,23 +859,105 @@ def bfs_crawl(driver, seed_entries, sink, run_id):
     }
 
 
+def crawl_organization(browser, org, started_at):
+    """Search and crawl for one organization. Returns its completed manifest."""
+    print(f"\n{'=' * 60}", flush=True)
+    print(f"  ORGANIZATION: {org.org_id}"
+          + (f" ({org.canonical_name})" if org.canonical_name else ""), flush=True)
+    print(f"  Query: {org.query}", flush=True)
+    print(f"  Keywords: {org.keywords if org.keywords else 'None (save all)'}", flush=True)
+    print("=" * 60, flush=True)
+
+    # One sink per organization: the GCS layout partitions on org_id, so each
+    # organization's pages and manifest land under their own prefix.
+    sink = create_output_sink(OUTPUT_DIR, org_id=org.org_id)
+    run_id = getattr(
+        sink,
+        "run_id",
+        os.getenv("CLOUD_RUN_EXECUTION")
+        or f"local-{started_at.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}",
+    )
+
+    print(f"\n  Searching: {', '.join(SEARCH_ENGINES)}", flush=True)
+    discovered, engine_statuses = run_search_engines(org.query, browser)
+
+    seed_entries = []
+    seen = set()
+    for url, engine in discovered:
+        identity = canonicalize_url(url)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        seed_entries.append((url, engine))
+
+    if all(status["status"] == "failed" for status in engine_statuses.values()):
+        # Every engine failing is an outage or a stale onion address, not an
+        # empty result set. Failing here keeps a broken configuration from
+        # being reported as a clean zero-hit run.
+        raise RuntimeError(f"Every search engine failed: {engine_statuses}")
+
+    print(f"\n  Entry points ({len(seed_entries)}):", flush=True)
+    for index, (url, source) in enumerate(seed_entries[:20], 1):
+        print(f"    {index}. [{source}] {url}", flush=True)
+    if len(seed_entries) > 20:
+        print(f"    ... and {len(seed_entries) - 20} more", flush=True)
+
+    if not seed_entries:
+        print("\n  No results for this query; nothing to crawl.", flush=True)
+
+    scraped_data, crawl_counts = bfs_crawl(browser, seed_entries, sink, run_id, org)
+
+    manifest = {
+        "schema_version": 2,
+        "status": "succeeded",
+        "org_id": org.org_id,
+        "run_id": run_id,
+        "started_at": format_utc(started_at),
+        "completed_at": format_utc(utc_now()),
+        "config": {
+            "org_id": org.org_id,
+            "search_engines": SEARCH_ENGINES,
+            "search_pages": SEARCH_PAGES,
+            "dread_base_url": DREAD_BASE_URL if "dread" in SEARCH_ENGINES else None,
+            "query": org.query,
+            "keywords": org.keywords,
+            "max_depth": MAX_DEPTH,
+            "max_pages_per_engine": MAX_PAGES,
+            "max_visited_urls": MAX_VISITED_URLS,
+            "max_queue_size": MAX_QUEUE_SIZE,
+        },
+        "search_engine_results": engine_statuses,
+        "entry_points": [url for url, _ in seed_entries],
+        "entry_point_sources": {
+            source: sum(1 for _, entry in seed_entries if entry == source)
+            for source in dict.fromkeys(entry for _, entry in seed_entries)
+        },
+        "total_pages_scraped": len(scraped_data),
+        "counts": crawl_counts,
+        "pages": scraped_data,
+    }
+    completed_manifest = sink.finalize(manifest)
+    storage = completed_manifest["storage"]
+    output_location = storage.get("manifest_uri", storage.get("output_dir", OUTPUT_DIR))
+
+    print(f"\n  {org.org_id}: {len(scraped_data)} page(s) saved -> {output_location}",
+          flush=True)
+    return len(scraped_data)
+
+
 def main():
     started_at = utc_now()
     print("=" * 60, flush=True)
     print("  DARK WEB BFS CRAWLER", flush=True)
     print("=" * 60, flush=True)
     print("\n  Config:", flush=True)
-    print(f"    Organization ID: {ORG_ID}", flush=True)
     print(
-        "    Search engines: "
-        + (", ".join(SEARCH_ENGINES) if SEARCH_ENGINES else "none (seed URLs only)"),
+        "    Search engines: " + ", ".join(SEARCH_ENGINES),
         flush=True,
     )
     if "dread" in SEARCH_ENGINES:
         print(f"    Dread base URL: {DREAD_BASE_URL}", flush=True)
     print(f"    Search pages per engine: {SEARCH_PAGES}", flush=True)
-    print(f"    Query: {QUERY}", flush=True)
-    print(f"    Keywords: {KEYWORDS if KEYWORDS else 'None (save all)'}", flush=True)
     print(f"    Max depth: {MAX_DEPTH}", flush=True)
     print(f"    Max pages per engine: {MAX_PAGES}", flush=True)
     print(f"    Max visited URLs: {MAX_VISITED_URLS}", flush=True)
@@ -817,22 +972,22 @@ def main():
     print(f"    Fetch attempts per URL: {FETCH_ATTEMPTS}", flush=True)
     print(f"    Output backend: {os.getenv('OUTPUT_BACKEND', 'local')}", flush=True)
 
-    driver = None
+    browser = TorBrowser()
     try:
-        sink = create_output_sink(OUTPUT_DIR, org_id=ORG_ID)
-        run_id = getattr(
-            sink,
-            "run_id",
-            os.getenv("CLOUD_RUN_EXECUTION")
-            or f"local-{started_at.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}",
+        organizations = resolve_organizations(config)
+        print(
+            f"    Organizations to crawl: "
+            f"{', '.join(o.org_id for o in organizations)}",
+            flush=True,
         )
 
-        # Tor comes up before searching: Dread is an onion service, so it needs
-        # the same browser session that will later do the crawling.
+        # Tor comes up once and is shared across organizations: Dread's access
+        # queue is cleared per browser session, so reusing the session means it
+        # is cleared once rather than once per organization.
         print("\nWaiting for Tor...", flush=True)
         wait_for_tor()
         print("Starting Tor browser...", flush=True)
-        driver = create_tor_driver()
+        driver = browser.start()
 
         print("Verifying Tor connection...", flush=True)
         try:
@@ -845,84 +1000,37 @@ def main():
         except Exception as exc:
             print(f"WARNING: Tor verification failed: {exc}\n", flush=True)
 
-        # Step 1: every enabled engine's results feed one BFS frontier, each
-        # entry keeping the provenance of the engine that found it.
-        print(f"\n[STEP 1] Searching: {', '.join(SEARCH_ENGINES)}", flush=True)
-        discovered, engine_statuses = run_search_engines(QUERY, driver)
-
-        seed_entries = []
-        seen = set()
-        for url, engine in discovered:
-            identity = canonicalize_url(url)
-            if identity in seen:
-                continue
-            seen.add(identity)
-            seed_entries.append((url, engine))
-
-        if all(status["status"] == "failed" for status in engine_statuses.values()):
-            # Every engine failing is an outage or a stale onion address, not an
-            # empty result set. Failing here keeps a broken configuration from
-            # being reported as a clean zero-hit run.
-            raise RuntimeError(
-                f"Every search engine failed: {engine_statuses}"
-            )
-
-        print(f"\nEntry points ({len(seed_entries)}):", flush=True)
-        for index, (url, source) in enumerate(seed_entries[:20], 1):
-            print(f"  {index}. [{source}] {url}", flush=True)
-        if len(seed_entries) > 20:
-            print(f"  ... and {len(seed_entries) - 20} more", flush=True)
-
-        if not seed_entries:
-            print("\nNo results for this query; nothing to crawl.", flush=True)
-
-        scraped_data, crawl_counts = bfs_crawl(
-            driver,
-            seed_entries,
-            sink,
-            run_id,
-        )
-
-        manifest = {
-            "schema_version": 2,
-            "status": "succeeded",
-            "org_id": ORG_ID,
-            "run_id": run_id,
-            "started_at": format_utc(started_at),
-            "completed_at": format_utc(utc_now()),
-            "config": {
-                "org_id": ORG_ID,
-                "search_engines": SEARCH_ENGINES,
-                "search_pages": SEARCH_PAGES,
-                "dread_base_url": DREAD_BASE_URL if "dread" in SEARCH_ENGINES else None,
-                "query": QUERY,
-                "keywords": KEYWORDS,
-                "max_depth": MAX_DEPTH,
-                "max_pages_per_engine": MAX_PAGES,
-                "max_visited_urls": MAX_VISITED_URLS,
-                "max_queue_size": MAX_QUEUE_SIZE,
-            },
-            "search_engine_results": engine_statuses,
-            "entry_points": [url for url, _ in seed_entries],
-            "entry_point_sources": {
-                source: sum(1 for _, entry in seed_entries if entry == source)
-                for source in dict.fromkeys(entry for _, entry in seed_entries)
-            },
-            "total_pages_scraped": len(scraped_data),
-            "counts": crawl_counts,
-            "pages": scraped_data,
-        }
-        completed_manifest = sink.finalize(manifest)
-        storage_details = completed_manifest["storage"]
-        output_location = storage_details.get(
-            "manifest_uri", storage_details.get("output_dir", OUTPUT_DIR)
-        )
+        results = {}
+        failures = {}
+        for org in organizations:
+            try:
+                results[org.org_id] = crawl_organization(browser, org, utc_now())
+            except Exception as exc:
+                # One organization's outage must not discard the others' work,
+                # which is already uploaded by the time this is reached.
+                failures[org.org_id] = f"{type(exc).__name__}: {exc}"[:300]
+                print(
+                    f"\n  FAILED {org.org_id}: {type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                if is_session_dead(exc):
+                    # Leave a working session for the organizations that follow.
+                    browser.restart()
 
         print(f"\n{'=' * 60}", flush=True)
         print("  CRAWL COMPLETE", flush=True)
-        print(f"  Pages saved (keyword match): {len(scraped_data)}", flush=True)
-        print(f"  Output: {output_location}", flush=True)
+        for org_id, count in results.items():
+            print(f"    {org_id}: {count} page(s)", flush=True)
+        for org_id, error in failures.items():
+            print(f"    {org_id}: FAILED - {error}", flush=True)
+        print(f"  Total pages saved: {sum(results.values())}", flush=True)
         print("=" * 60, flush=True)
+
+        # A run where every organization failed is a failed run; a partial
+        # failure still produced data and should not fail the job.
+        if failures and not results:
+            return 1
         return 0
     except Exception as exc:
         print(
@@ -932,11 +1040,7 @@ def main():
         )
         return 1
     finally:
-        if driver is not None:
-            try:
-                driver.quit()
-            except Exception as exc:
-                print(f"WARNING: failed to close Tor browser: {exc}", flush=True)
+        browser.quit()
 
 
 if __name__ == "__main__":

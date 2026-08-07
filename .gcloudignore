@@ -1,0 +1,39 @@
+# `gcloud builds submit` uploads this directory to gs://<project>_cloudbuild and
+# keeps the tarball indefinitely. The Dockerfile only copies requirements.txt,
+# config.yaml and src/, so everything else is dead weight: without this file the
+# dashboard's build output alone made each upload ~150 MB, which accumulated to
+# ~1 GB of retained, billed storage across a handful of builds.
+#
+# Note this file replaces .gitignore for upload purposes — anything that must
+# stay out of the build context has to be listed here too, including secrets.
+
+.git/
+.gitignore
+
+# Secrets and local environment. Never belongs in a build context.
+.env
+.env.*
+*.bak
+*.bak.*
+
+# Python virtualenv and caches.
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# The dashboard is a separate deployable; the crawler image never uses it.
+nocturne_dashboard/
+
+# Generated locally, not inputs to the image.
+output/
+logs/
+
+# Documentation, plans, fixtures, and the Snowflake SQL that deploy_pipeline.py
+# runs from a workstation rather than from inside the container.
+plans/
+examples/
+snowflake/
+tests/
+scripts/
+*.md

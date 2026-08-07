@@ -218,13 +218,28 @@ gcloud run jobs deploy "$NOCTURNE_JOB" \
 <details>
 <summary><strong>Step 7: Execute and verify</strong></summary>
 
+Supply the organization at execution time, so adding one in Monitored Assets
+needs no rebuild or redeploy:
+
 ```bash
+set -a && eval "$(python scripts/org_crawl_config.py --org-id odido)" && set +a
+
 gcloud run jobs execute "$NOCTURNE_JOB" \
   --region="$NOCTURNE_REGION" \
+  --update-env-vars="^@^ORG_ID=${ORG_ID}@QUERY=${QUERY}@KEYWORDS=${KEYWORDS}" \
   --wait
 
 gcloud storage ls --recursive "gs://${NOCTURNE_BUCKET}/raw/crawls/**"
 ```
+
+The `^@^` prefix changes gcloud's dict separator from `,` to `@`. It is required:
+`KEYWORDS` is itself comma-separated, so the default separator would read the
+second keyword as a malformed key and reject the flag. Choose a different
+delimiter if any value ever contains `@`.
+
+`--update-env-vars` mutates the job definition rather than applying only to this
+execution, so the next run inherits the previous organization unless overridden.
+Always pass all three variables together.
 
 </details>
 
