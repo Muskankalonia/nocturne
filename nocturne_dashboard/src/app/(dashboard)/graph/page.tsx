@@ -51,6 +51,10 @@ const typeColor: Record<string, string> = {
   location: colors.informational,
 };
 
+function defaultLayoutForView(view: KnowledgeGraphView): GraphLayout {
+  return view === "actors" ? "spine" : "force";
+}
+
 const configuredRefreshMs = Number(
   process.env.NEXT_PUBLIC_DASHBOARD_REFRESH_MS ?? "300000",
 );
@@ -75,7 +79,7 @@ export default function GraphPage() {
   const [node, setNode] = useState<GraphNode | null>(null);
   const [edge, setEdge] = useState<GraphEdge | null>(null);
 
-  const [layout, setLayout] = useState<GraphLayout>("spine");
+  const [layout, setLayout] = useState<GraphLayout>(() => defaultLayoutForView(view));
   const [stopIndex, setStopIndex] = useState(Number.MAX_SAFE_INTEGER);
 
   const load = useCallback(async (signal?: AbortSignal, background = false) => {
@@ -157,12 +161,10 @@ export default function GraphPage() {
     };
   }, [isAuthLoading, load, session]);
 
-  // Both views default to the spine. Force is still selectable, but on the
-  // actors view — ~19 nodes, most of them claims carrying a whole sentence —
-  // it packs labels on top of each other, while the dagre spine stays legible
-  // at the same node count.
+  // Incident mode defaults to force exploration; actor mode defaults to the
+  // spine because it is an aggregate relationship map.
   useEffect(() => {
-    setLayout("spine");
+    setLayout(defaultLayoutForView(view));
   }, [view]);
 
   useEffect(() => {
@@ -176,18 +178,37 @@ export default function GraphPage() {
   );
 
   const stops = useMemo(() => payload ? timelineStops(payload) : [], [payload]);
+  const autoPlayKey = data
+    ? [
+        data.scope.kind === "org" ? data.scope.orgId : "fleet",
+        view,
+        layout,
+        requestedIncidentKey ?? "all",
+        data.fetchedAt,
+        payload?.nodes.length ?? 0,
+        payload?.edges.length ?? 0,
+      ].join(":")
+    : null;
 
-  // Land on the fully-assembled graph. Switching tenant changes the stop count,
-  // so re-pin to the end rather than leaving the handle at a stale index.
+  // Start at the first real discovery whenever a new graph arrives. The
+  // scrubber receives `autoPlayKey` below and replays forward from here; manual
+  // dragging still takes over afterward.
   useEffect(() => {
-    setStopIndex(Math.max(stops.length - 1, 0));
-  }, [stops]);
+    setStopIndex(0);
+  }, [autoPlayKey]);
 
   const cutoff = stops.length > 1 ? (stops[Math.min(stopIndex, stops.length - 1)] ?? null) : null;
   const revealed = payload ? revealedEdgeCount(payload, cutoff) : 0;
 
   const handleNode = useCallback((n: GraphNode | null) => setNode(n), []);
   const handleEdge = useCallback((e: GraphEdge | null) => setEdge(e), []);
+  const handleLayoutChange = useCallback((next: GraphLayout | null) => {
+    if (!next || next === layout) return;
+    setNode(null);
+    setEdge(null);
+    setStopIndex(0);
+    setLayout(next);
+  }, [layout]);
 
   // Clear an inspector selection that the replay has rewound past.
   useEffect(() => {
@@ -206,8 +227,10 @@ export default function GraphPage() {
 
   const title = view === "actors" ? "Actor Network" : "Knowledge Graph";
   const subtitle = view === "actors"
-    ? "Organization-wide actor and marketplace relationships across every promoted incident."
-    : "One promoted incident component. Click a node for resolution details or an edge for its grounded evidence.";
+    ? "Actor-centric aggregate: who made claims, where they listed them, and which monitored assets they target."
+    : requestedIncidentKey
+      ? "One promoted incident component. Click a node for resolution details or an edge for its grounded evidence."
+      : "Organization-wide incident graph: claim-level evidence components across every confirmed target incident.";
   const headerRight = (
     <Stack direction="row" gap={1} alignItems="center">
       {data && (
@@ -340,7 +363,7 @@ export default function GraphPage() {
               size="small"
               exclusive
               value={layout}
-              onChange={(_, next: GraphLayout | null) => next && setLayout(next)}
+              onChange={(_, next: GraphLayout | null) => handleLayoutChange(next)}
               aria-label="Graph layout"
               sx={{
                 "& .MuiToggleButton-root": {
@@ -359,8 +382,8 @@ export default function GraphPage() {
                 },
               }}
             >
-              <ToggleButton value="spine">SPINE</ToggleButton>
               <ToggleButton value="force">FORCE</ToggleButton>
+              <ToggleButton value="spine">SPINE</ToggleButton>
             </ToggleButtonGroup>
             <Typography sx={{ fontFamily: fonts.mono, fontSize: 10.5, color: colors.text3 }}>
               {data.incidentCount} {data.incidentCount === 1 ? "INCIDENT" : "INCIDENTS"} ·{" "}
@@ -392,6 +415,7 @@ export default function GraphPage() {
               timestamps={stops}
               stopIndex={stopIndex}
               onStopIndexChange={setStopIndex}
+              autoPlayKey={autoPlayKey}
               revealedLabel={`${revealed} of ${payload.edges.length} relationships`}
             />
           </Box>

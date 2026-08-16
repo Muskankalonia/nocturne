@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Box,
   Checkbox,
@@ -46,6 +46,14 @@ export function Header() {
       switchableOrgs.map((org) => org.orgId).filter((orgId) => orgId !== DEMO_TENANT_ID),
     );
   }, [fleetSelection, switchableOrgs]);
+  const soleIncludedOrgId = includedOrgIds.size === 1
+    ? [...includedOrgIds][0] ?? null
+    : null;
+
+  useEffect(() => {
+    if (!isSuperAdmin || !isFleetScope || !soleIncludedOrgId) return;
+    setScope({ kind: "org", orgId: soleIncludedOrgId });
+  }, [isFleetScope, isSuperAdmin, setScope, soleIncludedOrgId]);
 
   const toggleOrg = (orgId: string) => {
     const next = new Set(includedOrgIds);

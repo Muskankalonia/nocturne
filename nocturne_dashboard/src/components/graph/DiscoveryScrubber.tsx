@@ -30,6 +30,8 @@ export interface DiscoveryScrubberProps {
   /** Index into the distinct sorted stops. Use `stopCount(timestamps) - 1` for "show all". */
   stopIndex: number;
   onStopIndexChange: (index: number) => void;
+  /** Change this value to replay the timeline from the first discovery. */
+  autoPlayKey?: string | number | null;
   /** Rendered on the right of the readout, e.g. "6 of 8 relationships". */
   revealedLabel?: string;
   /** Milliseconds per step when playing. */
@@ -76,6 +78,7 @@ export function DiscoveryScrubber({
   timestamps,
   stopIndex,
   onStopIndexChange,
+  autoPlayKey,
   revealedLabel,
   playIntervalMs = 1100,
 }: DiscoveryScrubberProps) {
@@ -112,6 +115,34 @@ export function DiscoveryScrubber({
       if (cursor >= lastIndex) stop();
     }, playIntervalMs);
   }, [hasSequence, lastIndex, onStopIndexChange, playIntervalMs, stop, stopIndex]);
+
+  useEffect(() => {
+    if (autoPlayKey == null) return;
+    if (!hasSequence) {
+      stop();
+      return;
+    }
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+    stop();
+    let cursor = 0;
+    onStopIndexChange(cursor);
+    setIsPlaying(true);
+    const timer = window.setInterval(() => {
+      cursor += 1;
+      onStopIndexChange(cursor);
+      if (cursor >= lastIndex) stop();
+    }, playIntervalMs);
+    timerRef.current = timer;
+
+    return () => {
+      if (timerRef.current === timer) {
+        window.clearInterval(timer);
+        timerRef.current = null;
+        setIsPlaying(false);
+      }
+    };
+  }, [autoPlayKey, hasSequence, lastIndex, onStopIndexChange, playIntervalMs, stop]);
 
   const marks = useMemo(
     () => stops.map((_, index) => ({ value: index })),
