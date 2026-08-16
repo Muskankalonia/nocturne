@@ -70,8 +70,22 @@ function isTerminal(status: ManualUploadStatusResponse | null): boolean {
   if (current.incidentKey && current.insightAiStatus !== "success") return false;
   if (current.l4Complete) return true;
   if (current.relationshipAiStatus === "error") return true;
+  if (current.pipelineState.startsWith("stopped_after_")) return true;
   if (current.l2Route && current.l2Route !== "target_confirmed") return true;
   return false;
+}
+
+function isStoppedBeforeIncident(upload: ManualUploadStatus): boolean {
+  return upload.pipelineState.startsWith("stopped_after_")
+    || Boolean(upload.l2Route && upload.l2Route !== "target_confirmed");
+}
+
+function uploadRowTone(upload: ManualUploadStatus): "ok" | "ion" | "medium" | "critical" | "neutral" {
+  if (upload.detailAvailable || upload.incidentKey) return "ok";
+  if (upload.relationshipAiStatus === "error" || upload.l2ExtractionStatus === "error") return "critical";
+  if (isStoppedBeforeIncident(upload)) return "medium";
+  if (upload.rawLoaded || upload.l0Complete || upload.l1Complete) return "ion";
+  return "neutral";
 }
 
 function buildStageLogs(
@@ -191,10 +205,12 @@ function buildStageLogs(
         if (status.routingReason) lines.push({ tone: "neutral", message: status.routingReason });
       } else {
         lines.push({
-          tone: status?.relationshipLabel === "target_data_leak" ? "ion" : "neutral",
-          message: status?.relationshipLabel
-            ? "Waiting to see whether this L1 result is eligible for L2 evidence extraction."
-            : "Waiting for L1 classification before L2 can run.",
+          tone: status?.l2Eligible ? "ion" : status?.relationshipLabel ? "medium" : "neutral",
+          message: status?.l2Eligible
+            ? "L1 passed the L2 gate; waiting for evidence extraction to start."
+            : status?.relationshipLabel
+              ? `Skipped because L1 label=${status.relationshipLabel} is not eligible for L2 evidence extraction.`
+              : "Waiting for L1 classification before L2 can run.",
         });
       }
       break;
@@ -458,6 +474,7 @@ function UploadRow({
   onSelect: () => void;
 }) {
   const route = upload.l2Route;
+  const tone = uploadRowTone(upload);
   return (
     <Box
       component="button"
@@ -500,7 +517,7 @@ function UploadRow({
             ? relativeTime(upload.ingestedAt)
             : "pending"}
       </Typography>
-      <Tag tone={route ? routeTone[route] : upload.l1Complete ? "ion" : "neutral"}>
+      <Tag tone={route ? routeTone[route] : tone}>
         {route ? routeLabel[route] : upload.pipelineState.replaceAll("_", " ")}
       </Tag>
       <Typography sx={{ fontFamily: fonts.mono, fontSize: 11, color: colors.text2 }}>
@@ -511,6 +528,36 @@ function UploadRow({
       </Typography>
     </Box>
   );
+}
+
+function manualResultSummary(status: ManualUploadStatus): string {
+  if (status.executiveSummary) return status.executiveSummary;
+  if (status.relationshipAiStatus === "error") {
+    return "L1 relevance classification failed. The row is cached for audit and was not treated as not relevant.";
+  }
+  if (status.pipelineState === "stopped_after_l1") {
+    if (status.relationshipLabel === "no_leak") {
+      return "Stopped after L1: the classifier did not find a leak claim in this paste dump.";
+    }
+    if (status.relationshipLabel === "other_organization_leak") {
+      return "Stopped after L1: the leak appears to affect another organization, not the selected tenant.";
+    }
+    if (status.relationshipLabel === "target_mentioned_no_leak") {
+      return status.l2Eligible
+        ? "L1 marked this as a suspicious target mention. L2 should verify whether the mention is actually connected to a leak."
+        : "Stopped after L1: the selected organization was mentioned, but there was not enough suspicious leak evidence to run L2.";
+    }
+    return "Stopped after L1: this upload is not eligible for downstream evidence extraction.";
+  }
+  if (status.l2Route && status.l2Route !== "target_confirmed") {
+    return status.routingReason
+      ? `Stopped after L2: ${status.routingReason}.`
+      : `Stopped after L2: route=${status.l2Route}.`;
+  }
+  if (status.l2Route === "target_confirmed" && !status.detailAvailable) {
+    return "Target ownership is grounded. The pipeline is finishing graph promotion, leak-type classification, severity, or the AI incident brief.";
+  }
+  return "The pipeline is still working through this upload.";
 }
 
 function UploadResult({
@@ -559,9 +606,7 @@ function UploadResult({
           </Stack>
 
           <Typography sx={{ color: colors.text2, fontSize: 12.2, lineHeight: 1.65 }}>
-            {status.executiveSummary
-              ?? status.routingReason
-              ?? "The pipeline is still working through this upload."}
+            {manualResultSummary(status)}
           </Typography>
 
           <Stack direction="row" gap={0.8} flexWrap="wrap">
@@ -820,9 +865,9 @@ export default function UploadPasteDumpPage() {
 
   const stats = useMemo(() => {
     const completed = uploads.filter((upload) => upload.detailAvailable).length;
-    const active = uploads.filter((upload) => !upload.detailAvailable && !upload.l2Route).length;
-    const stopped = uploads.filter(
-      (upload) => upload.l2Route && upload.l2Route !== "target_confirmed",
+    const stopped = uploads.filter(isStoppedBeforeIncident).length;
+    const active = uploads.filter(
+      (upload) => !upload.detailAvailable && !isStoppedBeforeIncident(upload),
     ).length;
     return { completed, active, stopped };
   }, [uploads]);

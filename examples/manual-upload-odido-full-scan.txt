@@ -1,0 +1,41 @@
+DarkBay Market - telecom access bundle
+
+Seller: vaderKnows
+Marketplace: Dread / DataBrokers board
+Contact: tox:8f2c4d91b77a42e9b3a0c114e25f92a7f15e88d44ad7f002114e8cb2d83f7120
+
+Fresh Odido telecom leak available. Samples attached.
+
+Claim:
+Odido customer and employee records are included in this archive. The dump allegedly contains 21,000,000 records from Odido and Ben.nl systems.
+
+Exposed material:
+- plaintext portal passwords
+- employee VPN credentials
+- customer names and email addresses
+- IBAN-like bank account fields
+- passport and driver license fields
+- support ticket exports
+- internal corporate notes
+
+Sample rows:
+user: temp.engineer@odido.nl
+password: Spring2026!Reset
+customer_email: demo.customer1@odido.nl
+iban: NL91ABNA0417164300
+passport_number: NX1234567
+driver_license: NL-49028173
+
+Infrastructure notes:
+Access was allegedly taken from an exposed Salesforce export and an internal support archive. Seller claims that the records include customer identity documents, telecom account metadata, billing records, and employee authentication data.
+
+Quantity:
+21M total records. Partial sample is available before escrow.
+
+Proof:
+The seller posted screenshots showing Odido branding, odido.nl email addresses, and customer billing fields.
+
+Price:
+3 BTC for full dump. Escrow accepted.
+
+Do not mirror this post. Serious buyers only.

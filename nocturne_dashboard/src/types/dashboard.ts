@@ -439,8 +439,10 @@ export interface ManualUploadStatus {
   pipelineState: string;
   relationshipAiStatus: AiStatus | null;
   relationshipLabel: RelationshipLabel | null;
+  l2Eligible: boolean;
   targetMatchScore: number | null;
   targetAnchorType: string | null;
+  leakMatchesScanned: number;
   strongIndicatorCount: number;
   mediumIndicatorCount: number;
   weakIndicatorCount: number;
