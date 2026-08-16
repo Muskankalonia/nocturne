@@ -108,40 +108,9 @@ against 1 ungrounded.
 
 ## System at a glance
 
-```mermaid
-flowchart TB
-  subgraph collect ["COLLECT"]
-    direction LR
-    Ahmia["Ahmia · Dread"] --> Crawler["Tor crawler<br/>headless Chromium"]
-    Crawler --> GCS[("GCS<br/>gzipped JSONL")]
-  end
-
-  subgraph land ["LAND"]
-    direction LR
-    Stage["GCS_CRAWL_STAGE"] --> Ingest["CRAWL_INGEST_TASK<br/>every 5 min"]
-    Ingest --> Raw["CRAWL_PAGES<br/>deduplicated"]
-  end
-
-  subgraph cascade ["CASCADE"]
-    direction LR
-    L0["L0 · regex indicators<br/>deterministic UDF"] --> L1["L1 · AI_CLASSIFY<br/>relationship"]
-    L1 --> L2["L2 · AI_COMPLETE<br/>blind extraction + grounding"]
-  end
-
-  subgraph score ["SCORE"]
-    direction LR
-    LeakType["Leak-type AI<br/>multi-label"] --> KG["L3 · knowledge graph"]
-    KG --> L4["L4 · impact / confidence / triage"]
-    L4 --> Insight["Incident insight AI"]
-  end
-
-  subgraph serve ["SERVE"]
-    direction LR
-    Views["13 read-only views"] --> Console["Next.js analyst console"]
-  end
-
-  collect --> land --> cascade --> score --> serve
-```
+<p align="center">
+  <img src="assets/architecture.svg" alt="Nocturne architecture — collect, land, cascade, score, serve; deterministic stages run on everything while cached AI stages run only on what survived the stage before" width="100%" />
+</p>
 
 **One boundary, held end to end.** Paths, hashes, cache keys, graph keys and every
 serving view are scoped by `ORG_ID`. Multi-tenancy is a property of the schema, not
