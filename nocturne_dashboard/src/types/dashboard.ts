@@ -17,6 +17,8 @@ import type {
   RelationshipLabel,
   RemediationStatus,
   RejectionReason,
+  ScoreReason,
+  ScoreVector,
   SeverityBand,
   TaskHealth,
   ThreatActor,
@@ -375,6 +377,125 @@ export interface PipelineResponse {
   }>;
   tasks: TaskHealth[];
   lastUpdatedAt: string | null;
+  fetchedAt: string;
+}
+
+/** One-shot analyst paste-dump run, separate from scheduled dark-web crawls. */
+export type ManualUploadPipelineStageId =
+  | "upload"
+  | "raw_ingest"
+  | "l0_signals"
+  | "l1_relevance"
+  | "l2_evidence"
+  | "l3_graph"
+  | "l4_insight";
+
+export type ManualUploadPipelineStageState =
+  | "waiting"
+  | "running"
+  | "complete"
+  | "stopped"
+  | "error";
+
+export interface ManualUploadPipelineStage {
+  id: ManualUploadPipelineStageId;
+  label: string;
+  caption: string;
+  state: ManualUploadPipelineStageState;
+  detail: string | null;
+}
+
+export interface ManualUploadCreateResponse {
+  uploadId: string;
+  orgId: string;
+  title: string;
+  objectPath: string;
+  objectUri: string;
+  statusUrl: string;
+  message: string;
+}
+
+export interface ManualUploadStatus {
+  orgId: string;
+  organizationName: string;
+  uploadId: string;
+  docId: string | null;
+  dedupeKey: string | null;
+  contentSha256: string | null;
+  runId: string | null;
+  title: string;
+  url: string;
+  contentLength: number;
+  fetchedAt: string | null;
+  ingestedAt: string | null;
+  sourceFile: string | null;
+  rawLoaded: boolean;
+  l0Complete: boolean;
+  l1Complete: boolean;
+  l2Complete: boolean;
+  l4Complete: boolean;
+  detailAvailable: boolean;
+  monitorStatus: BreachMonitorStatus | null;
+  pipelineState: string;
+  relationshipAiStatus: AiStatus | null;
+  relationshipLabel: RelationshipLabel | null;
+  l2Eligible: boolean;
+  targetMatchScore: number | null;
+  targetAnchorType: string | null;
+  leakMatchesScanned: number;
+  strongIndicatorCount: number;
+  mediumIndicatorCount: number;
+  weakIndicatorCount: number;
+  evidenceScore: number;
+  indicatorSummary: string | null;
+  l2ExtractionStatus: AiStatus | null;
+  l2Route: L2Route | null;
+  routingReason: string | null;
+  claimCount: number;
+  acceptedClaimCount: number;
+  entityCount: number;
+  acceptedEntityCount: number;
+  acceptedTargetEntityCount: number;
+  relationshipCount: number;
+  acceptedRelationshipCount: number;
+  targetLeakRelationGrounded: boolean;
+  incidentKey: string | null;
+  leakTypeAiStatus: AiStatus | null;
+  leakTypeLabels: LeakType[];
+  quantityClaimed: number | null;
+  impactSeverityScore: number | null;
+  impactSeverityBand: SeverityBand | null;
+  evidenceConfidenceScore: number | null;
+  evidenceConfidenceBand: ConfidenceBand | null;
+  triagePriorityScore: number | null;
+  triagePriorityBand: SeverityBand | null;
+  scoreVector: ScoreVector;
+  scoreReasons: ScoreReason[];
+  insightAiStatus: AiStatus | null;
+  insightHeadline: string | null;
+  executiveSummary: string | null;
+  whatHappened: string | null;
+  businessImpact: string | null;
+  recommendedActions: string[];
+  confidenceAssessment: string | null;
+  insightCaveats: string[];
+  insightModelName: string | null;
+  insightCalledAt: string | null;
+  monitorKey: string | null;
+  remediationStatus: RemediationStatus | null;
+  lastUpdatedAt: string | null;
+}
+
+export interface ManualUploadStatusResponse {
+  scope: DataScope;
+  uploadId: string;
+  status: ManualUploadStatus | null;
+  stages: ManualUploadPipelineStage[];
+  incident: DashboardIncident | null;
+  graph: {
+    nodes: DashboardIncidentGraphNode[];
+    edges: DashboardIncidentGraphEdge[];
+  };
   fetchedAt: string;
 }
 
