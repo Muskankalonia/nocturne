@@ -1,10 +1,14 @@
 <p align="center">
+  <img src="assets/nocturne-banner.svg" alt="Nocturne detection cascade — 195 pages collected, 174 checked for relevance, 114 sent to deep analysis, 57 incidents raised, all confirmed" width="100%" />
+</p>
+
+<p align="center">
   <img src="assets/nocturne-logo.png" alt="Nocturne" width="420" />
 </p>
 
 <p align="center">
-  <strong>Every breach alert comes with the receipt.</strong><br />
-  Nocturne finds the dark-web leaks that are actually yours — and shows you the exact line that proves it.
+  <strong>Dark-web breach intelligence with the receipt attached.</strong><br />
+  Nocturne finds the leaks that are actually yours, and shows you the exact line that proves it.
 </p>
 
 <p align="center">
@@ -27,10 +31,6 @@
   <a href="#the-knowledge-graph">Knowledge graph</a> |
   <a href="#severity-in-three-parts">Scoring</a> |
   <a href="#deploy">Deploy</a>
-</p>
-
-<p align="center">
-  <img src="assets/console-landing.png" alt="The Nocturne console" width="100%" />
 </p>
 
 ---
@@ -58,31 +58,33 @@ three independent scores.
 
 ### The operating principle
 
-| Conventional dark-web monitoring          | Nocturne                                                              |
-| ----------------------------------------- | --------------------------------------------------------------------- |
-| Alerts on a keyword match                 | Requires a grounded claim edge that resolves to your organization      |
-| Shows the model your name, then agrees    | Extracts blind; deterministic SQL resolves identity afterwards         |
-| Summarizes the page                       | Carries the verbatim span and its offsets into the source             |
-| One severity number                       | Impact, confidence, and triage priority scored independently          |
-| Spends AI budget on everything collected  | Deterministic regex runs on all; cached AI runs only on what survives |
-| "Trust our analysts"                      | Every claim traceable to the line it came from                        |
-| Re-alerts on every recrawl                | Deduplicated by `(org_id, dedupe_key)`; AI cached against its input   |
+| Conventional dark-web monitoring         | Nocturne                                                              |
+| ---------------------------------------- | --------------------------------------------------------------------- |
+| Alerts on a keyword match                | Requires a grounded claim edge that resolves to your organization     |
+| Shows the model your name, then agrees   | Extracts blind; deterministic SQL resolves identity afterwards        |
+| Summarizes the page                      | Carries the verbatim span and its offsets into the source             |
+| One severity number                      | Impact, confidence, and triage priority scored independently          |
+| Spends AI budget on everything collected | Deterministic regex runs on all; cached AI runs only on what survives |
+| "Trust our analysts"                     | Every claim traceable to the line it came from                        |
+| Re-alerts on every recrawl               | Deduplicated by `(org_id, dedupe_key)`; AI cached against its input  |
 
 ---
 
 ## How Nocturne works
 
 A cascade, in which every stage is allowed to throw work away and the expensive
-stages sit last on purpose. Figures below are a recorded reference run.
+stages sit last on purpose. Figures below are live from one monitored tenant.
 
-| Stage  | What happens                                                              | Survived |
-| :----- | :------------------------------------------------------------------------ | -------: |
-| **L0** | Tor pages landed, deduplicated, swept for indicators by a deterministic UDF |   **30** |
-| **L1** | Cached `AI_CLASSIFY` keeps only plausible target leaks                     |   **22** |
-| **L2** | Cached `AI_COMPLETE` extraction — evidence only, target hidden              |   **21** |
-| **L2** | Deterministic grounding: every quote matched back to its page              |   **20** |
-| **L3** | Promoted into the knowledge graph, connected to a monitored organization   |   **15** |
-| **L4** | Scored for impact, confidence, and triage priority                         |   **13** |
+| Stage        | What happens                                                                    |      Survived |
+| :----------- | :------------------------------------------------------------------------------ | ------------: |
+| **L0** | Tor pages landed and swept for indicators by a deterministic UDF — no AI spend | **195** |
+| **L0** | Duplicates removed on `(org_id, dedupe_key)`                                   | **194** |
+| **L1** | Cached `AI_CLASSIFY` keeps only plausible target leaks                         | **174** |
+| **L2** | Cached `AI_COMPLETE` extraction — evidence only, target hidden                | **114** |
+| **L4** | Grounded, graphed, and scored for impact / confidence / triage                  |  **57** |
+
+99.7% of claims ground back to a verbatim span in their source page — 333 grounded
+against 1 ungrounded.
 
 1. **Collect.** A breadth-first crawler discovers `.onion` URLs via Ahmia and Dread,
    fetches them through Tor with headless Chromium, and writes gzipped JSONL to GCS.
@@ -150,20 +152,20 @@ a filter applied at the end.
 ## The knowledge graph
 
 <p align="center">
-  <img src="assets/knowledge-graph-live.png" alt="A worked example: twelve entities from one crawl window, of which two claims resolve to the monitored organization" width="100%" />
+  <img src="assets/knowledge-graph-live.svg" alt="A worked example: twelve entities from one crawl window, of which two claims resolve to the monitored organization" width="100%" />
 </p>
 
 Extracted entities become nodes; resolved relationships become edges. Six edge types
 exist, and exactly one of them decides whether a leak is yours.
 
-| Edge                  | Meaning                                      |
-| :-------------------- | :------------------------------------------- |
-| `MADE_CLAIM`          | Actor posted or advertised the leak           |
-| `ALLEGEDLY_AFFECTS`   | **Claim targets a specific organization**     |
-| `MENTIONS`            | Claim references a data asset                 |
-| `LISTED_ON`           | Claim appeared on a marketplace or forum      |
-| `HAS_DOMAIN`          | Organization owns a domain seen in evidence   |
-| `OPERATES_ON`         | Actor has presence on a marketplace           |
+| Edge                  | Meaning                                         |
+| :-------------------- | :---------------------------------------------- |
+| `MADE_CLAIM`        | Actor posted or advertised the leak             |
+| `ALLEGEDLY_AFFECTS` | **Claim targets a specific organization** |
+| `MENTIONS`          | Claim references a data asset                   |
+| `LISTED_ON`         | Claim appeared on a marketplace or forum        |
+| `HAS_DOMAIN`        | Organization owns a domain seen in evidence     |
+| `OPERATES_ON`       | Actor has presence on a marketplace             |
 
 A claim is promoted into the graph only when it is **accepted**, **grounded**, and
 connected to a monitored target. Everything else stays in the audit trail where an
@@ -193,41 +195,41 @@ modest one that is nailed down.
 
 ## Repository layout
 
-| Path                          | What it is                                                       |
-| :---------------------------- | :--------------------------------------------------------------- |
-| `src/nocturne_crawler/`       | BFS dark-web crawler — Tor SOCKS, headless Chromium, GCS output   |
-| `config.yaml`                 | Organization slug, query, keywords, depth and page limits         |
-| `snowflake/01–16_*.sql`       | The pipeline, in dependency order — ingestion through view layer  |
-| `snowflake/tests/`            | SQL unit tests for the UDFs and routing logic                     |
-| `deploy_pipeline.py`          | Deploys, validates, and reports on the full pipeline              |
-| `nocturne_dashboard/`         | Next.js 15 analyst console ([its own README](nocturne_dashboard/README.md)) |
-| `plans/`                      | Design documents — severity model, L2–L4 design                   |
-| `examples/`                   | Sample crawler output and multi-org test fixtures                 |
-| `.github/workflows/`          | Pipeline deploy on push to `snowflake/**`                         |
+| Path                       | What it is                                                                 |
+| :------------------------- | :------------------------------------------------------------------------- |
+| `src/nocturne_crawler/`  | BFS dark-web crawler — Tor SOCKS, headless Chromium, GCS output           |
+| `config.yaml`            | Organization slug, query, keywords, depth and page limits                  |
+| `snowflake/01–16_*.sql` | The pipeline, in dependency order — ingestion through view layer          |
+| `snowflake/tests/`       | SQL unit tests for the UDFs and routing logic                              |
+| `deploy_pipeline.py`     | Deploys, validates, and reports on the full pipeline                       |
+| `nocturne_dashboard/`    | Next.js 15 analyst console ([its own README](nocturne_dashboard/README.md)) |
+| `plans/`                 | Design documents — severity model, L2–L4 design                          |
+| `examples/`              | Sample crawler output and multi-org test fixtures                          |
+| `.github/workflows/`     | Pipeline deploy on push to `snowflake/**`                                 |
 
 <details>
 <summary><strong>What each Snowflake step adds</strong></summary>
 
 <br />
 
-| Step | File                                | Purpose                                                                     |
-| ---- | ----------------------------------- | --------------------------------------------------------------------------- |
-| 01   | `01_storage_integration.sql`        | GCS storage integration                                                      |
-| 02   | `02_ingestion_layer.sql`            | Gzip JSON format, stage, raw table, five-minute ingestion task               |
-| 03   | `03_target_configuration.sql`       | Monitored-organization configuration table                                   |
-| 04   | `04_detect_indicators_udf.sql`      | Deterministic indicator detector — cards, credentials, tokens, keys, CVEs    |
-| 05   | `05_dt_regex_indicators.sql`        | Rejects invalid organization scope, runs the detector once per page          |
-| 06   | `06_build_classification_input_udf.sql` | Target-aware L1 input and evidence-only L2 input from ranked windows     |
-| 07   | `07_dt_l1_classification_input.sql` | Deduplicates by `(ORG_ID, DEDUPE_KEY)`, joins the matching enabled org       |
-| 08   | `08_dt_relationship_classification.sql` | Relationship cache, incremental candidates, stream, triggered task       |
-| 09   | `09_dt_l2_extraction_ai.sql`        | Cached `AI_COMPLETE` extraction on L1 survivors only                         |
-| 10   | `10_dt_l2_grounding_routing.sql`    | Validates extraction, grounds evidence, resolves entities, routes each page  |
-| 11   | `11_dt_leak_type_severity.sql`      | Cached multi-label leak-type AI, gated on `target_confirmed`                 |
-| 12   | `12_dt_l3_knowledge_graph.sql`      | Promotes accepted, grounded, target-connected claims into the graph          |
-| 13   | `13_dt_l4_severity.sql`             | Impact, confidence, triage; document / incident / org views                  |
-| 14   | `14_ai_incident_insights.sql`       | Triggered `AI_COMPLETE` cache — one narrative per incident                   |
-| 15   | `15_seed_validate_golive.sql`       | Validates organization isolation, resumes all tasks                          |
-| 16   | `16_dashboard_interface.sql`        | The 13 stable read-only views the console consumes                           |
+| Step | File                                      | Purpose                                                                     |
+| ---- | ----------------------------------------- | --------------------------------------------------------------------------- |
+| 01   | `01_storage_integration.sql`            | GCS storage integration                                                     |
+| 02   | `02_ingestion_layer.sql`                | Gzip JSON format, stage, raw table, five-minute ingestion task              |
+| 03   | `03_target_configuration.sql`           | Monitored-organization configuration table                                  |
+| 04   | `04_detect_indicators_udf.sql`          | Deterministic indicator detector — cards, credentials, tokens, keys, CVEs  |
+| 05   | `05_dt_regex_indicators.sql`            | Rejects invalid organization scope, runs the detector once per page         |
+| 06   | `06_build_classification_input_udf.sql` | Target-aware L1 input and evidence-only L2 input from ranked windows        |
+| 07   | `07_dt_l1_classification_input.sql`     | Deduplicates by `(ORG_ID, DEDUPE_KEY)`, joins the matching enabled org     |
+| 08   | `08_dt_relationship_classification.sql` | Relationship cache, incremental candidates, stream, triggered task          |
+| 09   | `09_dt_l2_extraction_ai.sql`            | Cached `AI_COMPLETE` extraction on L1 survivors only                       |
+| 10   | `10_dt_l2_grounding_routing.sql`        | Validates extraction, grounds evidence, resolves entities, routes each page |
+| 11   | `11_dt_leak_type_severity.sql`          | Cached multi-label leak-type AI, gated on `target_confirmed`               |
+| 12   | `12_dt_l3_knowledge_graph.sql`          | Promotes accepted, grounded, target-connected claims into the graph         |
+| 13   | `13_dt_l4_severity.sql`                 | Impact, confidence, triage; document / incident / org views                 |
+| 14   | `14_ai_incident_insights.sql`           | Triggered `AI_COMPLETE` cache — one narrative per incident                |
+| 15   | `15_seed_validate_golive.sql`           | Validates organization isolation, resumes all tasks                         |
+| 16   | `16_dashboard_interface.sql`            | The 13 stable read-only views the console consumes                          |
 
 </details>
 
@@ -352,14 +354,24 @@ Next.js 15 (App Router) · React 19 · MUI v6 · TypeScript, reading the thirtee
 from step 16. Public landing page at `/start`; everything else is behind a signed,
 HttpOnly session cookie with tenant scope enforced server-side on every route.
 
-| Surface              | What it answers                                                        |
-| :------------------- | :--------------------------------------------------------------------- |
-| **Command Center**   | What changed, and what should I open first                              |
-| **Breach Monitor**   | Every row the cascade produced, filterable by status                    |
-| **Incident Detail**  | The verbatim evidence, its offsets, the score vector, the AI narrative  |
-| **Knowledge Graph**  | The entities and edges behind an incident, interactively               |
-| **Threat Actors**    | Who is claiming what, and how credible they have been                   |
-| **Pipeline**         | Cascade health, rejection reasons, AI cache hit rates, version drift    |
+<p align="center">
+  <img src="assets/console-breach-monitor.png" alt="Breach Monitor — every row the cascade produced, with impact and confidence scores, filterable by status" width="100%" />
+  <em>Breach Monitor — every row the cascade produced, scored and filterable.</em>
+</p>
+
+<p align="center">
+  <img src="assets/console-command-center.png" alt="Command Center — the detection cascade, grounding rate, open incidents and severity bands for one tenant" width="100%" />
+  <em>Command Center — what changed, and what to open first.</em>
+</p>
+
+| Surface                   | What it answers                                                        |
+| :------------------------ | :--------------------------------------------------------------------- |
+| **Command Center**  | What changed, and what should I open first                             |
+| **Breach Monitor**  | Every row the cascade produced, filterable by status                   |
+| **Incident Detail** | The verbatim evidence, its offsets, the score vector, the AI narrative |
+| **Knowledge Graph** | The entities and edges behind an incident, interactively               |
+| **Threat Actors**   | Who is claiming what, and how credible they have been                  |
+| **Pipeline**        | Cascade health, rejection reasons, AI cache hit rates, version drift   |
 
 <p align="center">
   <a href="https://nocturne-console.web.app"><strong>→ Open the console</strong></a>
