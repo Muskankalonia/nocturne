@@ -2,7 +2,7 @@
 
 import { useEffect, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { Box, LinearProgress, Skeleton, Stack } from "@mui/material";
+import { Box, LinearProgress, Skeleton, Stack, alpha } from "@mui/material";
 import { useAuth } from "@/contexts/AuthContext";
 import { PostureProvider, usePosture } from "@/contexts/PostureContext";
 import { colors, gradients, layout } from "@/theme/tokens";
@@ -12,27 +12,33 @@ import Sidebar from "./Sidebar";
 
 /**
  * Auth gate + chrome. Any route rendered inside this shell requires a session;
- * an unauthenticated visitor is redirected to /login rather than shown an empty
- * dashboard.
+ * an unauthenticated visitor is sent to the public landing page rather than
+ * shown an empty dashboard.
+ *
+ * The destination is /start, not /login. Someone arriving with no session is
+ * usually arriving for the first time, and a bare credential prompt is a poor
+ * thing to open with — the landing page explains what this is and carries a
+ * Sign in button for the people who already know.
  */
 export function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { isAuthenticated, isLoading, hadSessionHint } = useAuth();
 
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) router.replace("/login");
+    if (!isLoading && !isAuthenticated) router.replace("/start");
   }, [isLoading, isAuthenticated, router]);
 
-  // A signed-out visitor is on their way to /login, so drawing dashboard chrome
-  // for them is a lie that resolves into a redirect. Two cases are not the same
-  // thing and must not share a placeholder:
+  // A signed-out visitor is on their way off this route, so drawing dashboard
+  // chrome for them is a lie that resolves into a redirect. Two cases are not
+  // the same thing and must not share a placeholder:
   //
   //   - resolved and signed out, or no prior session on this device: the next
-  //     screen is /login, so sketch that instead;
+  //     screen is /start, so show a neutral splash rather than sketching chrome
+  //     that is about to be replaced by a completely different page;
   //   - still resolving with a prior session here: the next screen is the
   //     dashboard, so sketching the chrome keeps the first paint in shape.
-  if (!isLoading && !isAuthenticated) return <LoginSkeleton />;
-  if (isLoading && !hadSessionHint) return <LoginSkeleton />;
+  if (!isLoading && !isAuthenticated) return <HandoffSplash />;
+  if (isLoading && !hadSessionHint) return <HandoffSplash />;
 
   if (isLoading) {
     return (
@@ -152,58 +158,42 @@ function Chrome({ children }: { children: ReactNode }) {
 export default AppShell;
 
 /**
- * Placeholder in the shape of /login, for visitors who are on their way there.
- * Deliberately structural — two panes and a card outline — so it reads as the
- * same page arriving rather than as different content being replaced.
+ * Held for the moment between "no session" and the landing page rendering.
+ *
+ * Deliberately not shaped like any particular screen. The old version sketched
+ * the two-pane login layout, which worked while /login was the only place a
+ * signed-out visitor could go; now that they land on /start instead, a skeleton
+ * of the wrong page is worse than no skeleton at all. The mark on the page
+ * gradient reads as "loading", commits to nothing, and is correct whichever
+ * page comes next.
  */
-function LoginSkeleton() {
+function HandoffSplash() {
   return (
     <Stack
-      direction={{ xs: "column", md: "row" }}
-      sx={{ minHeight: "100dvh", width: "100%", backgroundColor: colors.void }}
+      justifyContent="center"
+      alignItems="center"
+      sx={{
+        minHeight: "100dvh",
+        width: "100%",
+        backgroundColor: colors.abyss,
+        backgroundImage: gradients.page,
+      }}
     >
-      <Stack
+      <Box
+        component="img"
+        src="/nocturne-mark.png"
+        alt=""
+        width={40}
+        height={40}
         sx={{
-          flex: { md: 1.15 },
-          p: { xs: 3.5, sm: 5, md: 7, lg: 10 },
-          borderRight: { md: `1px solid ${colors.edge}` },
-          borderBottom: { xs: `1px solid ${colors.edge}`, md: "none" },
+          filter: `drop-shadow(0 0 18px ${alpha(colors.ion, 0.45)})`,
+          animation: "nocturnePulse 1.6s ease-in-out infinite",
+          "@keyframes nocturnePulse": {
+            "0%, 100%": { opacity: 0.45 },
+            "50%": { opacity: 1 },
+          },
         }}
-      >
-        <Stack direction="row" alignItems="center" gap={1.8}>
-          <Skeleton variant="rounded" width={40} height={40} sx={{ borderRadius: "10px" }} />
-          <Skeleton variant="text" width={150} height={28} />
-        </Stack>
-        <Stack gap={1.2} sx={{ mt: "auto" }}>
-          <Skeleton variant="text" width="60%" height={40} />
-          <Skeleton variant="text" width="80%" height={14} />
-          <Skeleton variant="text" width="70%" height={14} />
-        </Stack>
-      </Stack>
-
-      <Stack
-        justifyContent="center"
-        alignItems="center"
-        sx={{ flex: { md: 1 }, p: { xs: 3, sm: 4, md: 6 } }}
-      >
-        <Box
-          sx={{
-            width: "100%",
-            maxWidth: 400,
-            p: { xs: 2.5, sm: 3.5 },
-            borderRadius: `${layout.radius}px`,
-            border: `1px solid ${colors.edge}`,
-            backgroundImage: gradients.panel,
-          }}
-        >
-          <Stack gap={2}>
-            <Skeleton variant="text" width={120} height={22} />
-            <Skeleton variant="rounded" height={40} sx={{ borderRadius: "8px" }} />
-            <Skeleton variant="rounded" height={40} sx={{ borderRadius: "8px" }} />
-            <Skeleton variant="rounded" height={38} sx={{ borderRadius: "8px" }} />
-          </Stack>
-        </Box>
-      </Stack>
+      />
     </Stack>
   );
 }

@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import NextLink from "next/link";
 import {
   Alert,
   Box,
@@ -85,7 +86,17 @@ export default function LoginPage() {
             * carries across is the *ratio*: 40/28 here and 24/17 in the rail
             * are both ~1.43, so it reads as one logo at two scales instead of
             * two different logos. */}
-          <Stack direction="row" alignItems="center" gap={{ xs: 1.4, md: 1.8 }}>
+          {/* The lockup is the way back out. /start is the public front door and
+            * this is the only screen reachable from it that has no other exit,
+            * so the mark carries the link rather than adding a stray "back". */}
+          <Stack
+            component={NextLink}
+            href="/start"
+            direction="row"
+            alignItems="center"
+            gap={{ xs: 1.4, md: 1.8 }}
+            sx={{ textDecoration: "none", color: colors.text1, alignSelf: "flex-start" }}
+          >
             <Box
               component="img"
               src="/nocturne-mark.png"

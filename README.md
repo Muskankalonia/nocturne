@@ -1,172 +1,247 @@
 <p align="center">
-  <img src="assets/nocturne-logo.png" alt="Nocturne" width="400">
+  <img src="assets/nocturne-banner.svg" alt="Nocturne detection cascade — 195 pages collected, 174 checked for relevance, 114 sent to deep analysis, 57 incidents raised, all confirmed" width="100%" />
 </p>
-
-<h3 align="center">AI-powered dark web threat intelligence platform</h3>
 
 <p align="center">
-  Dark web discovery &rarr; GCS ingestion &rarr; Snowflake AI classification pipeline &rarr; Real-time analyst dashboard
+  <img src="assets/nocturne-logo.png" alt="Nocturne" width="420" />
+</p>
+
+<p align="center">
+  <strong>Dark-web breach intelligence with the receipt attached.</strong><br />
+  Nocturne finds the leaks that are actually yours, and shows you the exact line that proves it.
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Snowflake-04070E?style=for-the-badge&logo=snowflake&logoColor=29B5E8" alt="Snowflake" />
+  <img src="https://img.shields.io/badge/Cortex_AI-04070E?style=for-the-badge&logoColor=4C8DFF" alt="Snowflake Cortex AI" />
+  <img src="https://img.shields.io/badge/Claude_Sonnet_4.5-04070E?style=for-the-badge&logo=anthropic&logoColor=D4A27F" alt="Claude Sonnet 4.5" />
+  <img src="https://img.shields.io/badge/Next.js_15-04070E?style=for-the-badge&logo=nextdotjs&logoColor=FFFFFF" alt="Next.js 15" />
+  <img src="https://img.shields.io/badge/React_19-04070E?style=for-the-badge&logo=react&logoColor=4C8DFF" alt="React 19" />
+  <img src="https://img.shields.io/badge/TypeScript-04070E?style=for-the-badge&logo=typescript&logoColor=4C8DFF" alt="TypeScript" />
+  <img src="https://img.shields.io/badge/Python_3.11-04070E?style=for-the-badge&logo=python&logoColor=F4C96C" alt="Python 3.11" />
+  <img src="https://img.shields.io/badge/Tor-04070E?style=for-the-badge&logo=torproject&logoColor=A78BFA" alt="Tor" />
+  <img src="https://img.shields.io/badge/Cloud_Run-04070E?style=for-the-badge&logo=googlecloud&logoColor=4C8DFF" alt="Google Cloud Run" />
+</p>
+
+<p align="center">
+  <a href="https://nocturne-console.web.app"><strong>Open the console</strong></a> |
+  <a href="#the-product"><strong>The product</strong></a> |
+  <a href="#how-nocturne-works">Workflow</a> |
+  <a href="#system-at-a-glance">Architecture</a> |
+  <a href="#the-knowledge-graph">Knowledge graph</a> |
+  <a href="#severity-in-three-parts">Scoring</a> |
+  <a href="#deploy">Deploy</a>
 </p>
 
 ---
 
-Nocturne is an AI-powered dark web threat intelligence platform that continuously discovers and ingests breach-related data from dark web sources, then processes it through a multi-stage classification pipeline built on Snowflake. The pipeline combines regex-based indicator extraction, AI-driven leak-type classification, knowledge graph construction, and cross-document severity scoring to surface verified data breach incidents in real time — giving analysts a single, high-fidelity dashboard for triage and response.
+## The product
+
+Dark-web monitoring products are good at finding pages and bad at answering the only
+question that matters: **is this actually us?** They match a keyword, fire an alert,
+and leave the verification to an analyst — who then spends an afternoon establishing
+that a "breach" was somebody else's, or a resale of a five-year-old dump, or nothing
+at all.
+
+**Nocturne inverts the burden of proof.**
+
+It crawls the same sources, extracts claims from the page *without ever showing the
+model which organization you are monitoring*, and then uses deterministic SQL to
+resolve what it found against your configured names and domains. A page becomes a
+confirmed incident only when a grounded leak claim connects to you through an
+accepted `ALLEGEDLY_AFFECTS` edge. If nothing resolves to you, it never reaches leak
+typing, the graph, or your inbox.
+
+What you get is not a feed. It is an incident with its evidence attached: the
+verbatim span, the offsets into the source page, the actor, the marketplace, and
+three independent scores.
+
+### The operating principle
+
+| Conventional dark-web monitoring         | Nocturne                                                              |
+| ---------------------------------------- | --------------------------------------------------------------------- |
+| Alerts on a keyword match                | Requires a grounded claim edge that resolves to your organization     |
+| Shows the model your name, then agrees   | Extracts blind; deterministic SQL resolves identity afterwards        |
+| Summarizes the page                      | Carries the verbatim span and its offsets into the source             |
+| One severity number                      | Impact, confidence, and triage priority scored independently          |
+| Spends AI budget on everything collected | Deterministic regex runs on all; cached AI runs only on what survives |
+| "Trust our analysts"                     | Every claim traceable to the line it came from                        |
+| Re-alerts on every recrawl               | Deduplicated by `(org_id, dedupe_key)`; AI cached against its input  |
 
 ---
 
-## Table of Contents
+## How Nocturne works
 
-- [Architecture](#architecture)
-- [Repository Layout](#repository-layout)
-- [Deploy to Google Cloud](#deploy-to-google-cloud)
-- [Deploy the Snowflake Pipeline](#deploy-the-snowflake-pipeline)
-- [Analyst Dashboard](#analyst-dashboard)
+A cascade, in which every stage is allowed to throw work away and the expensive
+stages sit last on purpose. Figures below are live from one monitored tenant.
+
+| Stage        | What happens                                                                    |      Survived |
+| :----------- | :------------------------------------------------------------------------------ | ------------: |
+| **L0** | Tor pages landed and swept for indicators by a deterministic UDF — no AI spend | **195** |
+| **L0** | Duplicates removed on `(org_id, dedupe_key)`                                   | **194** |
+| **L1** | Cached `AI_CLASSIFY` keeps only plausible target leaks                         | **174** |
+| **L2** | Cached `AI_COMPLETE` extraction — evidence only, target hidden                | **114** |
+| **L4** | Grounded, graphed, and scored for impact / confidence / triage                  |  **57** |
+
+99.7% of claims ground back to a verbatim span in their source page — 333 grounded
+against 1 ungrounded.
+
+1. **Collect.** A breadth-first crawler discovers `.onion` URLs via Ahmia and Dread,
+   fetches them through Tor with headless Chromium, and writes gzipped JSONL to GCS.
+2. **Land.** Snowflake ingests every five minutes and deduplicates on
+   `(org_id, dedupe_key)`, so a page recrawled tomorrow costs nothing twice.
+3. **Screen.** A JavaScript UDF detects cards, credentials, tokens, keys, hashes,
+   CVEs, emails and domains — deterministically, with no AI spend.
+4. **Classify.** `AI_CLASSIFY` decides each page's relationship to the target. Only
+   target leaks and genuinely suspicious mentions go further.
+5. **Extract and ground.** `AI_COMPLETE` reads an evidence window that contains no
+   target metadata. SQL then validates the extraction, grounds each quote, and
+   resolves entities against your configured profile.
+6. **Score and explain.** Leak typing, the L3 graph, three-axis L4 severity, and one
+   cached AI narrative per incident.
+
+> **AI stages have no polling schedule.** Each is a dynamic table feeding a stream
+> feeding a triggered task feeding a persistent result table. They run only when
+> there is new material, and a waiting task holds no warehouse.
 
 ---
 
-## Architecture
+## System at a glance
 
-```mermaid
-flowchart TB
-  subgraph collect ["COLLECT"]
-    direction LR
-    Ahmia["Ahmia Search"] --> Crawler["Tor Crawler"]
-    Crawler --> GCS[("GCS Bucket\ngzipped JSONL")]
-  end
+<p align="center">
+  <img src="assets/architecture.svg" alt="Nocturne architecture — collect, land, cascade, score, serve; deterministic stages run on everything while cached AI stages run only on what survived the stage before" width="100%" />
+</p>
 
-  subgraph land ["LAND"]
-    direction LR
-    Stage["GCS_CRAWL_STAGE"] --> Ingest["CRAWL_INGEST_TASK"]
-    Ingest --> Raw["CRAWL_PAGES\n(deduplicated)"]
-  end
+**One boundary, held end to end.** Paths, hashes, cache keys, graph keys and every
+serving view are scoped by `ORG_ID`. Multi-tenancy is a property of the schema, not
+a filter applied at the end.
 
-  subgraph cascade ["CASCADE (AI)"]
-    direction LR
-    L0["L0: DLP Classifier"] --> L1["L1: AI Classify"]
-    L1 --> L2["L2: Entity Extraction + Resolution"]
-  end
+---
 
-  subgraph score ["SCORE"]
-    direction LR
-    LeakType["DLP AI Classifier"] --> KG["L3: Knowledge Graph"]
-    KG --> L4["L4: Impact / Confidence / Triage"]
-    L4 --> Insight["Incident Insight AI"]
-  end
+## The knowledge graph
 
-  subgraph serve ["SERVE"]
-    direction LR
-    Views["Dashboard Interface Views"] --> Console["Next.js Analyst Console"]
-  end
+<p align="center">
+  <img src="assets/knowledge-graph-live.svg" alt="A worked example: twelve entities from one crawl window, of which two claims resolve to the monitored organization" width="100%" />
+</p>
 
-  collect --> land --> cascade --> score --> serve
+Extracted entities become nodes; resolved relationships become edges. Six edge types
+exist, and exactly one of them decides whether a leak is yours.
+
+| Edge                  | Meaning                                         |
+| :-------------------- | :---------------------------------------------- |
+| `MADE_CLAIM`        | Actor posted or advertised the leak             |
+| `ALLEGEDLY_AFFECTS` | **Claim targets a specific organization** |
+| `MENTIONS`          | Claim references a data asset                   |
+| `LISTED_ON`         | Claim appeared on a marketplace or forum        |
+| `HAS_DOMAIN`        | Organization owns a domain seen in evidence     |
+| `OPERATES_ON`       | Actor has presence on a marketplace             |
+
+A claim is promoted into the graph only when it is **accepted**, **grounded**, and
+connected to a monitored target. Everything else stays in the audit trail where an
+analyst can find it, and out of the alert path.
+
+---
+
+## Severity in three parts
+
+How bad it would be, how sure we are, and what to open first are three different
+questions — so they are three independent 0–100 scores.
+
+```text
+impact      = 0.60·data_sensitivity + 0.25·exposure_actionability + 0.15·claimed_scale
+
+confidence  = 0.35·ownership_evidence + 0.25·evidence_grounding + 0.20·claim_proof
+            + 0.15·distinct_content_corroboration + 0.05·actor_credibility
+
+triage      = 0.80·impact + 0.20·confidence
 ```
 
-| Stage | What happens |
-| :---: | :--- |
-| **Collect** | Crawler discovers .onion URLs via Ahmia, fetches pages through Tor, writes gzipped JSONL to GCS |
-| **Land** | Snowflake ingests from GCS every 5 min, deduplicates by `(org_id, dedupe_key)` |
-| **Cascade** | Deterministic regex indicators (L0), AI relationship classification (L1), AI extraction + grounding (L2) |
-| **Score** | Leak-type classification, knowledge graph (L3), impact/confidence/triage scoring (L4), incident insights |
-| **Serve** | Dashboard interface views consumed by the Next.js analyst console |
-
+Banded `informational` 0–19 · `low` 20–39 · `medium` 40–59 · `high` 60–79 ·
+`critical` 80–100. A terrifying claim with thin evidence sorts differently from a
+modest one that is nailed down.
 
 ---
 
-## Repository Layout
+## Repository layout
 
-<table>
-<tr><td colspan="2"><strong>Crawler</strong></td></tr>
-<tr><td><code>src/nocturne_crawler/scraper.py</code></td><td>BFS dark-web crawler with Tor SOCKS + headless Chromium</td></tr>
-<tr><td><code>src/nocturne_crawler/storage.py</code></td><td>Local file and GCS output backends</td></tr>
-<tr><td><code>config.yaml</code></td><td>Organization slug, query, keywords, depth/page limits</td></tr>
-<tr><td><code>Dockerfile</code></td><td>Tor + Chromium container image</td></tr>
-<tr><td><code>requirements.txt</code></td><td>Crawler Python dependencies</td></tr>
-
-<tr><td colspan="2"><strong>Snowflake Pipeline</strong></td></tr>
-<tr><td><code>snowflake/01-16_*.sql</code></td><td>16 ordered pipeline steps (ingestion through dashboard views)</td></tr>
-<tr><td><code>snowflake/99_cleanup.sql</code></td><td>Destructive teardown (never auto-deployed)</td></tr>
-<tr><td><code>snowflake/tests/</code></td><td>SQL unit tests for UDFs and routing logic</td></tr>
-<tr><td><code>deploy_pipeline.py</code></td><td>Deploys, validates, and reports on the full pipeline</td></tr>
-<tr><td><code>cleanup_snowflake.py</code></td><td>Interactive destructive cleanup wrapper</td></tr>
-
-<tr><td colspan="2"><strong>Analyst Dashboard</strong></td></tr>
-<tr><td><code>nocturne_dashboard/</code></td><td>Next.js 15 + MUI v6 analyst console (<a href="nocturne_dashboard/README.md">its own README</a>)</td></tr>
-
-<tr><td colspan="2"><strong>Infrastructure & CI</strong></td></tr>
-<tr><td><code>.github/workflows/</code></td><td>CI/CD pipeline definitions</td></tr>
-<tr><td><code>.env.example</code></td><td>Snowflake credential template (copy to <code>.env</code>)</td></tr>
-<tr><td><code>scripts/</code></td><td>Diagram renderer, multi-org crawl config helper</td></tr>
-
-<tr><td colspan="2"><strong>Documentation & Tests</strong></td></tr>
-<tr><td><code>architecture.md</code></td><td>Full architecture deep-dive with mermaid diagrams</td></tr>
-<tr><td><code>plans/</code></td><td>Design documents (severity model, L2-L4 design)</td></tr>
-<tr><td><code>examples/</code></td><td>Sample crawler output and multi-org test fixtures</td></tr>
-<tr><td><code>tests/</code></td><td>Python unit tests</td></tr>
-<tr><td><code>logs/</code></td><td>Generated timestamped pipeline/cleanup logs (gitignored)</td></tr>
-</table>
-
----
-
-## Deploy to Google Cloud
-
-The following commands create a private raw bucket, a write-only crawler identity,
-an Artifact Registry repository, a container image, and a Cloud Run Job.
+| Path                       | What it is                                                                 |
+| :------------------------- | :------------------------------------------------------------------------- |
+| `src/nocturne_crawler/`  | BFS dark-web crawler — Tor SOCKS, headless Chromium, GCS output           |
+| `config.yaml`            | Organization slug, query, keywords, depth and page limits                  |
+| `snowflake/01–16_*.sql` | The pipeline, in dependency order — ingestion through view layer          |
+| `snowflake/tests/`       | SQL unit tests for the UDFs and routing logic                              |
+| `deploy_pipeline.py`     | Deploys, validates, and reports on the full pipeline                       |
+| `nocturne_dashboard/`    | Next.js 15 analyst console ([its own README](nocturne_dashboard/README.md)) |
+| `plans/`                 | Design documents — severity model, L2–L4 design                          |
+| `examples/`              | Sample crawler output and multi-org test fixtures                          |
+| `.github/workflows/`     | Pipeline deploy on push to `snowflake/**`                                 |
 
 <details>
-<summary><strong>Step 1: Set deployment values</strong></summary>
+<summary><strong>What each Snowflake step adds</strong></summary>
+
+<br />
+
+| Step | File                                      | Purpose                                                                     |
+| ---- | ----------------------------------------- | --------------------------------------------------------------------------- |
+| 01   | `01_storage_integration.sql`            | GCS storage integration                                                     |
+| 02   | `02_ingestion_layer.sql`                | Gzip JSON format, stage, raw table, five-minute ingestion task              |
+| 03   | `03_target_configuration.sql`           | Monitored-organization configuration table                                  |
+| 04   | `04_detect_indicators_udf.sql`          | Deterministic indicator detector — cards, credentials, tokens, keys, CVEs  |
+| 05   | `05_dt_regex_indicators.sql`            | Rejects invalid organization scope, runs the detector once per page         |
+| 06   | `06_build_classification_input_udf.sql` | Target-aware L1 input and evidence-only L2 input from ranked windows        |
+| 07   | `07_dt_l1_classification_input.sql`     | Deduplicates by `(ORG_ID, DEDUPE_KEY)`, joins the matching enabled org     |
+| 08   | `08_dt_relationship_classification.sql` | Relationship cache, incremental candidates, stream, triggered task          |
+| 09   | `09_dt_l2_extraction_ai.sql`            | Cached `AI_COMPLETE` extraction on L1 survivors only                       |
+| 10   | `10_dt_l2_grounding_routing.sql`        | Validates extraction, grounds evidence, resolves entities, routes each page |
+| 11   | `11_dt_leak_type_severity.sql`          | Cached multi-label leak-type AI, gated on `target_confirmed`               |
+| 12   | `12_dt_l3_knowledge_graph.sql`          | Promotes accepted, grounded, target-connected claims into the graph         |
+| 13   | `13_dt_l4_severity.sql`                 | Impact, confidence, triage; document / incident / org views                 |
+| 14   | `14_ai_incident_insights.sql`           | Triggered `AI_COMPLETE` cache — one narrative per incident                |
+| 15   | `15_seed_validate_golive.sql`           | Validates organization isolation, resumes all tasks                         |
+| 16   | `16_dashboard_interface.sql`            | The 13 stable read-only views the console consumes                          |
+
+</details>
+
+---
+
+## Deploy
+
+### Prerequisites
+
+- A Snowflake account with Cortex access and `claude-sonnet-4-5` available
+- A warehouse named `COMPUTE_WH`, and a role that can create databases, schemas,
+  integrations, stages, tasks, functions and dynamic tables
+- A Google Cloud project, for the crawler job and the console
+
+<details>
+<summary><strong>1 · The crawler on Google Cloud</strong></summary>
+
+<br />
+
+Creates a private raw bucket, a write-only crawler identity, an Artifact Registry
+repository, a container image, and a Cloud Run Job.
 
 ```bash
 export NOCTURNE_PROJECT_ID="your-gcp-project-id"
 export NOCTURNE_REGION="us-central1"
 export NOCTURNE_BUCKET="${NOCTURNE_PROJECT_ID}-nocturne-raw"
 export NOCTURNE_REPOSITORY="nocturne-containers"
-export NOCTURNE_IMAGE="crawler"
-export NOCTURNE_IMAGE_TAG="v1"
 export NOCTURNE_JOB="nocturne-crawler"
 export NOCTURNE_SERVICE_ACCOUNT="crawler-uploader"
 export NOCTURNE_SERVICE_EMAIL="${NOCTURNE_SERVICE_ACCOUNT}@${NOCTURNE_PROJECT_ID}.iam.gserviceaccount.com"
-export NOCTURNE_IMAGE_URI="${NOCTURNE_REGION}-docker.pkg.dev/${NOCTURNE_PROJECT_ID}/${NOCTURNE_REPOSITORY}/${NOCTURNE_IMAGE}:${NOCTURNE_IMAGE_TAG}"
+export NOCTURNE_IMAGE_URI="${NOCTURNE_REGION}-docker.pkg.dev/${NOCTURNE_PROJECT_ID}/${NOCTURNE_REPOSITORY}/crawler:v1"
 
 gcloud config set project "$NOCTURNE_PROJECT_ID"
-```
 
-Bucket names are globally unique. Change `NOCTURNE_BUCKET` if that name is already
-owned by another project.
-
-</details>
-
-<details>
-<summary><strong>Step 2: Enable APIs</strong></summary>
-
-```bash
 gcloud services enable \
-  artifactregistry.googleapis.com \
-  cloudbuild.googleapis.com \
-  cloudscheduler.googleapis.com \
-  iam.googleapis.com \
-  run.googleapis.com \
-  storage.googleapis.com
-```
+  artifactregistry.googleapis.com cloudbuild.googleapis.com \
+  cloudscheduler.googleapis.com iam.googleapis.com \
+  run.googleapis.com storage.googleapis.com
 
-</details>
-
-<details>
-<summary><strong>Step 3: Create and secure the raw bucket</strong></summary>
-
-```bash
 gcloud storage buckets create "gs://${NOCTURNE_BUCKET}" \
-  --location="$NOCTURNE_REGION" \
-  --default-storage-class=STANDARD \
-  --uniform-bucket-level-access \
-  --public-access-prevention
-```
+  --location="$NOCTURNE_REGION" --default-storage-class=STANDARD \
+  --uniform-bucket-level-access --public-access-prevention
 
-</details>
-
-<details>
-<summary><strong>Step 4: Create the crawler identity</strong></summary>
-
-```bash
 gcloud iam service-accounts create "$NOCTURNE_SERVICE_ACCOUNT" \
   --display-name="Nocturne crawler GCS uploader"
 
@@ -175,187 +250,98 @@ gcloud storage buckets add-iam-policy-binding "gs://${NOCTURNE_BUCKET}" \
   --role="roles/storage.objectCreator"
 ```
 
-`roles/storage.objectCreator` lets the job create new objects but does not let it
-read, list, overwrite, or delete existing raw objects.
-
-</details>
-
-<details>
-<summary><strong>Step 5: Build the image</strong></summary>
+`roles/storage.objectCreator` lets the job create new objects but not read, list,
+overwrite, or delete existing ones.
 
 ```bash
 gcloud artifacts repositories create "$NOCTURNE_REPOSITORY" \
-  --repository-format=docker \
-  --location="$NOCTURNE_REGION" \
-  --description="Nocturne crawler images"
+  --repository-format=docker --location="$NOCTURNE_REGION"
 
-gcloud builds submit . \
-  --region="$NOCTURNE_REGION" \
-  --tag="$NOCTURNE_IMAGE_URI"
-```
+gcloud builds submit . --region="$NOCTURNE_REGION" --tag="$NOCTURNE_IMAGE_URI"
 
-</details>
-
-<details>
-<summary><strong>Step 6: Deploy the Cloud Run Job</strong></summary>
-
-```bash
 gcloud run jobs deploy "$NOCTURNE_JOB" \
-  --image="$NOCTURNE_IMAGE_URI" \
-  --region="$NOCTURNE_REGION" \
+  --image="$NOCTURNE_IMAGE_URI" --region="$NOCTURNE_REGION" \
   --service-account="$NOCTURNE_SERVICE_EMAIL" \
-  --tasks=1 \
-  --parallelism=1 \
-  --cpu=2 \
-  --memory=2Gi \
-  --task-timeout=2h \
-  --max-retries=1 \
+  --tasks=1 --parallelism=1 --cpu=2 --memory=2Gi \
+  --task-timeout=2h --max-retries=1 \
   --set-env-vars="OUTPUT_BACKEND=gcs,GCS_BUCKET=${NOCTURNE_BUCKET},GCS_PREFIX=raw/crawls"
-```
 
-</details>
-
-<details>
-<summary><strong>Step 7: Execute and verify</strong></summary>
-
-```bash
-gcloud run jobs execute "$NOCTURNE_JOB" \
-  --region="$NOCTURNE_REGION" \
-  --wait
-
+gcloud run jobs execute "$NOCTURNE_JOB" --region="$NOCTURNE_REGION" --wait
 gcloud storage ls --recursive "gs://${NOCTURNE_BUCKET}/raw/crawls/**"
 ```
 
+Bucket names are globally unique — change `NOCTURNE_BUCKET` if that one is taken.
+
+</details>
+
+<details>
+<summary><strong>2 · The Snowflake pipeline</strong></summary>
+
+<br />
+
+```bash
+cp .env.example .env          # fill in the Snowflake values
+pip install -r snowflake/requirements.txt
+python deploy_pipeline.py     # deploys, validates, and reports
+```
+
+`deploy_pipeline.py` runs the 16 steps in order and verifies organization isolation
+before resuming tasks. Pass a step number to run one in isolation. Teardown lives in
+`cleanup_snowflake.py`, which is interactive and never runs automatically.
+
+</details>
+
+<details>
+<summary><strong>3 · The analyst console</strong></summary>
+
+<br />
+
+```bash
+cd nocturne_dashboard
+cp .env.example .env.local    # Snowflake credentials + session secret
+npm install
+npm run dev
+```
+
+To ship it to Cloud Run behind Firebase Hosting:
+
+```bash
+MIN_INSTANCES=0 ./deploy.sh
+```
+
+One command — it checks your tools, signs you in, uploads secrets, builds the image
+remotely, puts the Hosting hostname in front, and verifies the result. `MIN_INSTANCES=0`
+scales to zero when idle; set it to `1` for a demo, at the cost of a warm instance.
+
 </details>
 
 ---
 
-## Deploy the Snowflake Pipeline
+## The analyst console
 
-The Snowflake pipeline keeps deterministic transformations in dynamic tables and
-stores every paid AI result in a persistent table. It maintains the crawler's
-organization boundary from ingestion through the final dashboard output.
-
-```text
-GCS JSONL.gz -> CRAWL_PAGES
-  -> L0 deterministic indicators and evidence windows
-  -> L1 cached relationship AI
-  -> L2 cached unbiased extraction, grounding, and target resolution
-  -> cached leak-type AI for target-confirmed leaks only
-  -> L3 target knowledge graph
-  -> L4 impact/confidence/triage scores
-  -> cached per-incident AI insight
-  -> dashboard interface views
-```
-
-### What each Snowflake file adds
-
-| Step | File | Purpose |
-| --- | --- | --- |
-| 01 | `01_storage_integration.sql` | Creates the Snowflake GCS storage integration |
-| 02 | `02_ingestion_layer.sql` | Creates the gzip JSON format, stage, raw table, and five-minute ingestion task |
-| 03 | `03_target_configuration.sql` | Creates the monitored-organization configuration table |
-| 04 | `04_detect_indicators_udf.sql` | Deterministic JavaScript indicator detector (cards, credentials, tokens, keys, hashes, CVEs, emails, domains) |
-| 05 | `05_dt_regex_indicators.sql` | Rejects invalid organization scope, runs the detector once per page |
-| 06 | `06_build_classification_input_udf.sql` | Builds target-aware L1 input and evidence-only L2 input from ranked windows |
-| 07 | `07_dt_l1_classification_input.sql` | Deduplicates by `(ORG_ID, DEDUPE_KEY)`, joins only the matching enabled organization |
-| 08 | `08_dt_relationship_classification.sql` | Persistent relationship cache, incremental candidates, stream, and triggered `AI_CLASSIFY` task |
-| 09 | `09_dt_l2_extraction_ai.sql` | Sends only L1 target leaks and suspicious mentions to a cached `AI_COMPLETE` extraction task |
-| 10 | `10_dt_l2_grounding_routing.sql` | Validates extraction, grounds evidence, resolves target names/domains, routes each page |
-| 11 | `11_dt_leak_type_severity.sql` | Runs cached multi-label leak-type AI only after L2 returns `target_confirmed` |
-| 12 | `12_dt_l3_knowledge_graph.sql` | Promotes accepted, grounded, target-connected claims into an organization-scoped knowledge graph |
-| 13 | `13_dt_l4_severity.sql` | Separates impact, confidence, and triage priority; exposes document/incident/org views |
-| 14 | `14_ai_incident_insights.sql` | Persistent triggered `AI_COMPLETE` cache producing one dashboard narrative per incident |
-| 15 | `15_seed_validate_golive.sql` | Validates organization isolation, resumes all tasks |
-| 16 | `16_dashboard_interface.sql` | Creates stable dashboard views (incidents, org summaries, monitor, claims, graph) |
-
-### AI gating, caching, and task behavior
-
-The four paid AI stages (relationship classification, L2 extraction, leak-type
-classification, incident insights) each use:
-
-```text
-incremental candidate dynamic table
-  -> standard stream
-  -> stream-triggered task
-  -> persistent result table
-```
-
-AI tasks have no polling schedule. They run only when their candidate stream has
-data, and a waiting triggered task does not keep its warehouse active.
-
-### Organization gating
-
-1. L1 classifies each valid, deduplicated page for its intended organization.
-2. L2 receives `target_data_leak`, plus `target_mentioned_no_leak` only when a
-   deterministic target anchor and leak/indicator signal make it suspicious.
-3. L2 extracts from `EVIDENCE_INPUT` without seeing configured target metadata;
-   deterministic SQL then grounds evidence and resolves entities.
-4. `target_confirmed` requires a grounded leak claim connected by an accepted
-   `ALLEGEDLY_AFFECTS` edge to the resolved target organization or exact domain.
-5. If no organization/domain resolves to the monitored target, the page does not
-   reach leak-type AI, L3, target severity, or incident insights.
-
-Only `target_confirmed` pages are target-alert eligible.
-
-### L3 Knowledge Graph schema
+Next.js 15 (App Router) · React 19 · MUI v6 · TypeScript, reading the thirteen views
+from step 16. Public landing page at `/start`; everything else is behind a signed,
+HttpOnly session cookie with tenant scope enforced server-side on every route.
 
 <p align="center">
-  <img src="assets/knowledge-graph.png" alt="Nocturne Knowledge Graph Schema" width="600">
+  <img src="assets/console-breach-monitor.png" alt="Breach Monitor — every row the cascade produced, with impact and confidence scores, filterable by status" width="100%" />
+  <em>Breach Monitor — every row the cascade produced, scored and filterable.</em>
 </p>
 
-| Edge | Meaning |
-| :--- | :--- |
-| `MADE_CLAIM` | Actor posted or advertised the leak |
-| `ALLEGEDLY_AFFECTS` | Claim targets a specific organization |
-| `MENTIONS` | Claim references a data asset (credentials, PII, source code) |
-| `LISTED_ON` | Claim appeared on a specific marketplace or forum |
-| `HAS_DOMAIN` | Organization owns a domain seen in evidence |
-| `OPERATES_ON` | Actor has presence on a marketplace |
+<p align="center">
+  <img src="assets/console-command-center.png" alt="Command Center — the detection cascade, grounding rate, open incidents and severity bands for one tenant" width="100%" />
+  <em>Command Center — what changed, and what to open first.</em>
+</p>
 
-Nodes represent entities extracted from dark-web pages. Edges represent
-relationships resolved against configured organization profiles. Only claims
-connected to the monitored target via `ALLEGEDLY_AFFECTS` are promoted into the
-graph and scored.
+| Surface                   | What it answers                                                        |
+| :------------------------ | :--------------------------------------------------------------------- |
+| **Command Center**  | What changed, and what should I open first                             |
+| **Breach Monitor**  | Every row the cascade produced, filterable by status                   |
+| **Incident Detail** | The verbatim evidence, its offsets, the score vector, the AI narrative |
+| **Knowledge Graph** | The entities and edges behind an incident, interactively               |
+| **Threat Actors**   | Who is claiming what, and how credible they have been                  |
+| **Pipeline**        | Cascade health, rejection reasons, AI cache hit rates, version drift   |
 
-### L4 scores
-
-L4 produces three independent 0-100 metrics:
-
-```text
-impact      = 0.60 * data_sensitivity + 0.25 * exposure_actionability + 0.15 * claimed_scale
-confidence  = 0.35 * ownership_evidence + 0.25 * evidence_grounding + 0.20 * claim_proof
-              + 0.15 * distinct_content_corroboration + 0.05 * actor_credibility
-triage      = 0.80 * impact + 0.20 * confidence
-```
-
-Bands: informational (0-19), low (20-39), medium (40-59), high (60-79), critical (80-100).
-
-### Snowflake prerequisites
-
-- A warehouse named `COMPUTE_WH`
-- A role with permission to create database, schemas, integration, stage, task, functions, and dynamic tables
-- Cortex access and `claude-sonnet-4-5` model availability
-- At least one GCS `part-*.jsonl.gz` object for an end-to-end result
-
-### Multi-organization support
-
-The pipeline supports multiple organizations. Each organization gets its own
-crawler execution and a matching configuration row in
-`NOCTURNE.CONFIG.MONITORED_ORGANIZATIONS`. All organizations share the same GCS
-bucket and Snowflake tables — paths, hashes, cache keys, graph keys, and final
-views are all scoped by `ORG_ID`.
-
----
-
-## Analyst Dashboard
-
-The **Nocturne Console** is a Next.js 15 (App Router) + MUI v6 analyst front end
-that reads from the dashboard interface views created in step 16.
-
-```bash
-cd nocturne_dashboard
-npm install
-npm run dev          # http://localhost:3000
-```
-
+<p align="center">
+  <a href="https://nocturne-console.web.app"><strong>→ Open the console</strong></a>
+</p>

@@ -137,6 +137,51 @@ function hostMatches(host: string, allowed: string[]): boolean {
   return allowed.some((entry) => entry.toLowerCase().split(":")[0] === bare);
 }
 
+/**
+ * Kept in step with SESSION_COOKIE_NAME in src/server/session.ts, and declared
+ * here rather than imported: that module pulls in node:crypto and asserts it is
+ * never bundled for a browser, neither of which belongs in edge middleware.
+ */
+const SESSION_COOKIE = "__session";
+
+/** Public routes, plus the prefixes that must never be redirected. */
+function isPublicPath(pathname: string): boolean {
+  return (
+    pathname === "/start"
+    || pathname === "/login"
+    || pathname.startsWith("/api/")
+    || pathname.startsWith("/_next/")
+    || pathname === "/icon.png"
+    || pathname === "/favicon.ico"
+    || pathname === "/nocturne-mark.png"
+  );
+}
+
+/**
+ * Sends a visitor with no session straight to the landing page.
+ *
+ * AppShell already does this, but only after the client bundle has loaded and
+ * /api/auth/session has answered — which is a blank splash and two round trips
+ * before a first-time visitor sees anything. Deciding it here turns that into a
+ * single 307 to a statically prerendered page.
+ *
+ * This checks that the cookie *exists*, not that it is valid, and it is not a
+ * security boundary — it cannot be, since verifying the signature needs
+ * node:crypto. Anyone can set a junk `__session` and reach the shell; they then
+ * hit the real check in AppShell and every API route, and land back here. The
+ * boundary is still the signed cookie and the server-side tenant check.
+ */
+function landingRedirect(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+  if (isPublicPath(pathname)) return null;
+  if (request.cookies.has(SESSION_COOKIE)) return null;
+
+  const url = request.nextUrl.clone();
+  url.pathname = "/start";
+  url.search = "";
+  return NextResponse.redirect(url, 307);
+}
+
 export function middleware(request: NextRequest) {
   // Read env inside the handler rather than at module scope. Middleware is
   // bundled ahead of time, and module-scope reads risk being frozen at build
@@ -149,8 +194,10 @@ export function middleware(request: NextRequest) {
   const proxyHops = Number(process.env.NOCTURNE_PROXY_HOPS ?? "0");
   const expectsProxy = Number.isInteger(proxyHops) && proxyHops > 0;
 
+  // The perimeter runs first when it is armed: someone outside the allowlist
+  // should be refused, not helpfully redirected to the landing page.
   if (ipGate === ALLOW_ALL && hostGate === ALLOW_ALL && !expectsProxy) {
-    return NextResponse.next();
+    return landingRedirect(request) ?? NextResponse.next();
   }
 
   /**
@@ -226,7 +273,7 @@ export function middleware(request: NextRequest) {
     }
   }
 
-  return NextResponse.next();
+  return landingRedirect(request) ?? NextResponse.next();
 }
 
 function deny() {
