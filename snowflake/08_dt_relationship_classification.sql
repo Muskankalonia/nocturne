@@ -56,7 +56,8 @@ AS
   LEFT JOIN NOCTURNE.RAW.RELATIONSHIP_AI_RESULTS AS RESULT
     ON RESULT.ORG_ID = INPUT.ORG_ID
     AND RESULT.DEDUPE_KEY = INPUT.DEDUPE_KEY
-  WHERE RESULT.DEDUPE_KEY IS NULL;
+  WHERE RESULT.DEDUPE_KEY IS NULL
+    AND COALESCE(INPUT.SOURCE, '') <> 'manual_upload';
 
 -- Standard streams on dynamic tables include INSERT and DELETE changes.
 -- SHOW_INITIAL_ROWS makes the first deployment process existing candidates.

@@ -4,10 +4,11 @@
 -- Prerequisite: run step 1 and grant its STORAGE_GCP_SERVICE_ACCOUNT
 -- bucket-scoped read/list access before running this file.
 --
--- The scheduled COPY scans the external stage every five minutes. Snowflake load
--- metadata prevents an object name that was loaded successfully from being loaded
--- again. Only organization-partitioned schema-v2 paths are considered, so older
--- schema-v1 objects remain in GCS without entering this pipeline.
+-- The scheduled COPY scans crawler-owned task partitions every five minutes.
+-- Snowflake load metadata prevents an object name that was loaded successfully
+-- from being loaded again. Only organization-partitioned schema-v2 crawler paths
+-- are considered, so older schema-v1 objects and one-shot manual uploads remain
+-- in GCS without entering the scheduled crawler ingest.
 -- =============================================================================
 
 USE ROLE ACCOUNTADMIN;
@@ -25,7 +26,7 @@ CREATE OR REPLACE STAGE NOCTURNE.RAW.GCS_CRAWL_STAGE
 
 -- Fail here if the Snowflake-generated identity cannot list the bucket.
 LIST @NOCTURNE.RAW.GCS_CRAWL_STAGE
-  PATTERN = '.*org_id=[a-z0-9]+(_[a-z0-9]+)*/.*part-[0-9]+[.]jsonl[.]gz';
+  PATTERN = '.*org_id=[a-z0-9]+(_[a-z0-9]+)*/.*task=[0-9]+/attempt=[0-9]+/part-[0-9]+[.]jsonl[.]gz';
 
 -- Inspect one real crawler record without returning raw text or indicator values.
 -- RECORD_ORG_ID and PATH_ORG_ID are shown together so deployment can detect a
@@ -50,7 +51,7 @@ SELECT
   TYPEOF($1:raw_text) AS RAW_TEXT_TYPE
 FROM @NOCTURNE.RAW.GCS_CRAWL_STAGE (
   FILE_FORMAT => 'NOCTURNE.RAW.JSONL_GZ_FORMAT',
-  PATTERN => '.*org_id=[a-z0-9]+(_[a-z0-9]+)*/.*part-[0-9]+[.]jsonl[.]gz'
+  PATTERN => '.*org_id=[a-z0-9]+(_[a-z0-9]+)*/.*task=[0-9]+/attempt=[0-9]+/part-[0-9]+[.]jsonl[.]gz'
 )
 LIMIT 1;
 
@@ -120,7 +121,9 @@ AS
     FROM @NOCTURNE.RAW.GCS_CRAWL_STAGE
   )
   FILE_FORMAT = (FORMAT_NAME = 'NOCTURNE.RAW.JSONL_GZ_FORMAT')
-  PATTERN = '.*org_id=[a-z0-9]+(_[a-z0-9]+)*/.*part-[0-9]+[.]jsonl[.]gz'
+  -- Scheduled crawler ingestion intentionally excludes task=manual. Manual
+  -- paste dumps are loaded by the dashboard API with a direct one-object COPY.
+  PATTERN = '.*org_id=[a-z0-9]+(_[a-z0-9]+)*/.*task=[0-9]+/attempt=[0-9]+/part-[0-9]+[.]jsonl[.]gz'
   ON_ERROR = 'ABORT_STATEMENT'
   -- TODO(production): Grant storage.objects.delete to the Snowflake GCS identity,
   -- validate deletion in a non-production prefix, then enable this option.

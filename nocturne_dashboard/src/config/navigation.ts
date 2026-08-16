@@ -87,6 +87,7 @@ export const navigation: NavItem[] = [
     icon: "Activity",
     section: "ops",
     children: [
+      { label: "Upload Paste Dump", href: "/pipeline/upload" },
       { label: "Detection Cascade", href: "/pipeline" },
       { label: "Evidence Quality", href: "/pipeline?tab=quality" },
       { label: "Processing Health", href: "/pipeline?tab=health" },

@@ -1,0 +1,22 @@
+Odido public service overview
+
+Odido is a telecommunications provider in the Netherlands offering mobile, broadband,
+television, and business connectivity services. This short note is a public-style
+summary for a harmless manual upload control sample.
+
+The company provides consumer phone subscriptions, home internet packages, fiber
+connectivity, customer support, retail store assistance, and enterprise communication
+services. Public materials often describe network modernization, service coverage,
+customer experience, sustainability goals, and product updates for residential and
+business users.
+
+Odido also publishes general information about network reliability, digital support
+channels, billing preferences, roaming options, device plans, and service bundles.
+The tone of this document is similar to a company profile or product overview.
+
+Expected behavior for this control sample:
+
+- The page names the monitored organization.
+- The page contains ordinary public business context only.
+- The run should finish after the relevance check.
+- No downstream evidence extraction, graph promotion, or incident summary is expected.
