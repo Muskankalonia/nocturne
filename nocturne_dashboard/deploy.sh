@@ -85,7 +85,8 @@ read_env() {
   sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1 | sed -e 's/^"//' -e 's/"$//'
 }
 
-for key in SNOWFLAKE_ACCOUNT SNOWFLAKE_USER SNOWFLAKE_TOKEN NOCTURNE_SESSION_SECRET; do
+for key in SNOWFLAKE_ACCOUNT SNOWFLAKE_USER SNOWFLAKE_TOKEN NOCTURNE_SESSION_SECRET \
+           NOCTURNE_MANUAL_UPLOAD_BUCKET; do
   [[ -n "$(read_env "$key")" ]] || die "$key is missing from $ENV_FILE"
 done
 echo "  $ENV_FILE has the required values"
