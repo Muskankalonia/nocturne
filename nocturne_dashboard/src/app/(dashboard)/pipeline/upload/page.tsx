@@ -7,6 +7,7 @@ import {
   Box,
   Button,
   LinearProgress,
+  Skeleton,
   Stack,
   TextField,
   Typography,
@@ -30,6 +31,7 @@ import {
   Tag,
 } from "@/components/ui/Primitives";
 import { SeverityChip } from "@/components/ui/SeverityChip";
+import { StatGridSkeleton } from "@/components/ui/Skeletons";
 import {
   formatCount,
   hostOf,
@@ -38,6 +40,11 @@ import {
   routeLabel,
   routeTone,
 } from "@/lib/format";
+import {
+  MANUAL_UPLOAD_MAX_LABEL,
+  formatBytes,
+  manualUploadRejection,
+} from "@/lib/manual-upload";
 import { colors, fonts, layout as layoutTokens, severityColor } from "@/theme/tokens";
 import type {
   ManualUploadCreateResponse,
@@ -48,6 +55,13 @@ import type {
 
 const FAST_POLL_MS = 2500;
 const RAW_INGEST_POLL_MS = 5000;
+
+/**
+ * upload, raw_ingest, l0_signals, l1_relevance, l2_evidence, l3_graph,
+ * l4_insight. Fixed for every run, which is why the rail can be sketched at the
+ * right width before the first status response arrives.
+ */
+const PIPELINE_STAGE_COUNT = 7;
 
 type UploadLogLine = {
   tone: "ok" | "ion" | "medium" | "critical" | "neutral";
@@ -275,14 +289,82 @@ function stageIcon(stage: ManualUploadPipelineStage) {
   return <Circle size={16} />;
 }
 
+/**
+ * The seven stages, all idle.
+ *
+ * Mirrors manualUploadStages() in server/nocturne-backend.ts — same ids, labels
+ * and captions — so the dimmed rail shown before the first upload is the same
+ * rail that lights up after it. Kept in step by hand; if the server list gains
+ * a stage, this gains it too.
+ */
+const IDLE_STAGES: ManualUploadPipelineStage[] = [
+  {
+    id: "upload",
+    label: "Upload",
+    caption: "Store the paste dump as one isolated manual page.",
+    state: "waiting",
+    detail: null,
+  },
+  {
+    id: "raw_ingest",
+    label: "Raw ingest",
+    caption: "Load the manual JSONL page into Snowflake RAW.",
+    state: "waiting",
+    detail: null,
+  },
+  {
+    id: "l0_signals",
+    label: "L0 signals",
+    caption: "Detect regex indicators without changing raw text.",
+    state: "waiting",
+    detail: null,
+  },
+  {
+    id: "l1_relevance",
+    label: "L1 relevance",
+    caption: "Classify whether the dump looks relevant to this organization.",
+    state: "waiting",
+    detail: null,
+  },
+  {
+    id: "l2_evidence",
+    label: "L2 evidence",
+    caption: "Extract and ground claims before graph promotion.",
+    state: "waiting",
+    detail: null,
+  },
+  {
+    id: "l3_graph",
+    label: "L3 graph",
+    caption: "Promote accepted target-owned claims and relationships.",
+    state: "waiting",
+    detail: null,
+  },
+  {
+    id: "l4_insight",
+    label: "L4 insight",
+    caption: "Attach severity, triage priority, and the AI incident brief.",
+    state: "waiting",
+    detail: null,
+  },
+];
+
 function ProgressRail({
   stages,
   selectedStageId,
   onSelectStage,
+  disabled = false,
 }: {
   stages: ManualUploadPipelineStage[];
   selectedStageId: ManualUploadPipelineStage["id"];
   onSelectStage: (stageId: ManualUploadPipelineStage["id"]) => void;
+  /**
+   * Preview mode: there is nothing to inspect yet, so the rail shows the shape
+   * of the run without pretending to be clickable. Rendered as plain divs
+   * rather than disabled buttons — seven disabled controls are seven tab stops
+   * that lead nowhere.
+   */
+  disabled?: boolean;
 }) {
   return (
     <Box
@@ -304,17 +386,19 @@ function ProgressRail({
                 : tone === "ion"
                   ? colors.ion
                   : colors.text3;
-        const isSelected = selectedStageId === stage.id;
+        const isSelected = !disabled && selectedStageId === stage.id;
         return (
           <Box
-            component="button"
-            type="button"
+            component={disabled ? "div" : "button"}
+            type={disabled ? undefined : "button"}
             key={stage.id}
-            onClick={() => onSelectStage(stage.id)}
+            aria-disabled={disabled || undefined}
+            onClick={disabled ? undefined : () => onSelectStage(stage.id)}
             sx={{
               position: "relative",
               minHeight: 132,
-              cursor: "pointer",
+              cursor: disabled ? "default" : "pointer",
+              opacity: disabled ? 0.42 : 1,
               textAlign: "left",
               border: `1px solid ${
                 isSelected
@@ -334,10 +418,14 @@ function ProgressRail({
               overflow: "hidden",
               boxShadow: isSelected ? `0 0 0 1px ${alpha(toneColor, 0.28)} inset` : "none",
               color: colors.text1,
-              "&:hover": {
-                borderColor: alpha(toneColor, 0.8),
-                backgroundColor: alpha(toneColor, 0.06),
-              },
+              ...(disabled
+                ? null
+                : {
+                    "&:hover": {
+                      borderColor: alpha(toneColor, 0.8),
+                      backgroundColor: alpha(toneColor, 0.06),
+                    },
+                  }),
             }}
           >
             <Stack direction="row" alignItems="center" gap={0.8}>
@@ -461,6 +549,162 @@ function UploadLogs({
         })}
       </Stack>
     </Panel>
+  );
+}
+
+/**
+ * Loading placeholders, one per panel.
+ *
+ * Each mirrors the geometry of the component it stands in for — the same grid
+ * template, the same row heights, the same separators — so nothing moves when
+ * the data lands. Shared shapes live in components/ui/Skeletons; these four are
+ * specific enough to this page's layout that keeping them next to the real
+ * components is what stops them drifting out of step.
+ */
+
+/** Mirrors ProgressRail: the same column template and 132px card height. */
+function ProgressRailSkeleton() {
+  return (
+    <Box
+      sx={{
+        display: "grid",
+        gridTemplateColumns: { xs: "1fr", md: `repeat(${PIPELINE_STAGE_COUNT}, 1fr)` },
+        gap: 1,
+      }}
+    >
+      {Array.from({ length: PIPELINE_STAGE_COUNT }, (_, index) => (
+        <Box
+          key={index}
+          sx={{
+            minHeight: 132,
+            border: `1px solid ${colors.edge}`,
+            borderRadius: `${layoutTokens.radiusSm}px`,
+            backgroundColor: "rgba(255,255,255,0.015)",
+            p: 1.4,
+          }}
+        >
+          <Stack direction="row" alignItems="center" gap={0.8}>
+            <Skeleton variant="circular" width={16} height={16} />
+            <Skeleton variant="text" width="46%" height={13} />
+          </Stack>
+          <Skeleton variant="text" width="92%" height={11} sx={{ mt: 1.2 }} />
+          <Skeleton variant="text" width="70%" height={11} />
+          <Skeleton variant="text" width="54%" height={10} sx={{ mt: 1 }} />
+        </Box>
+      ))}
+    </Box>
+  );
+}
+
+/** Mirrors UploadRow: same five columns, same top rule between rows. */
+function UploadListSkeleton({ rows = 4 }: { rows?: number }) {
+  return (
+    <Box>
+      {Array.from({ length: rows }, (_, index) => (
+        <Box
+          key={index}
+          sx={{
+            display: "grid",
+            gridTemplateColumns: {
+              xs: "1fr",
+              md: "minmax(240px, 1.4fr) 140px 150px 120px 120px",
+            },
+            gap: 1.4,
+            alignItems: "center",
+            borderTop: `1px solid ${colors.edge}`,
+            px: 1,
+            py: 1.2,
+          }}
+        >
+          <Box sx={{ minWidth: 0 }}>
+            <Skeleton variant="text" width={`${72 - index * 6}%`} height={14} />
+            <Skeleton variant="text" width="58%" height={11} />
+          </Box>
+          <Skeleton variant="text" width="70%" height={12} />
+          <Skeleton variant="rounded" width="80%" height={16} sx={{ borderRadius: "4px" }} />
+          <Skeleton variant="text" width="40%" height={12} />
+          <Skeleton variant="text" width="40%" height={12} />
+        </Box>
+      ))}
+    </Box>
+  );
+}
+
+/** Mirrors UploadLogs: left rule, mono index gutter, wrapped message. */
+function UploadLogsSkeleton({ lines = 3 }: { lines?: number }) {
+  const widths = ["88%", "72%", "94%", "64%"];
+  return (
+    <Panel title="Run logs" meta="LOADING">
+      <Stack gap={0.9}>
+        {Array.from({ length: lines }, (_, index) => (
+          <Stack
+            key={index}
+            direction="row"
+            gap={1}
+            alignItems="flex-start"
+            sx={{ borderLeft: `2px solid ${alpha(colors.text3, 0.4)}`, pl: 1, py: 0.2 }}
+          >
+            <Skeleton variant="text" width={18} height={12} sx={{ minWidth: 30 }} />
+            <Skeleton
+              variant="text"
+              height={13}
+              sx={{ width: widths[index % widths.length] }}
+            />
+          </Stack>
+        ))}
+      </Stack>
+    </Panel>
+  );
+}
+
+/** Mirrors UploadResult: the 1.2fr/0.8fr split, headline block, five score rows. */
+function UploadResultSkeleton() {
+  return (
+    <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", xl: "1.2fr 0.8fr" }, gap: 2 }}>
+      <Panel title="Result" meta="LOADING">
+        <Stack gap={1.4}>
+          <Stack direction="row" alignItems="flex-start" gap={1.5}>
+            <Box sx={{ minWidth: 0, flex: 1 }}>
+              <Skeleton variant="text" width="76%" height={22} />
+              <Skeleton variant="text" width="42%" height={12} sx={{ mt: 0.5 }} />
+            </Box>
+            <Skeleton variant="rounded" width={92} height={26} sx={{ borderRadius: "6px" }} />
+          </Stack>
+          <Box>
+            <Skeleton variant="text" width="96%" height={13} />
+            <Skeleton variant="text" width="88%" height={13} />
+            <Skeleton variant="text" width="61%" height={13} />
+          </Box>
+          <Stack direction="row" gap={0.8}>
+            <Skeleton variant="rounded" width={96} height={18} sx={{ borderRadius: "4px" }} />
+            <Skeleton variant="rounded" width={72} height={18} sx={{ borderRadius: "4px" }} />
+            <Skeleton variant="rounded" width={110} height={18} sx={{ borderRadius: "4px" }} />
+          </Stack>
+        </Stack>
+      </Panel>
+
+      <Panel title="Scores and evidence">
+        <Stack gap={1.2}>
+          {Array.from({ length: 5 }, (_, index) => (
+            <Box key={index}>
+              <Stack direction="row" justifyContent="space-between" gap={2}>
+                <Skeleton variant="text" width={`${38 - index * 3}%`} height={12} />
+                <Skeleton variant="text" width={22} height={12} />
+              </Stack>
+              <Skeleton
+                variant="rounded"
+                height={5}
+                sx={{ mt: 0.6, width: "100%", borderRadius: 4 }}
+              />
+            </Box>
+          ))}
+          <Box sx={{ pt: 0.6, borderTop: `1px solid ${colors.edge}` }}>
+            <Skeleton variant="text" width="92%" height={12} />
+            <Skeleton variant="text" width="70%" height={12} />
+          </Box>
+        </Stack>
+      </Panel>
+    </Box>
   );
 }
 
@@ -702,6 +946,8 @@ function ScoreLine({ label, value }: { label: string; value: number | null }) {
 export default function UploadPasteDumpPage() {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement | null>(null);
+  /** Upload id of the most recently *started* detail fetch. See loadSelected. */
+  const detailRequestRef = useRef<string | null>(null);
   const { session, isLoading: isAuthLoading } = useAuth();
   const [title, setTitle] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -714,9 +960,65 @@ export default function UploadPasteDumpPage() {
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
 
   const orgId = session?.scope.kind === "org" ? session.scope.orgId : null;
-  const canUpload = Boolean(orgId && file && !isUploading);
+
+  // Nothing on the page has data yet: the session is still resolving, or the
+  // upload list is. Every panel that depends on either sketches its own shape
+  // rather than the page collapsing to a single progress bar.
+  const isBootstrapping = isAuthLoading || isLoading;
+
+  /**
+   * Blocked while the page is still bootstrapping, and not only for tidiness.
+   * The session resolves before the upload list does, so there is a window
+   * where orgId is set and the initial refresh() is still in flight. Starting
+   * an upload inside that window races two writers against the same state: the
+   * upload finishes, calls refresh(), and then the *earlier* list request lands
+   * and overwrites the result with a list that predates the new run.
+   */
+  const canUpload = Boolean(orgId && file && !isUploading && !isBootstrapping);
+
+  /**
+   * Selecting a different run leaves the previous run's response in state until
+   * the new fetch lands, and rendering that would attribute one upload's
+   * stages, logs and scores to another. The detail panels sketch instead until
+   * the two agree.
+   *
+   * Derived rather than a second loading flag on purpose: the poll re-fetches
+   * the id already on screen, so it can never trip this, and live data is never
+   * blanked out on a background refresh.
+   */
+  const isSelectedStale =
+    Boolean(selectedUploadId) && selected?.uploadId !== selectedUploadId;
+  const isDetailLoading = isBootstrapping || isSelectedStale;
+
+  /** Resolved, and this organization has never run a manual upload. */
+  const hasNoUploads = !isBootstrapping && uploads.length === 0;
+
+  /**
+   * Refuse an oversized or non-text file here, before a byte leaves the
+   * browser. The route handler applies the identical rule from the same module
+   * and is the check that actually holds; this one exists so the analyst is not
+   * made to upload several megabytes to be told no.
+   */
+  const handleFileChange = useCallback((next: File | null) => {
+    setFileError(null);
+    if (!next) {
+      setFile(null);
+      return;
+    }
+    const rejection = manualUploadRejection(next);
+    if (rejection) {
+      setFile(null);
+      setFileError(rejection.reason);
+      // Clear the control too, or the browser keeps showing the rejected
+      // filename and re-picking that same file fires no change event.
+      if (fileRef.current) fileRef.current.value = "";
+      return;
+    }
+    setFile(next);
+  }, []);
 
   const orgQuery = useCallback(() => {
     const query = new URLSearchParams();
@@ -748,6 +1050,13 @@ export default function UploadPasteDumpPage() {
   }, [orgId, orgQuery]);
 
   const loadSelected = useCallback(async (uploadId: string, signal?: AbortSignal) => {
+    // Last request wins. Several detail fetches can be in flight at once — the
+    // poll, the Refresh button, a selection change, a just-finished upload —
+    // and they do not necessarily resolve in the order they were sent. Without
+    // this guard a slower response for an older upload overwrites the newer
+    // one, and the panel is then pinned to a run nobody selected.
+    detailRequestRef.current = uploadId;
+
     const query = orgQuery();
     const suffix = query.size ? `?${query.toString()}` : "";
     const response = await fetch(`/api/manual-uploads/${uploadId}${suffix}`, {
@@ -763,6 +1072,7 @@ export default function UploadPasteDumpPage() {
           : "Unable to load paste-dump status.",
       );
     }
+    if (detailRequestRef.current !== uploadId) return;
     setSelected(body);
   }, [orgQuery]);
 
@@ -808,7 +1118,13 @@ export default function UploadPasteDumpPage() {
   }, [loadSelected, selectedUploadId]);
 
   useEffect(() => {
-    if (!selectedUploadId || isTerminal(selected)) return;
+    if (!selectedUploadId) return;
+    // "Terminal" is only meaningful when `selected` is actually the upload on
+    // screen. If it belongs to a different run, stopping here would freeze the
+    // panel on that run forever — the poll is the only thing left that can
+    // correct it. Keep polling until the two agree, then honour terminal.
+    const describesSelection = selected?.uploadId === selectedUploadId;
+    if (describesSelection && isTerminal(selected)) return;
     const pollMs = selected?.status?.rawLoaded ? FAST_POLL_MS : RAW_INGEST_POLL_MS;
     const interval = window.setInterval(() => {
       void loadSelected(selectedUploadId).catch((pollError) => {
@@ -830,6 +1146,7 @@ export default function UploadPasteDumpPage() {
     setIsUploading(true);
     setError(null);
     setNotice(null);
+    setFileError(null);
 
     const form = new FormData();
     form.set("file", file);
@@ -855,13 +1172,17 @@ export default function UploadPasteDumpPage() {
       setFile(null);
       setTitle("");
       if (fileRef.current) fileRef.current.value = "";
-      await refresh();
+      // Only the list. Deliberately not refresh(): that closure captured the
+      // selection from before this upload, so it would fetch the *previous*
+      // run's detail and race the fetch the new selection is already starting.
+      // The selectedUploadId effect loads the new run's detail on its own.
+      await loadUploads();
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "Unable to upload paste dump.");
     } finally {
       setIsUploading(false);
     }
-  }, [file, orgId, refresh, title]);
+  }, [file, loadUploads, orgId, title]);
 
   const stats = useMemo(() => {
     const completed = uploads.filter((upload) => upload.detailAvailable).length;
@@ -886,7 +1207,7 @@ export default function UploadPasteDumpPage() {
       size="small"
       variant="outlined"
       startIcon={<RefreshCw size={13} />}
-      disabled={!orgId || isLoading || isUploading}
+      disabled={!orgId || isBootstrapping || isUploading}
       onClick={() => void refresh().catch((refreshError) =>
         setError(refreshError instanceof Error ? refreshError.message : "Refresh failed."),
       )}
@@ -895,22 +1216,9 @@ export default function UploadPasteDumpPage() {
     </Button>
   );
 
-  if (isAuthLoading || isLoading) {
-    return (
-      <Stack gap={2}>
-        <PageHeader
-          title="Upload Paste Dump"
-          subtitle="Upload one raw paste and watch it move through the same L0–L4 pipeline."
-          right={headerRight}
-        />
-        <Panel title="Loading">
-          <LinearProgress />
-        </Panel>
-      </Stack>
-    );
-  }
-
-  if (!orgId) {
+  // Only once the session has resolved: while it is loading there is no scope
+  // yet, and "choose an organization" would be a false instruction.
+  if (!isAuthLoading && !orgId) {
     return (
       <Stack gap={2}>
         <PageHeader
@@ -951,34 +1259,38 @@ export default function UploadPasteDumpPage() {
         </Alert>
       )}
 
-      <StatGrid>
-        <StatCard
-          label="Manual uploads"
-          value={uploads.length.toLocaleString()}
-          sub="recent runs for this organization"
-          accent={colors.ion}
-          valueColor={colors.ion}
-        />
-        <StatCard
-          label="Incidents ready"
-          value={stats.completed.toLocaleString()}
-          sub="AI summary and graph available"
-          accent={colors.verified}
-          valueColor={colors.verified}
-        />
-        <StatCard
-          label="Active scans"
-          value={stats.active.toLocaleString()}
-          sub="polling near real time"
-          accent={severityColor.high}
-        />
-        <StatCard
-          label="Stopped before incident"
-          value={stats.stopped.toLocaleString()}
-          sub="not confirmed for this org"
-          accent={severityColor.medium}
-        />
-      </StatGrid>
+      {isBootstrapping ? (
+        <StatGridSkeleton cards={4} />
+      ) : (
+        <StatGrid>
+          <StatCard
+            label="Manual uploads"
+            value={uploads.length.toLocaleString()}
+            sub="recent runs for this organization"
+            accent={colors.ion}
+            valueColor={colors.ion}
+          />
+          <StatCard
+            label="Incidents ready"
+            value={stats.completed.toLocaleString()}
+            sub="AI summary and graph available"
+            accent={colors.verified}
+            valueColor={colors.verified}
+          />
+          <StatCard
+            label="Active scans"
+            value={stats.active.toLocaleString()}
+            sub="polling near real time"
+            accent={severityColor.high}
+          />
+          <StatCard
+            label="Stopped before incident"
+            value={stats.stopped.toLocaleString()}
+            sub="not confirmed for this org"
+            accent={severityColor.medium}
+          />
+        </StatGrid>
+      )}
 
       <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", xl: "0.9fr 1.1fr" }, gap: 2 }}>
         <Panel title="Upload raw paste" meta="TXT · ONE-SHOT">
@@ -996,29 +1308,76 @@ export default function UploadPasteDumpPage() {
               placeholder="Example: suspicious marketplace paste"
               fullWidth
             />
-            <Button
-              component="label"
-              variant="outlined"
-              startIcon={<FileText size={16} />}
-              sx={{ justifyContent: "flex-start" }}
-            >
-              {file ? file.name : "Choose .txt file"}
-              <input
-                ref={fileRef}
-                hidden
-                type="file"
-                accept=".txt,text/plain"
-                onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-              />
-            </Button>
+            <Box>
+              <Button
+                component="label"
+                variant="outlined"
+                fullWidth
+                startIcon={<FileText size={16} />}
+                sx={{
+                  justifyContent: "flex-start",
+                  ...(fileError
+                    ? {
+                        borderColor: alpha(severityColor.critical, 0.6),
+                        color: severityColor.critical,
+                      }
+                    : null),
+                }}
+              >
+                {file ? file.name : "Choose .txt file"}
+                <input
+                  ref={fileRef}
+                  hidden
+                  type="file"
+                  accept=".txt,text/plain"
+                  onChange={(event) => handleFileChange(event.target.files?.[0] ?? null)}
+                />
+              </Button>
+              <Typography
+                sx={{
+                  mt: 0.7,
+                  fontSize: 11,
+                  lineHeight: 1.5,
+                  color: fileError ? severityColor.critical : colors.text3,
+                }}
+              >
+                {fileError
+                  ? fileError
+                  : file
+                    ? `${formatBytes(file.size)} · limit ${MANUAL_UPLOAD_MAX_LABEL}`
+                    : `Plain .txt, up to ${MANUAL_UPLOAD_MAX_LABEL}.`}
+              </Typography>
+            </Box>
+            {/* The label says why the button is dead rather than leaving the
+              * analyst to guess. "Loading workspace" and "Uploading" are
+              * different states and must not share wording — one of them means
+              * their file is in flight. */}
             <Button
               variant="contained"
-              startIcon={isUploading ? <Loader2 size={16} className="spin" /> : <UploadCloud size={16} />}
+              startIcon={
+                isUploading || isBootstrapping
+                  ? <Loader2 size={16} className="spin" />
+                  : <UploadCloud size={16} />
+              }
               disabled={!canUpload}
               onClick={() => void handleUpload()}
             >
-              {isUploading ? "Uploading & starting scan" : "Upload & Run Leak Scan"}
+              {isBootstrapping
+                ? "Loading workspace…"
+                : isUploading
+                  ? "Uploading & starting scan"
+                  : "Upload & Run Leak Scan"}
             </Button>
+            {isUploading && (
+              <LinearProgress
+                sx={{
+                  height: 3,
+                  borderRadius: 3,
+                  backgroundColor: alpha(colors.ion, 0.18),
+                  "& .MuiLinearProgress-bar": { backgroundColor: colors.ion },
+                }}
+              />
+            )}
             <Typography sx={{ color: colors.text3, fontSize: 11, lineHeight: 1.55 }}>
               This does not resume the five-minute crawler/ingest schedule. It only submits
               one manual ingest run for the selected organization.
@@ -1026,8 +1385,13 @@ export default function UploadPasteDumpPage() {
           </Stack>
         </Panel>
 
-        <Panel title="Recent paste-dump runs" meta={`${uploads.length} RUNS`}>
-          {uploads.length === 0 ? (
+        <Panel
+          title="Recent paste-dump runs"
+          meta={isBootstrapping ? "LOADING" : `${uploads.length} RUNS`}
+        >
+          {isBootstrapping ? (
+            <UploadListSkeleton rows={4} />
+          ) : uploads.length === 0 ? (
             <Typography sx={{ color: colors.text2, fontSize: 12 }}>
               No manual paste uploads yet for this organization.
             </Typography>
@@ -1069,28 +1433,65 @@ export default function UploadPasteDumpPage() {
         </Panel>
       </Box>
 
-      <Panel title="Live pipeline flow" meta={selectedUploadId ?? "NO UPLOAD SELECTED"}>
-        {selected ? (
+      <Panel
+        title="Live pipeline flow"
+        meta={
+          hasNoUploads
+            ? "AWAITING FIRST UPLOAD"
+            : selectedUploadId ?? "NO UPLOAD SELECTED"
+        }
+      >
+        {isDetailLoading ? (
+          <ProgressRailSkeleton />
+        ) : selected ? (
           <ProgressRail
             stages={selected.stages}
             selectedStageId={selectedStageId}
             onSelectStage={setSelectedStageId}
           />
         ) : (
-          <Typography sx={{ color: colors.text2, fontSize: 12 }}>
-            Upload or select a paste dump to watch L0–L4 progress.
-          </Typography>
+          // Nothing has been uploaded yet, so the rail is shown dimmed and
+          // inert rather than replaced by a sentence. The seven stage names are
+          // the most useful thing on this page for someone who has not run one
+          // before — they say what is about to happen — and keeping them in
+          // place means the panel does not change shape on the first upload,
+          // it just lights up.
+          <Stack gap={1.4}>
+            <ProgressRail
+              stages={IDLE_STAGES}
+              selectedStageId={selectedStageId}
+              onSelectStage={setSelectedStageId}
+              disabled
+            />
+            <Typography sx={{ color: colors.text3, fontSize: 11.5, lineHeight: 1.55 }}>
+              {hasNoUploads
+                ? "Upload a paste dump to watch it move through these seven stages."
+                : "Select a run from Recent paste-dump runs to inspect its stages."}
+            </Typography>
+          </Stack>
         )}
       </Panel>
 
-      <UploadLogs stage={selectedStage} lines={logLines} />
+      {isDetailLoading ? (
+        <UploadLogsSkeleton lines={3} />
+      ) : (
+        <UploadLogs stage={selectedStage} lines={logLines} />
+      )}
 
-      {selected && (
-        <UploadResult
-          data={selected}
-          onOpenIncident={(incidentKey) => router.push(`/leaks/${incidentKey}`)}
-          onOpenGraph={(incidentKey) => router.push(`/graph?incidentKey=${incidentKey}`)}
-        />
+      {/* Sketched during bootstrap as well as on a selection change: an
+        * organization that has run an upload before will have one selected the
+        * moment the list lands, and the panel appearing empty first would be a
+        * worse answer than its own outline. */}
+      {isDetailLoading ? (
+        <UploadResultSkeleton />
+      ) : (
+        selected && (
+          <UploadResult
+            data={selected}
+            onOpenIncident={(incidentKey) => router.push(`/leaks/${incidentKey}`)}
+            onOpenGraph={(incidentKey) => router.push(`/graph?incidentKey=${incidentKey}`)}
+          />
+        )
       )}
 
       <style jsx global>{`

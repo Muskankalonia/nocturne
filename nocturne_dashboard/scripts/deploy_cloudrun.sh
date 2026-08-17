@@ -139,6 +139,10 @@ ENV_VARS+="@NOCTURNE_DEMO_PASSWORD_SUFFIX=$(read_env NOCTURNE_DEMO_PASSWORD_SUFF
 ENV_VARS+="@NOCTURNE_CONSOLE_URL=${CONSOLE_URL}"
 ENV_VARS+="@FIREBASE_PROJECT_ID=${PROJECT_ID}"
 ENV_VARS+="@FIREBASE_MAIL_COLLECTION=$(read_env FIREBASE_MAIL_COLLECTION)"
+# Bucket for manual paste-dump uploads. require_env rather than read_env: an
+# empty value here does not fail the deploy, it ships a console whose upload
+# button returns a configuration error, which is a far worse way to find out.
+ENV_VARS+="@NOCTURNE_MANUAL_UPLOAD_BUCKET=$(require_env NOCTURNE_MANUAL_UPLOAD_BUCKET)"
 ENV_VARS="^@^${ENV_VARS}"
 
 echo "==> building and deploying (Cloud Build compiles remotely; no local Docker needed)"

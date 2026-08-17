@@ -5,6 +5,7 @@ import { applicationDefault } from "firebase-admin/app";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
+import { manualUploadRejection } from "@/lib/manual-upload";
 import { organizations, users } from "@/mocks/organizations";
 import { copyManualUploadObject, nocturneBackend } from "@/server/nocturne-backend";
 import { invalidateQueryCache } from "@/server/query-cache";
@@ -24,7 +25,6 @@ const RESPONSE_HEADERS = {
   Vary: "Cookie",
 };
 const ORG_ID_PATTERN = /^[a-z0-9]+(?:_[a-z0-9]+)*$/;
-const MAX_TEXT_BYTES = 2 * 1024 * 1024;
 const MANUAL_SOURCE = "manual_upload";
 
 function unauthorized() {
@@ -121,22 +121,47 @@ function safeTitle(value: FormDataEntryValue | null, fallback: string): string {
   return title.slice(0, 180) || fallback;
 }
 
+/**
+ * A deployment problem, not a runtime one: the server is missing a bucket or a
+ * credential, and no amount of retrying will help. Kept distinct from the
+ * generic failure below so the analyst is told to fetch an administrator rather
+ * than told to try again, and so the response carries 500 rather than 503.
+ */
+class UploadConfigError extends Error {}
+
 function requireBucket(): string {
   const bucket =
     process.env.NOCTURNE_MANUAL_UPLOAD_BUCKET?.trim()
     || process.env.GCS_BUCKET?.trim()
     || process.env.NOCTURNE_BUCKET?.trim();
   if (!bucket) {
-    throw new Error(
-      "Set NOCTURNE_MANUAL_UPLOAD_BUCKET, GCS_BUCKET, or NOCTURNE_BUCKET for paste uploads.",
+    throw new UploadConfigError(
+      "This server has no upload bucket configured. Set "
+      + "NOCTURNE_MANUAL_UPLOAD_BUCKET, GCS_BUCKET, or NOCTURNE_BUCKET.",
     );
   }
   return bucket;
 }
 
 async function accessToken(): Promise<string> {
-  const token = await applicationDefault().getAccessToken();
-  if (!token.access_token) throw new Error("Google ADC did not return an access token.");
+  let token;
+  try {
+    token = await applicationDefault().getAccessToken();
+  } catch (error) {
+    // Almost always absent or expired Application Default Credentials, which
+    // reads as a mysterious outage unless it is named.
+    throw new UploadConfigError(
+      "This server could not obtain Google credentials for the upload bucket. "
+      + `Application Default Credentials are missing or expired (${
+        error instanceof Error ? error.message : "unknown error"
+      }).`,
+    );
+  }
+  if (!token.access_token) {
+    throw new UploadConfigError(
+      "Google Application Default Credentials returned no access token.",
+    );
+  }
   return token.access_token;
 }
 
@@ -212,16 +237,13 @@ export async function POST(request: Request) {
       { status: 400, headers: RESPONSE_HEADERS },
     );
   }
-  if (!file.name.toLowerCase().endsWith(".txt")) {
+  // Same rule the form applies, from the same module. A caller who skips the
+  // form still hits it here, which is the check that actually holds.
+  const rejection = manualUploadRejection(file);
+  if (rejection) {
     return NextResponse.json(
-      { error: "Upload a plain .txt paste dump." },
-      { status: 400, headers: RESPONSE_HEADERS },
-    );
-  }
-  if (file.size < 1 || file.size > MAX_TEXT_BYTES) {
-    return NextResponse.json(
-      { error: `Paste dump must be between 1 byte and ${MAX_TEXT_BYTES} bytes.` },
-      { status: 400, headers: RESPONSE_HEADERS },
+      { error: rejection.reason },
+      { status: rejection.status, headers: RESPONSE_HEADERS },
     );
   }
 
@@ -314,6 +336,16 @@ export async function POST(request: Request) {
       "[nocturne-manual-upload] failed:",
       error instanceof Error ? error.message : "unknown server error",
     );
+    // A misconfigured server and an unreachable one need different answers:
+    // retrying fixes the second and never fixes the first. The config text is
+    // curated in UploadConfigError rather than echoed from an arbitrary
+    // exception, so nothing internal leaks into the response.
+    if (error instanceof UploadConfigError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: 500, headers: RESPONSE_HEADERS },
+      );
+    }
     return NextResponse.json(
       { error: "Could not upload the paste dump and start ingestion." },
       { status: 503, headers: RESPONSE_HEADERS },
