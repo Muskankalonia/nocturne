@@ -31,7 +31,6 @@ export const navigation: NavItem[] = [
     children: [
       { label: "Tenant Leaderboard", href: "/admin/fleet" },
       { label: "Cross-Tenant Actors", href: "/admin/fleet/actors" },
-      { label: "Fleet Cost & Usage", href: "/admin/fleet/cost" },
     ],
   },
   {
