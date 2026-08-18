@@ -5,6 +5,7 @@ import snowflake, {
 } from "snowflake-sdk";
 
 import { organizations as consoleTenants } from "@/mocks/organizations";
+import type { LiveScanCascadeCounts } from "@/lib/live-scan";
 import {
   getDemoBreachMonitor,
   getDemoCommandCenter,
@@ -4152,6 +4153,156 @@ function shouldAdvanceManualUpload(status: ManualUploadStatus | null): boolean {
   if (status.incidentKey && status.insightAiStatus !== "success") return true;
   if (status.l4Complete && !status.incidentKey) return false;
   return false;
+}
+
+/**
+ * How far one crawler batch has travelled through the L0-L4 cascade.
+ *
+ * The read-side twin of `VW_MANUAL_UPLOAD_STATUS`, joined the same way — the
+ * four dynamic tables all key on (ORG_ID, DEDUPE_KEY) — but grouped by RUN_ID
+ * and returning counts instead of booleans, because a crawl is many pages and
+ * they do not move through the cascade together.
+ *
+ * Kept inline rather than added as a DASHBOARD view for the same reason
+ * `getManualIngestDiagnostic` is: it is a fleet-admin diagnostic keyed on a
+ * Cloud Run execution, not a tenant-scoped read, and inlining it means the live
+ * scan page works the moment the console deploys, with no Snowflake DDL step.
+ *
+ * Every count is a `COUNT(DISTINCT ... DEDUPE_KEY)` over a deduplicated page
+ * set. Mirrors of the same page share a dedupe key and must not each add one to
+ * the denominator, or a crawl that found the same dump on four marketplaces
+ * would report "4 of 7 screened" forever.
+ *
+ * Read-only and free: this touches no AI function and refreshes no dynamic
+ * table. It reports where the batch has reached; it does not push it along.
+ */
+export async function getCrawlRunCascade(
+  runId: string,
+): Promise<LiveScanCascadeCounts | null> {
+  if (!/^[a-z0-9][a-z0-9-]{0,127}$/.test(runId)) {
+    throw new Error("Crawler run id does not match the expected Cloud Run execution format.");
+  }
+
+  // The same eligibility test VW_MANUAL_UPLOAD_STATUS applies at L2_ELIGIBLE.
+  // Duplicated rather than shared because the view cannot be called from a CTE;
+  // if one changes the other has to follow.
+  const l2Eligible = `(
+    CLASSIFICATION.RELATIONSHIP_LABEL = 'target_data_leak'
+    OR (
+      CLASSIFICATION.RELATIONSHIP_LABEL = 'target_mentioned_no_leak'
+      AND COALESCE(CLASSIFICATION.TARGET_MATCH_SCORE, 0) > 0
+      AND (
+        COALESCE(CLASSIFICATION.LEAK_MATCHES_SCANNED, 0) > 0
+        OR COALESCE(CLASSIFICATION.STRONG_INDICATOR_COUNT, 0) > 0
+        OR COALESCE(CLASSIFICATION.MEDIUM_INDICATOR_COUNT, 0) > 0
+      )
+    )
+  )`;
+
+  const rows = await optionalDashboardQuery(
+    "crawl run cascade",
+    `WITH RUN_PAGES AS (
+       SELECT DISTINCT ORG_ID, DEDUPE_KEY
+       FROM NOCTURNE.RAW.CRAWL_PAGES
+       WHERE RUN_ID = ?
+         AND SOURCE <> 'manual_upload'
+         AND DEDUPE_KEY IS NOT NULL
+     ),
+     META AS (
+       SELECT
+         MAX(ORG_ID) AS ORG_ID,
+         COUNT(*) AS PAGES_RAW
+       FROM RUN_PAGES
+     ),
+     INGEST AS (
+       SELECT
+         TO_VARCHAR(MAX(_INGESTED_AT), 'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM')
+           AS LAST_UPDATED_AT
+       FROM NOCTURNE.RAW.CRAWL_PAGES
+       WHERE RUN_ID = ?
+         AND SOURCE <> 'manual_upload'
+     ),
+     L0 AS (
+       SELECT COUNT(DISTINCT PAGE.DEDUPE_KEY) AS PAGES_L0
+       FROM RUN_PAGES AS PAGE
+       INNER JOIN NOCTURNE.RAW.DT_REGEX_INDICATORS AS INDICATORS
+         ON INDICATORS.ORG_ID = PAGE.ORG_ID
+         AND INDICATORS.DEDUPE_KEY = PAGE.DEDUPE_KEY
+     ),
+     L1 AS (
+       SELECT
+         COUNT(DISTINCT PAGE.DEDUPE_KEY) AS PAGES_L1,
+         COUNT(DISTINCT IFF(${l2Eligible}, PAGE.DEDUPE_KEY, NULL))
+           AS PAGES_L1_ELIGIBLE
+       FROM RUN_PAGES AS PAGE
+       INNER JOIN NOCTURNE.RAW.DT_PAGE_RELATIONSHIP_CLASSIFICATION AS CLASSIFICATION
+         ON CLASSIFICATION.ORG_ID = PAGE.ORG_ID
+         AND CLASSIFICATION.DEDUPE_KEY = PAGE.DEDUPE_KEY
+     ),
+     L2 AS (
+       SELECT
+         COUNT(DISTINCT PAGE.DEDUPE_KEY) AS PAGES_L2,
+         COUNT(DISTINCT IFF(ROUTING.L2_ROUTE = 'target_confirmed', PAGE.DEDUPE_KEY, NULL))
+           AS PAGES_L3
+       FROM RUN_PAGES AS PAGE
+       INNER JOIN NOCTURNE.RAW.DT_L2_ROUTING AS ROUTING
+         ON ROUTING.ORG_ID = PAGE.ORG_ID
+         AND ROUTING.DEDUPE_KEY = PAGE.DEDUPE_KEY
+     ),
+     L4 AS (
+       SELECT
+         COUNT(DISTINCT SEVERITY.INCIDENT_KEY) AS INCIDENTS_L4,
+         COUNT(DISTINCT IFF(
+           INCIDENT.INSIGHT_AI_STATUS = 'success',
+           SEVERITY.INCIDENT_KEY,
+           NULL
+         )) AS INCIDENTS_BRIEFED
+       FROM RUN_PAGES AS PAGE
+       INNER JOIN NOCTURNE.RAW.DT_L4_DOCUMENT_SEVERITY AS SEVERITY
+         ON SEVERITY.ORG_ID = PAGE.ORG_ID
+         AND SEVERITY.DEDUPE_KEY = PAGE.DEDUPE_KEY
+       LEFT JOIN NOCTURNE.DASHBOARD.VW_INCIDENTS AS INCIDENT
+         ON INCIDENT.ORG_ID = SEVERITY.ORG_ID
+         AND INCIDENT.INCIDENT_KEY = SEVERITY.INCIDENT_KEY
+       WHERE SEVERITY.INCIDENT_KEY IS NOT NULL
+     )
+     SELECT
+       META.ORG_ID,
+       META.PAGES_RAW,
+       INGEST.LAST_UPDATED_AT,
+       L0.PAGES_L0,
+       L1.PAGES_L1,
+       L1.PAGES_L1_ELIGIBLE,
+       L2.PAGES_L2,
+       L2.PAGES_L3,
+       L4.INCIDENTS_L4,
+       L4.INCIDENTS_BRIEFED
+     FROM META, INGEST, L0, L1, L2, L4`,
+    [runId, runId],
+  );
+
+  const row = rows[0];
+  if (!row) return null;
+
+  const pagesRaw = numberValue(rowField(row, "PAGES_RAW"));
+  // Nothing in RAW yet is not the same as a cascade that ran and found nothing.
+  // The caller renders null as a waiting rail and zeroes as a finished one.
+  if (pagesRaw === 0) return null;
+
+  return {
+    runId,
+    orgId: nullableString(rowField(row, "ORG_ID")),
+    pagesRaw,
+    pagesL0: numberValue(rowField(row, "PAGES_L0")),
+    pagesL1: numberValue(rowField(row, "PAGES_L1")),
+    pagesL1Eligible: numberValue(rowField(row, "PAGES_L1_ELIGIBLE")),
+    pagesL2: numberValue(rowField(row, "PAGES_L2")),
+    pagesL3: numberValue(rowField(row, "PAGES_L3")),
+    incidentsL4: numberValue(rowField(row, "INCIDENTS_L4")),
+    incidentsBriefed: numberValue(rowField(row, "INCIDENTS_BRIEFED")),
+    lastUpdatedAt: nullableString(rowField(row, "LAST_UPDATED_AT")),
+    fetchedAt: new Date().toISOString(),
+  };
 }
 
 /**
