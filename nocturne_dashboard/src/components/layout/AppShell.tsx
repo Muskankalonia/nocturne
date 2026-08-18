@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { Box, LinearProgress, Skeleton, Stack, alpha } from "@mui/material";
 import { useAuth } from "@/contexts/AuthContext";
 import { PostureProvider, usePosture } from "@/contexts/PostureContext";
 import { colors, gradients, layout } from "@/theme/tokens";
 import { StatGridSkeleton } from "@/components/ui/Skeletons";
+import { AssistantDrawer, UmbraFab } from "@/components/assistant/AssistantDrawer";
 import Header from "./Header";
 import Sidebar from "./Sidebar";
 
@@ -98,6 +99,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
 function Chrome({ children }: { children: ReactNode }) {
   const { openCriticalCount, isRefreshing } = usePosture();
+  const [assistantOpen, setAssistantOpen] = useState(false);
 
   return (
     <Box sx={{ display: "flex", minHeight: "100vh" }}>
@@ -151,6 +153,10 @@ function Chrome({ children }: { children: ReactNode }) {
           {children}
         </Box>
       </Box>
+
+      {/* Umbra AI — floating button + drawer, outside header to avoid backdropFilter containing block */}
+      <UmbraFab onClick={() => setAssistantOpen(true)} visible={!assistantOpen} />
+      <AssistantDrawer open={assistantOpen} onClose={() => setAssistantOpen(false)} />
     </Box>
   );
 }
