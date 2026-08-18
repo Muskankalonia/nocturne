@@ -27,6 +27,8 @@ import {
 import { colors, fonts, layout as layoutTokens, severityColor } from "@/theme/tokens";
 import type { GraphEdge, GraphNode } from "@/types";
 import type {
+  CommandCenterGraphFilter,
+  CommandCenterGraphFilterType,
   KnowledgeGraphResponse,
   KnowledgeGraphView,
 } from "@/types/dashboard";
@@ -51,8 +53,52 @@ const typeColor: Record<string, string> = {
   location: colors.informational,
 };
 
+const commandCenterNodeFilterTypes = new Set<CommandCenterGraphFilterType>([
+  "actor_alias",
+  "claim",
+  "data_asset",
+  "domain",
+  "marketplace",
+  "organization",
+  "product",
+]);
+
 function defaultLayoutForView(view: KnowledgeGraphView): GraphLayout {
   return view === "actors" ? "spine" : "force";
+}
+
+function compactGraphFilterLabel(value: string): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= 96) return normalized;
+  return `${normalized.slice(0, 93)}...`;
+}
+
+function commandCenterFilterForNode(node: GraphNode): CommandCenterGraphFilter | null {
+  if (!commandCenterNodeFilterTypes.has(node.nodeType as CommandCenterGraphFilterType)) {
+    return null;
+  }
+
+  const label = node.nodeType === "claim"
+    ? (node.description || node.displayName)
+    : node.displayName;
+
+  return {
+    filterType: node.nodeType as CommandCenterGraphFilterType,
+    filterKey: node.nodeKey,
+    filterLabel: compactGraphFilterLabel(label),
+  };
+}
+
+function commandCenterFilterForEdge(edge: GraphEdge): CommandCenterGraphFilter {
+  const evidenceLabel = edge.sampleEvidenceText
+    ? compactGraphFilterLabel(edge.sampleEvidenceText)
+    : `${edge.sourceType} ${edge.edgeType} ${edge.targetType}`;
+
+  return {
+    filterType: "edge",
+    filterKey: edge.graphEdgeKey,
+    filterLabel: `${edge.edgeType.toLowerCase()} · ${evidenceLabel}`,
+  };
 }
 
 const configuredRefreshMs = Number(
@@ -200,8 +246,44 @@ export default function GraphPage() {
   const cutoff = stops.length > 1 ? (stops[Math.min(stopIndex, stops.length - 1)] ?? null) : null;
   const revealed = payload ? revealedEdgeCount(payload, cutoff) : 0;
 
-  const handleNode = useCallback((n: GraphNode | null) => setNode(n), []);
-  const handleEdge = useCallback((e: GraphEdge | null) => setEdge(e), []);
+  const selectedCommandCenterFilter = useMemo(() => {
+    if (edge) return commandCenterFilterForEdge(edge);
+    if (node) return commandCenterFilterForNode(node);
+    return null;
+  }, [edge, node]);
+
+  const openCommandCenterFilter = useCallback((filter = selectedCommandCenterFilter) => {
+    if (!filter || !session || session.scope.kind !== "org") return;
+
+    const query = new URLSearchParams({
+      graphFilterType: filter.filterType,
+      graphFilterKey: filter.filterKey,
+      graphFilterLabel: filter.filterLabel ?? "",
+    });
+    if (session.user.role === "SUPER_ADMIN") {
+      query.set("orgId", session.scope.orgId);
+    }
+
+    router.push(`/?${query.toString()}`);
+  }, [router, selectedCommandCenterFilter, session]);
+
+  const activateNodeFilter = useCallback((activatedNode: GraphNode) => {
+    const filter = commandCenterFilterForNode(activatedNode);
+    if (filter) openCommandCenterFilter(filter);
+  }, [openCommandCenterFilter]);
+
+  const activateEdgeFilter = useCallback((activatedEdge: GraphEdge) => {
+    openCommandCenterFilter(commandCenterFilterForEdge(activatedEdge));
+  }, [openCommandCenterFilter]);
+
+  const handleNode = useCallback((n: GraphNode | null) => {
+    setNode(n);
+    setEdge(null);
+  }, []);
+  const handleEdge = useCallback((e: GraphEdge | null) => {
+    setEdge(e);
+    setNode(null);
+  }, []);
   const handleLayoutChange = useCallback((next: GraphLayout | null) => {
     if (!next || next === layout) return;
     setNode(null);
@@ -227,10 +309,10 @@ export default function GraphPage() {
 
   const title = view === "actors" ? "Actor Network" : "Knowledge Graph";
   const subtitle = view === "actors"
-    ? "Actor-centric aggregate: who made claims, where they listed them, and which monitored assets they target."
+    ? "Actor-centric aggregate: click an actor, claim, or edge, then filter Command Center to that exact org-scoped entity."
     : requestedIncidentKey
-      ? "One promoted incident component. Click a node for resolution details or an edge for its grounded evidence."
-      : "Organization-wide incident graph: claim-level evidence components across every confirmed target incident.";
+      ? "One promoted incident component. Click a node or edge, then filter Command Center to related incidents."
+      : "Organization-wide incident graph: click any claim, actor, domain, marketplace, or edge to filter Command Center.";
   const headerRight = (
     <Stack direction="row" gap={1} alignItems="center">
       {data && (
@@ -407,6 +489,8 @@ export default function GraphPage() {
               payload={payload}
               onSelectNode={handleNode}
               onSelectEdge={handleEdge}
+              onActivateNode={activateNodeFilter}
+              onActivateEdge={activateEdgeFilter}
               layout={layout}
               discoveredBefore={cutoff}
               height="100%"
@@ -446,6 +530,7 @@ export default function GraphPage() {
                       "Drag a node to rearrange",
                       "Click a node → resolution detail",
                       "Click an edge → evidence quote",
+                      "Filter button → Command Center rows for that entity",
                       "Spine ribbon thickness → corroboration",
                       "Play the timeline → discovery order",
                     ].map((t) => (
@@ -489,6 +574,17 @@ export default function GraphPage() {
                   <Kv k="First seen" v={new Date(edge.firstSeen).toLocaleString()} />
                   <Kv k="Last seen" v={new Date(edge.lastSeen).toLocaleString()} />
                 </Stack>
+
+                {selectedCommandCenterFilter && (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    endIcon={<ExternalLink size={12} />}
+                    onClick={() => openCommandCenterFilter()}
+                  >
+                    Filter Command Center by this edge
+                  </Button>
+                )}
               </Stack>
             )}
 
@@ -559,6 +655,17 @@ export default function GraphPage() {
                     </Box>
                     .
                   </DataGapNote>
+                )}
+
+                {selectedCommandCenterFilter && (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    endIcon={<ExternalLink size={12} />}
+                    onClick={() => openCommandCenterFilter()}
+                  >
+                    Filter Command Center by this node
+                  </Button>
                 )}
               </Stack>
             )}

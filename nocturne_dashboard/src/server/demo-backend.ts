@@ -224,6 +224,7 @@ export function getDemoCommandCenter(): CommandCenterResponse {
     totals,
     cascade: orgCascade,
     incidents,
+    appliedGraphFilter: null,
     lastUpdatedAt: now(),
     fetchedAt: now(),
   });

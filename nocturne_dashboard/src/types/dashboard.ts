@@ -203,6 +203,24 @@ export interface KnowledgeGraphResponse extends GraphPayload {
   fetchedAt: string;
 }
 
+/** Entity kinds that can filter Command Center from a graph click. */
+export type CommandCenterGraphFilterType =
+  | "actor_alias"
+  | "claim"
+  | "data_asset"
+  | "domain"
+  | "edge"
+  | "marketplace"
+  | "organization"
+  | "product";
+
+/** Server-sanitized graph selection used to filter incident lists. */
+export interface CommandCenterGraphFilter {
+  filterType: CommandCenterGraphFilterType;
+  filterKey: string;
+  filterLabel: string | null;
+}
+
 export interface ThreatActorsSummary {
   actorCount: number;
   corroboratedClaimCount: number;
@@ -306,6 +324,7 @@ export interface CommandCenterResponse {
   totals: CommandCenterMetrics;
   cascade: CascadeStage[];
   incidents: DashboardIncident[];
+  appliedGraphFilter: CommandCenterGraphFilter | null;
   lastUpdatedAt: string | null;
   fetchedAt: string;
 }

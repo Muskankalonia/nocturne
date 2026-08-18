@@ -379,6 +379,111 @@ CREATE OR REPLACE VIEW NOCTURNE.DASHBOARD.VW_KNOWLEDGE_GRAPH_EDGES AS
   FROM NOCTURNE.DASHBOARD.VW_INCIDENT_GRAPH_EDGES
   GROUP BY ORG_ID, SOURCE_KEY, EDGE_TYPE, TARGET_KEY;
 
+-- Graph filter index powers interactive drill-down from Knowledge Graph and
+-- Actor Network into Command Center. Every row carries ORG_ID and every lookup
+-- must join on ORG_ID, preventing graph selections from crossing tenant scope.
+-- Contact-channel values are intentionally excluded from filter labels/URLs.
+CREATE OR REPLACE VIEW NOCTURNE.DASHBOARD.VW_GRAPH_FILTER_INDEX AS
+  WITH NODE_FILTERS AS (
+    SELECT
+      ORG_ID,
+      NODE_TYPE AS FILTER_TYPE,
+      NODE_KEY AS FILTER_KEY,
+      LEFT(DISPLAY_NAME, 240) AS FILTER_LABEL,
+      INCIDENT_KEY,
+      IFF(NODE_TYPE = 'claim', NODE_KEY, NULL) AS CLAIM_KEY,
+      NULL::VARCHAR AS GRAPH_EDGE_KEY,
+      NODE_KEY,
+      NODE_TYPE,
+      NULL::VARCHAR AS EDGE_TYPE,
+      GRAPH_SCOPE,
+      FIRST_SEEN,
+      LAST_SEEN
+    FROM NOCTURNE.DASHBOARD.VW_INCIDENT_GRAPH_NODES
+    WHERE NODE_TYPE IN (
+      'actor_alias',
+      'claim',
+      'data_asset',
+      'domain',
+      'marketplace',
+      'organization',
+      'product'
+    )
+  ),
+  EDGE_BASE AS (
+    SELECT
+      ORG_ID,
+      INCIDENT_KEY,
+      GRAPH_EDGE_KEY,
+      SHA2(ORG_ID || '|' || SOURCE_KEY || '|' || EDGE_TYPE || '|' || TARGET_KEY)
+        AS AGGREGATE_GRAPH_EDGE_KEY,
+      SOURCE_KEY,
+      SOURCE_KIND,
+      SOURCE_TYPE,
+      EDGE_TYPE,
+      TARGET_KEY,
+      TARGET_KIND,
+      TARGET_TYPE,
+      GRAPH_SCOPE,
+      FIRST_SEEN,
+      LAST_SEEN
+    FROM NOCTURNE.DASHBOARD.VW_INCIDENT_GRAPH_EDGES
+  ),
+  EDGE_FILTERS AS (
+    SELECT
+      ORG_ID,
+      'edge' AS FILTER_TYPE,
+      GRAPH_EDGE_KEY AS FILTER_KEY,
+      LEFT(
+        COALESCE(SOURCE_TYPE, SOURCE_KIND, 'source')
+          || ' ' || EDGE_TYPE || ' '
+          || COALESCE(TARGET_TYPE, TARGET_KIND, 'target'),
+        240
+      ) AS FILTER_LABEL,
+      INCIDENT_KEY,
+      CASE
+        WHEN SOURCE_KIND = 'claim' THEN SOURCE_KEY
+        WHEN TARGET_KIND = 'claim' THEN TARGET_KEY
+        ELSE NULL
+      END AS CLAIM_KEY,
+      GRAPH_EDGE_KEY,
+      NULL::VARCHAR AS NODE_KEY,
+      NULL::VARCHAR AS NODE_TYPE,
+      EDGE_TYPE,
+      GRAPH_SCOPE,
+      FIRST_SEEN,
+      LAST_SEEN
+    FROM EDGE_BASE
+    UNION ALL
+    SELECT
+      ORG_ID,
+      'edge' AS FILTER_TYPE,
+      AGGREGATE_GRAPH_EDGE_KEY AS FILTER_KEY,
+      LEFT(
+        COALESCE(SOURCE_TYPE, SOURCE_KIND, 'source')
+          || ' ' || EDGE_TYPE || ' '
+          || COALESCE(TARGET_TYPE, TARGET_KIND, 'target'),
+        240
+      ) AS FILTER_LABEL,
+      INCIDENT_KEY,
+      CASE
+        WHEN SOURCE_KIND = 'claim' THEN SOURCE_KEY
+        WHEN TARGET_KIND = 'claim' THEN TARGET_KEY
+        ELSE NULL
+      END AS CLAIM_KEY,
+      GRAPH_EDGE_KEY,
+      NULL::VARCHAR AS NODE_KEY,
+      NULL::VARCHAR AS NODE_TYPE,
+      EDGE_TYPE,
+      GRAPH_SCOPE,
+      FIRST_SEEN,
+      LAST_SEEN
+    FROM EDGE_BASE
+  )
+  SELECT * FROM NODE_FILTERS
+  UNION ALL
+  SELECT * FROM EDGE_FILTERS;
+
 -- Actor credibility is evidence support, not probability or threat severity.
 -- Marketplace names are safe graph context. Contact-channel values stay in
 -- Snowflake; the dashboard receives only their count.
