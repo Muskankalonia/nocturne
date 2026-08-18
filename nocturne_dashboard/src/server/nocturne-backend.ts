@@ -151,6 +151,18 @@ export interface BreachMonitorAccess {
   includeExternalContext?: boolean;
 }
 
+export interface LiveCrawlerIngestHandoff {
+  copiedAt: string;
+  runId: string;
+  orgId: string | null;
+  sourcePattern: string;
+  rowsLoaded: number;
+  rawRows: number;
+  rawFiles: number;
+  lastRawIngestedAt: string | null;
+  detail: string;
+}
+
 const SUMMARY_COLUMNS = `
   ORG_ID,
   ORGANIZATION_NAME,
@@ -3232,6 +3244,10 @@ function snowflakeStringLiteral(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
+function escapeRegexLiteral(value: string): string {
+  return value.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+}
+
 function manualUploadStageFile(objectPath: string): string {
   const prefix = "raw/crawls/";
   if (!objectPath.startsWith(prefix)) {
@@ -3246,6 +3262,44 @@ function manualUploadStageFile(objectPath: string): string {
     throw new Error("Manual upload object path does not match the expected isolated path.");
   }
   return stageFile;
+}
+
+function liveCrawlerRunStagePattern(
+  runId: string,
+  outputPath?: string | null,
+): { orgId: string | null; pattern: string } {
+  if (!/^[a-z0-9][a-z0-9-]{0,127}$/.test(runId)) {
+    throw new Error("Crawler run id does not match the expected Cloud Run execution format.");
+  }
+
+  const escapedRunId = escapeRegexLiteral(runId);
+  const normalizedPath = outputPath
+    ?.trim()
+    .replace(/^gs:\/\/[^/]+\//, "")
+    .replace(/^\/+/, "");
+  const stageRelativePath = normalizedPath?.startsWith("raw/crawls/")
+    ? normalizedPath.slice("raw/crawls/".length)
+    : normalizedPath;
+  const parsedPath = stageRelativePath?.match(
+    /^org_id=([a-z0-9]+(?:_[a-z0-9]+)*)\/crawl_date=(\d{4}-\d{2}-\d{2})\/run_id=([a-z0-9][a-z0-9-]{0,127})\/task=[0-9]+\/attempt=[0-9]+\/(?:_manifest[.]json|part-[0-9]+[.]jsonl[.]gz)$/,
+  );
+
+  if (!parsedPath) {
+    return {
+      orgId: null,
+      pattern: `.*run_id=${escapedRunId}/task=[0-9]+/attempt=[0-9]+/part-[0-9]+[.]jsonl[.]gz`,
+    };
+  }
+
+  const [, orgId, crawlDate, pathRunId] = parsedPath;
+  if (pathRunId !== runId) {
+    throw new Error("Crawler output path run_id does not match the selected execution.");
+  }
+
+  return {
+    orgId,
+    pattern: `org_id=${orgId}/crawl_date=${crawlDate}/run_id=${escapedRunId}/task=[0-9]+/attempt=[0-9]+/part-[0-9]+[.]jsonl[.]gz`,
+  };
 }
 
 const MANUAL_PIPELINE_REFRESH_ORDER = [
@@ -4098,6 +4152,121 @@ function shouldAdvanceManualUpload(status: ManualUploadStatus | null): boolean {
   if (status.incidentKey && status.insightAiStatus !== "success") return true;
   if (status.l4Complete && !status.incidentKey) return false;
   return false;
+}
+
+/**
+ * Loads one completed Cloud Run crawler execution into RAW without waiting for
+ * the five-minute ingestion scheduler.
+ *
+ * COPY load history keeps this idempotent: if the same part files were already
+ * loaded by the scheduled task or a previous status poll, Snowflake skips them.
+ */
+export async function copyLiveCrawlerRunToRaw(
+  runId: string,
+  outputPath?: string | null,
+): Promise<LiveCrawlerIngestHandoff> {
+  const { orgId, pattern } = liveCrawlerRunStagePattern(runId, outputPath);
+  const rawCountBinds: Binds = orgId ? [runId, orgId] : [runId];
+  const countRawRows = async () => {
+    const rawCountRows = await executeQuery(
+      `SELECT
+         COUNT(*) AS RAW_ROWS,
+         COUNT(DISTINCT _SOURCE_FILE) AS RAW_FILES,
+         TO_VARCHAR(MAX(_INGESTED_AT), 'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM')
+           AS LAST_RAW_INGESTED_AT
+       FROM NOCTURNE.RAW.CRAWL_PAGES
+       WHERE RUN_ID = ?
+         ${orgId ? "AND ORG_ID = ?" : ""}`,
+      rawCountBinds,
+    );
+
+    return {
+      rawRows: nullableNumber(rowField(rawCountRows[0], "RAW_ROWS")) ?? 0,
+      rawFiles: nullableNumber(rowField(rawCountRows[0], "RAW_FILES")) ?? 0,
+      lastRawIngestedAt: nullableString(
+        rowField(rawCountRows[0], "LAST_RAW_INGESTED_AT"),
+      ),
+    };
+  };
+
+  const beforeCopy = await countRawRows();
+  if (beforeCopy.rawRows > 0) {
+    return {
+      copiedAt: new Date().toISOString(),
+      runId,
+      orgId,
+      sourcePattern: pattern,
+      rowsLoaded: 0,
+      rawRows: beforeCopy.rawRows,
+      rawFiles: beforeCopy.rawFiles,
+      lastRawIngestedAt: beforeCopy.lastRawIngestedAt,
+      detail: `COPY loaded ${beforeCopy.rawRows.toLocaleString()} raw page(s) into Snowflake.`,
+    };
+  }
+
+  const rows = await executeQuery(
+    `COPY INTO NOCTURNE.RAW.CRAWL_PAGES (
+       ORG_ID, DOC_ID, DEDUPE_KEY, RUN_ID, SOURCE, QUERY, URL, TITLE,
+       FETCHED_AT, DEPTH, KEYWORDS_MATCHED, LINKS_FOUND,
+       CONTENT_LENGTH, CONTENT_SHA256, RAW_TEXT, SCHEMA_VERSION,
+       _PATH_ORG_ID, _SOURCE_FILE
+     )
+     FROM (
+       SELECT
+         $1:org_id::STRING,
+         $1:doc_id::STRING,
+         $1:dedupe_key::STRING,
+         $1:run_id::STRING,
+         $1:source::STRING,
+         $1:query::STRING,
+         $1:url::STRING,
+         $1:title::STRING,
+         $1:fetched_at::TIMESTAMP_TZ,
+         $1:depth::NUMBER,
+         $1:keywords_matched::ARRAY,
+         $1:links_found::NUMBER,
+         $1:content_length::NUMBER,
+         $1:content_sha256::STRING,
+         $1:raw_text::STRING,
+         $1:schema_version::NUMBER,
+         REGEXP_SUBSTR(
+           METADATA$FILENAME,
+           'org_id=([a-z0-9]+(_[a-z0-9]+)*)',
+           1,
+           1,
+           'e',
+           1
+         ),
+         METADATA$FILENAME
+       FROM @NOCTURNE.RAW.GCS_CRAWL_STAGE
+     )
+     PATTERN = ${snowflakeStringLiteral(pattern)}
+     FILE_FORMAT = (FORMAT_NAME = 'NOCTURNE.RAW.JSONL_GZ_FORMAT')
+     ON_ERROR = 'ABORT_STATEMENT'`,
+    [],
+  );
+
+  const rowsLoaded = rows.reduce((total, row) => {
+    const loaded = nullableNumber(rowField(row, "rows_loaded", "ROWS_LOADED"));
+    return loaded === null ? total : total + loaded;
+  }, 0);
+
+  const { rawRows, rawFiles, lastRawIngestedAt } = await countRawRows();
+
+  return {
+    copiedAt: new Date().toISOString(),
+    runId,
+    orgId,
+    sourcePattern: pattern,
+    rowsLoaded,
+    rawRows,
+    rawFiles,
+    lastRawIngestedAt,
+    detail:
+      rawRows > 0
+        ? `COPY loaded ${rawRows.toLocaleString()} raw page(s) into Snowflake.`
+        : "GCS upload complete, waiting for Snowflake COPY/load history.",
+  };
 }
 
 /**

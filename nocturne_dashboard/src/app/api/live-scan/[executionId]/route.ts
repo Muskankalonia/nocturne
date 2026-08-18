@@ -13,6 +13,7 @@ import {
   fetchCrawlerLogs,
   getCrawlerExecution,
 } from "@/server/crawler-job";
+import { copyLiveCrawlerRunToRaw } from "@/server/nocturne-backend";
 import {
   SESSION_COOKIE_NAME,
   sessionCookieOptions,
@@ -24,6 +25,11 @@ export const dynamic = "force-dynamic";
 
 const RESPONSE_HEADERS = { "Cache-Control": "no-store", Vary: "Cookie" };
 const EXECUTION_ID_PATTERN = /^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$/;
+const GCS_OUTPUT_PATTERN = /\bOutput:\s*(gs:\/\/[^\s]+)/i;
+const handoffPromises = new Map<
+  string,
+  Promise<Awaited<ReturnType<typeof copyLiveCrawlerRunToRaw>>>
+>();
 
 interface LiveScanStatusRouteContext {
   params: Promise<{ executionId: string }>;
@@ -36,6 +42,30 @@ function unauthorized() {
   );
   response.cookies.set(SESSION_COOKIE_NAME, "", { ...sessionCookieOptions, maxAge: 0 });
   return response;
+}
+
+function latestCrawlerOutputPath(logs: { text: string }[]): string | null {
+  for (const line of [...logs].reverse()) {
+    const match = GCS_OUTPUT_PATTERN.exec(line.text);
+    if (match?.[1]) return match[1].replace(/[),.;]+$/, "");
+  }
+  return null;
+}
+
+async function runSnowflakeHandoffOnce(executionId: string, outputPath: string | null) {
+  let handoff = handoffPromises.get(executionId);
+  if (!handoff) {
+    handoff = copyLiveCrawlerRunToRaw(executionId, outputPath).then((result) => {
+      // If the object is visible in GCS but Snowflake has not exposed load
+      // history / rows yet, try again on the next poll rather than caching a
+      // temporary zero forever.
+      if (result.rawRows === 0) handoffPromises.delete(executionId);
+      return result;
+    });
+    handoff.catch(() => handoffPromises.delete(executionId));
+    handoffPromises.set(executionId, handoff);
+  }
+  return handoff;
 }
 
 export async function GET(request: Request, context: LiveScanStatusRouteContext) {
@@ -85,13 +115,47 @@ export async function GET(request: Request, context: LiveScanStatusRouteContext)
       fetchCrawlerLogs(executionId, { since }),
     ]);
 
+    let snowflakeHandoff: Awaited<ReturnType<typeof copyLiveCrawlerRunToRaw>> | null = null;
+    const handoffLogs: LiveScanStatusResponse["handoffLogs"] = [];
+    if (execution.state === "succeeded") {
+      try {
+        snowflakeHandoff = await runSnowflakeHandoffOnce(
+          execution.executionId,
+          latestCrawlerOutputPath(logs),
+        );
+        handoffLogs.push({
+          id:
+            snowflakeHandoff.rawRows > 0
+              ? `snowflake-handoff-${execution.executionId}-loaded`
+              : `snowflake-handoff-${execution.executionId}-waiting`,
+          timestamp: snowflakeHandoff.copiedAt,
+          text: `Snowflake handoff: ${snowflakeHandoff.detail}`,
+          tone: snowflakeHandoff.rawRows > 0 ? "ok" : "ion",
+          stage: snowflakeHandoff.rawRows > 0 ? "handoff" : null,
+        });
+      } catch (handoffError) {
+        handoffLogs.push({
+          id: `snowflake-handoff-${execution.executionId}-failed`,
+          timestamp: new Date().toISOString(),
+          text: `Snowflake handoff failed: ${
+            handoffError instanceof Error ? handoffError.message : "unknown error"
+          }`,
+          tone: "critical",
+          stage: null,
+        });
+      }
+    }
+
+    const stageLogs = handoffLogs.length > 0 ? [...logs, ...handoffLogs] : logs;
     const response: LiveScanStatusResponse = {
       execution,
       // Derived from this window of logs only. The client re-derives from its
       // full buffer, which is the authoritative rail; this value is what a
       // caller polling the API directly would want.
-      stages: deriveLiveScanStages(execution, logs),
+      stages: deriveLiveScanStages(execution, stageLogs),
       logs,
+      handoffLogs,
+      snowflakeHandoff,
       cursor: logs.length > 0 ? logs[logs.length - 1].timestamp : null,
       isTerminal: isLiveScanTerminal(execution),
       fetchedAt: new Date().toISOString(),
