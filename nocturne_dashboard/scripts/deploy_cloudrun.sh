@@ -143,6 +143,12 @@ ENV_VARS+="@FIREBASE_MAIL_COLLECTION=$(read_env FIREBASE_MAIL_COLLECTION)"
 # empty value here does not fail the deploy, it ships a console whose upload
 # button returns a configuration error, which is a far worse way to find out.
 ENV_VARS+="@NOCTURNE_MANUAL_UPLOAD_BUCKET=$(require_env NOCTURNE_MANUAL_UPLOAD_BUCKET)"
+# Crawler job for the on-demand live leak scan. read_env, not require_env: the
+# server defaults these to nocturne-crawler / us-central1 / FIREBASE_PROJECT_ID,
+# so an empty value here is a working configuration rather than a broken one.
+ENV_VARS+="@NOCTURNE_CRAWLER_JOB=$(read_env NOCTURNE_CRAWLER_JOB)"
+ENV_VARS+="@NOCTURNE_CRAWLER_REGION=$(read_env NOCTURNE_CRAWLER_REGION)"
+ENV_VARS+="@NOCTURNE_CRAWLER_PROJECT=$(read_env NOCTURNE_CRAWLER_PROJECT)"
 ENV_VARS="^@^${ENV_VARS}"
 
 echo "==> building and deploying (Cloud Build compiles remotely; no local Docker needed)"

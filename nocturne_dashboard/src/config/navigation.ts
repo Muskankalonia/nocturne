@@ -87,6 +87,7 @@ export const navigation: NavItem[] = [
     icon: "Activity",
     section: "ops",
     children: [
+      { label: "Run Live Leak Scan", href: "/pipeline/live-scan" },
       { label: "Upload Paste Dump", href: "/pipeline/upload" },
       { label: "Detection Cascade", href: "/pipeline" },
       { label: "Evidence Quality", href: "/pipeline?tab=quality" },

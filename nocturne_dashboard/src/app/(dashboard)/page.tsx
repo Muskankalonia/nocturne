@@ -42,36 +42,23 @@ export default function CommandCenterPage() {
     error: false,
   });
 
-  const runPipeline = useCallback(async () => {
-    setRunState({ busy: true, message: "Starting pipeline run…", error: false });
-    try {
-      const response = await fetch("/api/pipeline/run", {
-        method: "POST",
-        credentials: "same-origin",
-        cache: "no-store",
-      });
-      const body = (await response.json()) as
-        | { startedAt: string; task: string; pendingCandidates: number | null }
-        | { error?: string };
-      if (!response.ok || !("task" in body)) {
-        setRunState({
-          busy: false,
-          error: true,
-          message: "error" in body && body.error ? body.error : "Could not start the run.",
-        });
-        return;
-      }
-      setRunState({
-        busy: false,
-        error: false,
-        message: `${body.task} started · results appear as stages complete`,
-      });
-      // Give the task a moment to land rows before pulling fresh numbers.
-      window.setTimeout(() => refresh(), 8000);
-    } catch {
-      setRunState({ busy: false, error: true, message: "Could not reach the server." });
-    }
-  }, [refresh]);
+  /**
+   * Hand off to the live scan page rather than starting anything here.
+   *
+   * This button used to POST /api/pipeline/run, which executes the Snowflake
+   * ingest task — it loads GCS batches that a crawl already produced, and does
+   * nothing at all when there is no new batch waiting. Pressed in front of an
+   * audience expecting a dark-web scan, it looked like a no-op.
+   *
+   * The real scan is the crawler job, and watching it is the whole point, so
+   * the button now goes where the log stream and the stage rail are and starts
+   * the run there. `autostart` is consumed and stripped from the URL on arrival
+   * so that a later reload of that page does not launch a second crawl.
+   */
+  const runPipeline = useCallback(() => {
+    setRunState({ busy: true, message: "Opening live leak scan…", error: false });
+    router.push("/pipeline/live-scan?autostart=1");
+  }, [router]);
 
   const scored = visibleData?.incidents.filter(
     (incident) => incident.triagePriorityScore !== null,
@@ -633,7 +620,7 @@ function PageHeading({
         </Typography>
       </Box>
       {onRefresh && (
-        <Stack alignItems={{ xs: "flex-start", sm: "flex-end" }} gap={0.6}>
+        <Stack alignItems={{ xs: "flex-start", sm: "flex-end" }} gap={0.8}>
           <Typography
             sx={{
               color: colors.verified,
@@ -649,24 +636,29 @@ function PageHeading({
                 ? "Querying Snowflake…"
                 : `Live Snowflake · updated ${formatTimestamp(lastUpdatedAt ?? null)}`}
           </Typography>
-          {onRunPipeline && (
+          {/* One row, primary action first. Stacked, the two read as a list of
+            * unrelated options; side by side they read as what they are — the
+            * thing that starts work, and the thing that re-reads it. */}
+          <Stack direction="row" gap={1} alignItems="center">
+            {onRunPipeline && (
+              <Button
+                size="small"
+                variant="contained"
+                disabled={runState?.busy}
+                onClick={onRunPipeline}
+              >
+                {runState?.busy ? "Starting…" : "Run pipeline"}
+              </Button>
+            )}
             <Button
               size="small"
-              variant="contained"
-              disabled={runState?.busy}
-              onClick={onRunPipeline}
+              variant="outlined"
+              disabled={isRefreshing}
+              onClick={onRefresh}
             >
-              {runState?.busy ? "Starting…" : "Run pipeline"}
+              {isRefreshing ? "Refreshing…" : "Refresh"}
             </Button>
-          )}
-          <Button
-            size="small"
-            variant="outlined"
-            disabled={isRefreshing}
-            onClick={onRefresh}
-          >
-            {isRefreshing ? "Refreshing…" : "Refresh"}
-          </Button>
+          </Stack>
         </Stack>
       )}
     </Stack>
