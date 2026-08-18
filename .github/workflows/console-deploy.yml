@@ -1,0 +1,249 @@
+# Deploy Console — Cloud Run, with Firebase Hosting in front of it.
+#
+# The automated form of `nocturne_dashboard/deploy.sh`. That script stays the
+# supported way to deploy from a laptop; this is the same sequence without the
+# interactive sign-in, so a merge to main can ship the console on its own.
+#
+# ---------------------------------------------------------------------------
+# One-time setup — about five minutes
+# ---------------------------------------------------------------------------
+#
+# Two repository secrets, set under Settings > Secrets and variables > Actions:
+#
+#   CONSOLE_ENV_LOCAL   The entire contents of nocturne_dashboard/.env.local.
+#                       Written to disk at job start and read by the deploy
+#                       script exactly as it is locally.
+#
+#   GCP_SA_KEY          The JSON key of a deploying service account, pasted whole.
+#
+# Create the service account and key from a machine signed in to gcloud:
+#
+#   PROJECT=nocturne-502617
+#   gcloud iam service-accounts create nocturne-deployer --project "$PROJECT" \
+#     --display-name "GitHub Actions console deployer"
+#   SA="nocturne-deployer@${PROJECT}.iam.gserviceaccount.com"
+#
+#   # Least privilege rather than roles/editor. Each of these is needed by a
+#   # specific step: run.admin deploys, cloudbuild+artifactregistry+storage build
+#   # the image from source, secretmanager syncs the Snowflake token,
+#   # firebasehosting publishes, serviceAccountUser lets the deploy act as the
+#   # runtime account, serviceusage enables APIs on a first run.
+#   for ROLE in roles/run.admin roles/cloudbuild.builds.editor \
+#               roles/artifactregistry.admin roles/storage.admin \
+#               roles/secretmanager.admin roles/firebasehosting.admin \
+#               roles/iam.serviceAccountUser roles/serviceusage.serviceUsageAdmin; do
+#     gcloud projects add-iam-policy-binding "$PROJECT" \
+#       --member "serviceAccount:${SA}" --role "$ROLE" --condition=None >/dev/null
+#   done
+#
+#   gcloud iam service-accounts keys create /tmp/nocturne-deployer.json \
+#     --iam-account "$SA" --project "$PROJECT"
+#
+# Paste /tmp/nocturne-deployer.json into the GCP_SA_KEY secret, then delete the
+# local copy: `shred -u /tmp/nocturne-deployer.json`.
+#
+# A JSON key is a credential with no expiry. That is the trade for setup speed,
+# and it is worth undoing once the deadline passes — either rotate it, or move
+# to Workload Identity Federation, which issues a short-lived token per run and
+# stores nothing. To switch, create a pool and provider, then replace the auth
+# step's `credentials_json` with `workload_identity_provider` and
+# `service_account`, and give the job `id-token: write` permission.
+#
+# When the project no longer needs automated deploys, revoke it completely:
+#   gcloud iam service-accounts delete "$SA" --project "$PROJECT"
+
+name: Deploy Console
+
+on:
+  workflow_dispatch:
+    inputs:
+      min_instances:
+        description: 'Warm instances. 0 scales to zero and is free; 1 removes the cold start and bills.'
+        required: false
+        default: '0'
+      allowed_ips:
+        description: 'Comma-separated IP allowlist. Leave empty to keep whatever is already on the service.'
+        required: false
+        default: ''
+  push:
+    branches: [main]
+    paths:
+      - 'nocturne_dashboard/**'
+      - '.github/workflows/console-deploy.yml'
+
+# Never two deploys of one service at once, and never cancel one in flight —
+# a half-applied Cloud Run revision is worse than a queued one.
+concurrency:
+  group: console-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PROJECT_ID: nocturne-502617
+  REGION: asia-southeast1
+  SERVICE: nocturne-console
+  SITE: nocturne-console
+
+defaults:
+  run:
+    working-directory: nocturne_dashboard
+
+jobs:
+  deploy:
+    name: Cloud Run and Firebase Hosting
+    runs-on: ubuntu-latest
+    # Gate pushes behind a GitHub Environment so required reviewers and
+    # environment-scoped secrets are available if you want them later.
+    environment: console-prod
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      # Node for the Firebase CLI, and to match the runtime image.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # The deploy scripts read configuration out of .env.local with sed rather
+      # than sourcing it, so this is the same file they read on a laptop. It is
+      # written with restrictive permissions, lives only in the runner's
+      # ephemeral workspace, and never enters the image (.dockerignore excludes
+      # it) or the logs.
+      - name: Materialise .env.local
+        run: |
+          umask 077
+          printf '%s\n' "${CONSOLE_ENV_LOCAL}" > .env.local
+          echo "wrote .env.local ($(wc -l < .env.local) lines)"
+        env:
+          CONSOLE_ENV_LOCAL: ${{ secrets.CONSOLE_ENV_LOCAL }}
+
+      - name: Fail fast if configuration is missing
+        run: |
+          missing=0
+          for key in SNOWFLAKE_ACCOUNT SNOWFLAKE_USER SNOWFLAKE_TOKEN \
+                     NOCTURNE_SESSION_SECRET NOCTURNE_MANUAL_UPLOAD_BUCKET; do
+            if ! grep -q "^${key}=." .env.local; then
+              echo "::error::${key} is missing from the CONSOLE_ENV_LOCAL secret"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      # An empty allowlist input means "leave the perimeter as it is", matching
+      # deploy.sh: a redeploy must never silently reopen a console someone
+      # locked down. Read back off the running service rather than defaulted.
+      #
+      # Inputs arrive through the environment rather than being interpolated
+      # into the script text. A ${{ }} expansion is substituted before bash ever
+      # sees the line, so a value containing a quote or a semicolon would be
+      # parsed as script; as an env var it is only ever data.
+      - name: Resolve deploy settings
+        id: settings
+        env:
+          INPUT_ALLOWED_IPS: ${{ inputs.allowed_ips }}
+          INPUT_MIN_INSTANCES: ${{ inputs.min_instances }}
+        run: |
+          ALLOWED_IPS="${INPUT_ALLOWED_IPS}"
+          if [ -z "${ALLOWED_IPS}" ]; then
+            ALLOWED_IPS="$(gcloud run services describe "${SERVICE}" \
+              --project "${PROJECT_ID}" --region "${REGION}" --format=json 2>/dev/null \
+              | jq -r '(.spec.template.spec.containers[0].env // []) | map(select(.name == "NOCTURNE_ALLOWED_IPS")) | (.[0].value // "")' \
+              || true)"
+          fi
+          # Carry the warm-instance setting across deploys, as deploy.sh does.
+          # The Cloud Run deploy passes --min-instances explicitly, so defaulting
+          # to 0 here would quietly cold-start a service someone warmed up for a
+          # demo — and a push-triggered deploy would do it without anyone asking.
+          MIN_INSTANCES="${INPUT_MIN_INSTANCES}"
+          if [ -z "${MIN_INSTANCES}" ]; then
+            MIN_INSTANCES="$(gcloud run services describe "${SERVICE}" \
+              --project "${PROJECT_ID}" --region "${REGION}" \
+              --format='value(spec.template.metadata.annotations["autoscaling.knative.dev/minScale"])' \
+              2>/dev/null || true)"
+          fi
+          MIN_INSTANCES="${MIN_INSTANCES:-0}"
+          case "${MIN_INSTANCES}" in
+            ''|*[!0-9]*) echo "::error::min_instances must be a whole number"; exit 1 ;;
+          esac
+          echo "allowed_ips=${ALLOWED_IPS}" >> "$GITHUB_OUTPUT"
+          echo "min_instances=${MIN_INSTANCES}" >> "$GITHUB_OUTPUT"
+          echo "perimeter ips=${ALLOWED_IPS:-<any>} min_instances=${MIN_INSTANCES}"
+
+      # PROXY_HOPS=1 because Firebase Hosting sits in front and appends itself
+      # to X-Forwarded-For. Cloud Build compiles the image remotely, so there is
+      # no Docker step here; expect three to five minutes.
+      - name: Deploy to Cloud Run
+        env:
+          PROJECT_ID: ${{ env.PROJECT_ID }}
+          REGION: ${{ env.REGION }}
+          SERVICE: ${{ env.SERVICE }}
+          ENV_FILE: .env.local
+          PROXY_HOPS: '1'
+          MIN_INSTANCES: ${{ steps.settings.outputs.min_instances }}
+          ALLOWED_IPS: ${{ steps.settings.outputs.allowed_ips }}
+        run: ./scripts/deploy_cloudrun.sh
+
+      # Firebase rewrites the Host header to the Cloud Run hostname, so every
+      # name the service can be reached by has to be accepted by the Host check.
+      - name: Update host allowlist
+        run: |
+          RUN_URL="$(gcloud run services describe "${SERVICE}" \
+            --project "${PROJECT_ID}" --region "${REGION}" --format='value(status.url)')"
+          NUMBER="$(gcloud projects describe "${PROJECT_ID}" --format='value(projectNumber)')"
+          HOSTS="${RUN_URL#https://},${SERVICE}-${NUMBER}.${REGION}.run.app"
+          HOSTS="${HOSTS},${SITE}.web.app,${SITE}.firebaseapp.com"
+          gcloud run services update "${SERVICE}" --project "${PROJECT_ID}" --region "${REGION}" \
+            --update-env-vars "^@^NOCTURNE_ALLOWED_HOSTS=${HOSTS}" >/dev/null
+          echo "RUN_URL=${RUN_URL}" >> "$GITHUB_ENV"
+          echo "host allowlist: ${HOSTS}"
+
+      # firebase-tools picks up the short-lived credentials the auth step wrote
+      # to GOOGLE_APPLICATION_CREDENTIALS, so there is no FIREBASE_TOKEN here.
+      - name: Deploy Firebase Hosting
+        run: npx --yes firebase-tools@13 deploy --only hosting --project "${PROJECT_ID}" --non-interactive
+
+      # A 403 is the correct answer when an IP allowlist is set: GitHub runners
+      # have dynamic addresses and are not on it. Treating that as failure would
+      # make every locked-down deploy report red.
+      - name: Verify
+        env:
+          ALLOWED_IPS: ${{ steps.settings.outputs.allowed_ips }}
+        run: |
+          sleep 8
+          code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 "https://${SITE}.web.app/login" || echo 000)"
+          echo "https://${SITE}.web.app/login -> ${code}"
+          if [ "${code}" = "200" ]; then
+            echo "::notice::Console is serving at https://${SITE}.web.app"
+          elif [ "${code}" = "403" ] && [ -n "${ALLOWED_IPS}" ]; then
+            echo "::notice::403 from a non-allowlisted runner, which is expected while the IP allowlist is set."
+          else
+            echo "::error::Unexpected status ${code} from the public hostname."
+            exit 1
+          fi
+
+          direct="$(curl -s -o /dev/null -w '%{http_code}' --max-time 45 "${RUN_URL}/login" || echo 000)"
+          echo "direct ${RUN_URL} -> ${direct}"
+          [ "${direct}" = "403" ] \
+            && echo "::notice::Direct Cloud Run access correctly refused." \
+            || echo "::warning::Direct Cloud Run access returned ${direct}; expected 403."
+
+      # Leaves no credential behind on the runner even though the workspace is
+      # discarded — the file is the whole Snowflake identity for this account.
+      - name: Shred .env.local
+        if: always()
+        run: shred -u .env.local 2>/dev/null || rm -f .env.local
