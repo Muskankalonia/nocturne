@@ -20,3 +20,14 @@ output/report*.txt
 # --no-save at the repo root. The rendered PNGs are committed; the toolchain
 # that produced them is not.
 node_modules/
+
+# Hackathon submission material — decks, briefs, exported diagrams. Kept beside
+# the code because that is where they get written, deliberately never pushed:
+# they carry account identifiers and unredacted screenshots of live tenant data.
+# Added after a `git add -A` swept three of them toward a public branch.
+*.docx
+*.pptx
+architecture.pdf
+
+# Firebase CLI debug log — records project id and deploy target.
+firebase-debug.log

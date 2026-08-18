@@ -1,0 +1,68 @@
+# Console CI — typecheck and production build of the Next.js analyst console.
+#
+# Runs on every pull request and every push to main. Needs no credentials at
+# all: the console reads Snowflake configuration at request time, not at build
+# time, so `next build` completes with no .env.local present. That is what makes
+# this job safe to run on a fork's pull request and free to run on every push.
+#
+# It exists because the two things it checks are exactly the two things that
+# break a deploy, and both break silently until you try. A route handler that
+# references a backend method nobody kept is a clean `git commit` and a failed
+# `./deploy.sh` twenty minutes later.
+
+name: Console CI
+
+on:
+  pull_request:
+    paths:
+      - 'nocturne_dashboard/**'
+      - '.github/workflows/console-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'nocturne_dashboard/**'
+      - '.github/workflows/console-ci.yml'
+
+# A second push to the same branch makes the first one's answer irrelevant.
+concurrency:
+  group: console-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: nocturne_dashboard
+
+jobs:
+  build:
+    name: Typecheck and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Node 22 to match the Dockerfile the console actually ships in
+      # (node:22-slim). Checking a build against a different major than the one
+      # that will run it is a check of something else.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: nocturne_dashboard/package-lock.json
+
+      # `npm ci` rather than `npm install`: it installs the lockfile exactly and
+      # fails if package.json and the lockfile have drifted apart, which is a
+      # defect worth failing on rather than silently resolving.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
