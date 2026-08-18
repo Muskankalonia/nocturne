@@ -15,6 +15,7 @@ import {
 import {
   AlertTriangle,
   CheckCircle2,
+  Circle,
   CircleDashed,
   Cloud,
   Database,
@@ -34,9 +35,13 @@ import { PageHeader, StatCard, StatGrid, Tag } from "@/components/ui/Primitives"
 import {
   LIVE_SCAN_IDLE_STAGES,
   LIVE_SCAN_STAGE_COUNT,
+  deriveLiveScanCascade,
   deriveLiveScanStages,
   formatDuration,
+  isLiveScanCascadeSettled,
   isLiveScanTerminal,
+  type LiveScanCascadeCounts,
+  type LiveScanCascadeStage,
   type LiveScanExecution,
   type LiveScanLogLine,
   type LiveScanListResponse,
@@ -58,6 +63,18 @@ const POLL_INTERVAL_MS = 4_000;
  * stopping mid-sentence.
  */
 const TERMINAL_GRACE_MS = 20_000;
+
+/**
+ * How long to keep polling a finished run whose cascade is still moving.
+ *
+ * The crawl ends minutes before the warehouse does. Dropping the stream at the
+ * usual twenty-second grace would freeze the cascade rail mid-count and leave
+ * an analyst staring at "3 of 18 classified" with no way to advance it short of
+ * reselecting the run. Bounded rather than open-ended because a batch whose AI
+ * steps are not being driven never settles, and polling a suspended pipeline
+ * until the tab closes spends warehouse time to learn nothing.
+ */
+const CASCADE_WATCH_MS = 5 * 60_000;
 
 /**
  * A two-hour crawl emits tens of thousands of lines and the page holds them all
@@ -243,6 +260,133 @@ function ProgressRail({
             >
               {String(index + 1).padStart(2, "0")}
             </Typography>
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}
+
+/**
+ * The cascade rail.
+ *
+ * Sits under the crawl rail and picks up exactly where it stops. The crawl rail
+ * ends at "Snowflake handoff"; this one starts from the batch that handoff
+ * loaded and follows it through the same L0-L4 levels the paste-dump page
+ * shows, so the two routes into the warehouse tell one continuous story.
+ *
+ * The difference from both of its siblings is the counts. A paste dump is one
+ * document and every stage is a boolean; a crawl is fifteen to forty pages that
+ * move through the cascade at different rates and mostly stop early on purpose.
+ * The count and its denominator are therefore the content of each card, and the
+ * drop between two cards — eighteen pages screened, three relevant — is the
+ * thing worth looking at.
+ *
+ * Not clickable, unlike the rail above it. There is no per-stage log to reveal:
+ * the cascade runs inside Snowflake and these counts are the whole of what the
+ * console knows about it. Rendering them as buttons would promise a drill-down
+ * that does not exist.
+ */
+function cascadeTone(stage: LiveScanCascadeStage): Tone {
+  if (stage.state === "complete") return "ok";
+  if (stage.state === "running") return "ion";
+  if (stage.state === "stopped") return "medium";
+  return "neutral";
+}
+
+function cascadeIcon(stage: LiveScanCascadeStage) {
+  if (stage.state === "complete") return <CheckCircle2 size={14} />;
+  if (stage.state === "running") return <Loader2 size={14} className="spin" />;
+  if (stage.state === "stopped") return <CircleDashed size={14} />;
+  return <Circle size={14} />;
+}
+
+function CascadeRail({
+  stages,
+  disabled = false,
+}: {
+  stages: LiveScanCascadeStage[];
+  disabled?: boolean;
+}) {
+  return (
+    <Box
+      sx={{
+        display: "grid",
+        gridTemplateColumns: { xs: "1fr", md: `repeat(${stages.length}, 1fr)` },
+        gap: 1,
+      }}
+    >
+      {stages.map((stage) => {
+        const tone = cascadeTone(stage);
+        const toneColor = toneColorFor(tone);
+        return (
+          <Box
+            key={stage.id}
+            sx={{
+              position: "relative",
+              minHeight: 132,
+              opacity: disabled ? 0.42 : 1,
+              border: `1px solid ${tone === "neutral" ? colors.edge : alpha(toneColor, 0.45)}`,
+              borderRadius: `${layoutTokens.radiusSm}px`,
+              background:
+                tone === "neutral"
+                  ? "rgba(255,255,255,0.015)"
+                  : `linear-gradient(180deg, ${alpha(toneColor, 0.12)}, rgba(255,255,255,0.015))`,
+              p: 1.4,
+              overflow: "hidden",
+              color: colors.text1,
+            }}
+          >
+            <Stack direction="row" alignItems="center" gap={0.8}>
+              <Box sx={{ color: toneColor, display: "flex" }}>{cascadeIcon(stage)}</Box>
+              <Typography sx={{ fontSize: 12, color: colors.text1, fontWeight: 700 }}>
+                {stage.label}
+              </Typography>
+              <Tag tone={tone}>{stage.state}</Tag>
+            </Stack>
+
+            {/* The count leads, because on this rail it is the finding. A card
+              * reading "3 / 18" says more about what the crawl turned up than
+              * any of the prose under it. Dimmed to neutral before the level
+              * has anything to report, so an untouched stage does not read as
+              * a confident zero. */}
+            <Stack direction="row" alignItems="baseline" gap={0.5} sx={{ mt: 1.1 }}>
+              <Typography
+                sx={{
+                  fontFamily: fonts.mono,
+                  fontSize: 21,
+                  fontWeight: 700,
+                  lineHeight: 1,
+                  color: stage.state === "waiting" ? colors.text3 : toneColor,
+                }}
+              >
+                {stage.count}
+              </Typography>
+              {stage.total !== null && (
+                <Typography
+                  sx={{ fontFamily: fonts.mono, fontSize: 11.5, color: colors.text3 }}
+                >
+                  / {stage.total}
+                </Typography>
+              )}
+            </Stack>
+
+            <Typography sx={{ mt: 0.9, color: colors.text2, fontSize: 11.5, lineHeight: 1.45 }}>
+              {stage.caption}
+            </Typography>
+            {stage.detail && (
+              <Typography
+                sx={{
+                  mt: 0.8,
+                  color: toneColor,
+                  fontFamily: fonts.mono,
+                  fontSize: 10,
+                  lineHeight: 1.45,
+                }}
+              >
+                {stage.detail}
+              </Typography>
+            )}
           </Box>
         );
       })}
@@ -469,6 +613,9 @@ export default function LiveScanPage() {
   const [execution, setExecution] = useState<LiveScanExecution | null>(null);
   const [logs, setLogs] = useState<LiveScanLogLine[]>([]);
   const [selectedStageId, setSelectedStageId] = useState<LiveScanStageId>("dispatch");
+  const [cascade, setCascade] = useState<LiveScanCascadeCounts | null>(null);
+  /** Bumped by Refresh to restart a poll loop that has already given up. */
+  const [pollNonce, setPollNonce] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [isStarting, setIsStarting] = useState(false);
   const [follow, setFollow] = useState(true);
@@ -533,7 +680,9 @@ export default function LiveScanPage() {
    * Returns whether the run is finished so the poll loop can decide to stop,
    * rather than reading it back out of state a render later.
    */
-  const pollSelected = useCallback(async (executionId: string): Promise<boolean> => {
+  const pollSelected = useCallback(async (
+    executionId: string,
+  ): Promise<{ isTerminal: boolean; cascadeSettled: boolean }> => {
     const stream = streamRef.current;
     const since = stream.executionId === executionId ? stream.cursor : null;
     const query = since ? `?since=${encodeURIComponent(since)}` : "";
@@ -551,7 +700,9 @@ export default function LiveScanPage() {
 
     // The selection moved while this was in flight — its logs belong to a run
     // the analyst is no longer looking at.
-    if (streamRef.current.executionId !== executionId) return true;
+    if (streamRef.current.executionId !== executionId) {
+      return { isTerminal: true, cascadeSettled: true };
+    }
 
     setExecution(body.execution);
     setExecutions((current) =>
@@ -570,7 +721,11 @@ export default function LiveScanPage() {
         return next.length > LOG_BUFFER_LIMIT ? next.slice(-LOG_BUFFER_LIMIT) : next;
       });
     }
-    return body.isTerminal;
+    setCascade(body.cascade ?? null);
+    return {
+      isTerminal: body.isTerminal,
+      cascadeSettled: isLiveScanCascadeSettled(body.cascadeStages),
+    };
   }, []);
 
   // Initial load. Fleet admins only — everyone else gets the explanatory panel
@@ -606,6 +761,7 @@ export default function LiveScanPage() {
     terminalSinceRef.current = null;
     setLogs([]);
     setExecution(null);
+    setCascade(null);
     setSelectedStageId("dispatch");
   }, [selectedExecutionId]);
 
@@ -630,13 +786,18 @@ export default function LiveScanPage() {
 
     const tick = async () => {
       try {
-        const terminal = await pollSelected(selectedExecutionId);
+        const { isTerminal, cascadeSettled } = await pollSelected(selectedExecutionId);
         if (cancelled) return;
         consecutiveFailures = 0;
         setError(null);
-        if (terminal) {
+        if (isTerminal) {
           terminalSinceRef.current ??= Date.now();
-          if (Date.now() - terminalSinceRef.current > TERMINAL_GRACE_MS) {
+          // Two different things can still be in flight once Cloud Run exits:
+          // the tail of the log stream, which arrives within seconds, and the
+          // cascade, which takes minutes. Hold the stream open for whichever
+          // is still going.
+          const grace = cascadeSettled ? TERMINAL_GRACE_MS : CASCADE_WATCH_MS;
+          if (Date.now() - terminalSinceRef.current > grace) {
             window.clearInterval(timer);
           }
         } else {
@@ -660,7 +821,7 @@ export default function LiveScanPage() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [isFleetAdmin, pollSelected, selectedExecutionId]);
+  }, [isFleetAdmin, pollNonce, pollSelected, selectedExecutionId]);
 
   const startScan = useCallback(async () => {
     if (liveScanBlockedReason || !activeOrg) {
@@ -728,12 +889,18 @@ export default function LiveScanPage() {
 
   const refresh = useCallback(async () => {
     setError(null);
+    // Re-arm the stream as well as the history list. Once a run's cascade has
+    // gone quiet the poll loop has already stopped, and without this the
+    // Refresh button would update the run list beside a rail it cannot move.
+    terminalSinceRef.current = null;
+    setPollNonce((current) => current + 1);
     await loadExecutions();
   }, [loadExecutions]);
 
   // The authoritative rail: derived from the whole buffer this page has seen,
   // not from the single window the last poll returned.
   const stages = useMemo(() => deriveLiveScanStages(execution, logs), [execution, logs]);
+  const cascadeStages = useMemo(() => deriveLiveScanCascade(cascade), [cascade]);
   const isRunning = execution ? !isLiveScanTerminal(execution) : false;
   const pagesSaved = useMemo(() => {
     const savedLines = logs.filter((line) => line.text.includes("SAVED |")).length;
@@ -990,6 +1157,31 @@ export default function LiveScanPage() {
             </Typography>
           </Stack>
         )}
+      </Panel>
+
+      <Panel
+        title="Snowflake cascade"
+        meta={
+          cascade
+            ? `RUN ${cascade.pagesRaw} PAGE${cascade.pagesRaw === 1 ? "" : "S"} · READ-ONLY`
+            : "AWAITING BATCH · READ-ONLY"
+        }
+      >
+        <Stack gap={1.4}>
+          <CascadeRail stages={cascadeStages} disabled={!cascade} />
+          <Typography sx={{ color: colors.text3, fontSize: 11.5, lineHeight: 1.55 }}>
+            {cascade
+              ? "Counts read straight from the L0–L4 dynamic tables for this run. "
+                + "The console reports the batch's position here; it does not push it "
+                + "forward, so a level can sit waiting while the scheduled Snowflake "
+                + "tasks catch up."
+              : execution && isLiveScanTerminal(execution)
+                ? "The batch is not visible in RAW yet. It appears here once the "
+                  + "Snowflake handoff above has loaded the crawl's pages."
+                : "Once the crawl above finishes and its pages land in Snowflake, this "
+                  + "rail follows them through the same L0–L4 cascade as a paste dump."}
+          </Typography>
+        </Stack>
       </Panel>
 
       <LogConsole

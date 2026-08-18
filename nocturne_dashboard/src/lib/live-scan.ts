@@ -108,6 +108,15 @@ export interface LiveScanStatusResponse {
   handoffLogs?: LiveScanLogLine[];
   snowflakeHandoff?: LiveScanSnowflakeHandoff | null;
   /**
+   * Where the batch has reached in the L0-L4 cascade, once it is in RAW.
+   *
+   * Null until the handoff has actually loaded rows: before that there is no
+   * run to count, and reporting zeroes would claim the cascade ran and found
+   * nothing. Counts only — no page text and no claim text crosses this line.
+   */
+  cascade?: LiveScanCascadeCounts | null;
+  cascadeStages?: LiveScanCascadeStage[];
+  /**
    * Newest timestamp in `logs`, echoed back by the client as `?since=` to fetch
    * only what has appeared since. Null when this page was empty, in which case
    * the client keeps the cursor it already had.
@@ -372,4 +381,272 @@ export function formatDuration(fromIso: string | null, toIso: string | null): st
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
   return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
+}
+
+/* ---------------------------------------------------------------------------
+ * The cascade rail
+ *
+ * Everything above this line describes the crawl: a Cloud Run container walking
+ * Tor, ending at the Snowflake handoff. Everything below describes what happens
+ * to the batch *after* that handoff — the same L0-L4 cascade the paste-dump page
+ * shows, read for a whole crawl run instead of for one pasted document.
+ *
+ * The two rails cannot share a shape, and it is worth being clear about why. A
+ * paste dump is one page, so every stage there is a boolean: L1 either ran or it
+ * did not. A crawl returns fifteen to forty pages, and they do not move through
+ * the cascade together — some are screened while others are still being routed,
+ * and most legitimately stop early because they turned out to be about a
+ * different company. So each stage here carries a count and a denominator, and
+ * the interesting number is usually the drop between two stages rather than
+ * either stage on its own.
+ *
+ * Pure and dependency-free for the same reason as the crawl rail above: the API
+ * route derives these stages for its response and the page re-derives them from
+ * the counts, and the two must not be able to disagree.
+ * ------------------------------------------------------------------------- */
+
+export type LiveScanCascadeStageId =
+  | "l0_signals"
+  | "l1_relevance"
+  | "l2_evidence"
+  | "l3_graph"
+  | "l4_insight";
+
+/**
+ * `stopped` is the state the crawl rail has no use for and this one cannot do
+ * without. A page that L1 decided belongs to another company has not failed and
+ * is not still working — it is finished, correctly, without going further. Half
+ * a crawl ends this way on a normal run, so rendering it as an error would make
+ * every successful scan look broken.
+ */
+export type LiveScanCascadeStageState = "waiting" | "running" | "complete" | "stopped";
+
+/** One row of the run-scoped cascade query, straight off Snowflake. */
+export interface LiveScanCascadeCounts {
+  runId: string;
+  orgId: string | null;
+  /** Distinct pages loaded into RAW for this run. The denominator for L0. */
+  pagesRaw: number;
+  pagesL0: number;
+  pagesL1: number;
+  /**
+   * Pages L1 judged worth extracting from. This is the L2 denominator rather
+   * than `pagesL1`, because L2 is only ever asked to look at these.
+   */
+  pagesL1Eligible: number;
+  pagesL2: number;
+  /** Pages L2 routed `target_confirmed` — the ones that reach the graph. */
+  pagesL3: number;
+  incidentsL4: number;
+  /** Of those incidents, how many already carry an AI brief. */
+  incidentsBriefed: number;
+  lastUpdatedAt: string | null;
+  fetchedAt: string;
+}
+
+export interface LiveScanCascadeStage {
+  id: LiveScanCascadeStageId;
+  label: string;
+  caption: string;
+  state: LiveScanCascadeStageState;
+  /** How many pages (or, at L4, incidents) have cleared this level. */
+  count: number;
+  /** What `count` is out of. Null when a denominator would be meaningless. */
+  total: number | null;
+  detail: string | null;
+}
+
+const CASCADE_TEMPLATE: ReadonlyArray<
+  Pick<LiveScanCascadeStage, "id" | "label" | "caption">
+> = [
+  {
+    id: "l0_signals",
+    label: "L0 signals",
+    caption: "Detect regex indicators on every crawled page, raw text unchanged.",
+  },
+  {
+    id: "l1_relevance",
+    label: "L1 relevance",
+    caption: "Classify which pages actually concern this organization.",
+  },
+  {
+    id: "l2_evidence",
+    label: "L2 evidence",
+    caption: "Extract and ground claims on the pages L1 flagged.",
+  },
+  {
+    id: "l3_graph",
+    label: "L3 graph",
+    caption: "Promote target-owned claims and actors into the graph.",
+  },
+  {
+    id: "l4_insight",
+    label: "L4 insight",
+    caption: "Raise incidents with severity, triage priority, and an AI brief.",
+  },
+];
+
+export const LIVE_SCAN_CASCADE_STAGE_COUNT = CASCADE_TEMPLATE.length;
+
+/** The cascade rail before a batch has landed — every stage waiting. */
+export const LIVE_SCAN_CASCADE_IDLE_STAGES: LiveScanCascadeStage[] = CASCADE_TEMPLATE.map(
+  (stage) => ({ ...stage, state: "waiting", count: 0, total: null, detail: null }),
+);
+
+function pageWord(count: number): string {
+  return count === 1 ? "page" : "pages";
+}
+
+/**
+ * Fold the run-scoped counts into the five-stage cascade rail.
+ *
+ * Each level is "done" when the level feeding it has nothing left pending, not
+ * when its own count reaches its denominator — the funnel narrows on purpose,
+ * and `3 of 18` at L3 is a finished stage, not a stalled one. The two narrowing
+ * levels (L3, L4) therefore take completion from the level above rather than
+ * from their own ratio.
+ *
+ * A null `counts` means the batch is not visible in RAW yet, which is the
+ * ordinary state for the first minute after the handoff. That is reported as a
+ * waiting rail rather than an empty one, because zeroes here would read as
+ * "the cascade ran and found nothing".
+ */
+export function deriveLiveScanCascade(
+  counts: LiveScanCascadeCounts | null,
+): LiveScanCascadeStage[] {
+  if (!counts || counts.pagesRaw === 0) return LIVE_SCAN_CASCADE_IDLE_STAGES;
+
+  const l0Done = counts.pagesL0 >= counts.pagesRaw;
+  const l1Done = l0Done && counts.pagesL0 > 0 && counts.pagesL1 >= counts.pagesL0;
+  const l2Done = l1Done && counts.pagesL1Eligible > 0 && counts.pagesL2 >= counts.pagesL1Eligible;
+  const nothingEligible = l1Done && counts.pagesL1Eligible === 0;
+
+  /**
+   * A stage that has not started yet does not know its denominator.
+   *
+   * L2's total is the count of pages L1 found relevant, which is zero right up
+   * until L1 has looked at them. Rendering that honestly as `0 / 0` would read
+   * as a settled finding — nothing eligible, nothing extracted — when the real
+   * answer is "ask again in a minute". Null is the shape the rail draws as no
+   * denominator at all.
+   */
+  const known = (state: LiveScanCascadeStageState, total: number): number | null =>
+    state === "waiting" ? null : total;
+
+  return CASCADE_TEMPLATE.map((stage): LiveScanCascadeStage => {
+    switch (stage.id) {
+      case "l0_signals":
+        return {
+          ...stage,
+          state: l0Done ? "complete" : "running",
+          count: counts.pagesL0,
+          total: counts.pagesRaw,
+          detail: `${counts.pagesL0} of ${counts.pagesRaw} ${pageWord(counts.pagesRaw)} screened for indicators.`,
+        };
+
+      case "l1_relevance": {
+        const state: LiveScanCascadeStageState = l1Done
+          ? "complete"
+          : l0Done
+            ? "running"
+            : "waiting";
+        return {
+          ...stage,
+          state,
+          count: counts.pagesL1,
+          total: known(state, counts.pagesL0),
+          detail:
+            state === "waiting"
+              ? null
+              : `${counts.pagesL1} of ${counts.pagesL0} classified · `
+                + `${counts.pagesL1Eligible} relevant to this organization.`,
+        };
+      }
+
+      case "l2_evidence": {
+        const state: LiveScanCascadeStageState = nothingEligible
+          ? "stopped"
+          : l2Done
+            ? "complete"
+            : l1Done || counts.pagesL2 > 0
+              ? "running"
+              : "waiting";
+        return {
+          ...stage,
+          state,
+          count: counts.pagesL2,
+          total: known(state, counts.pagesL1Eligible),
+          detail: nothingEligible
+            ? "No page cleared L1, so there is nothing to extract from."
+            : state === "waiting"
+              ? null
+              : `${counts.pagesL2} of ${counts.pagesL1Eligible} relevant ${pageWord(counts.pagesL1Eligible)} extracted.`,
+        };
+      }
+
+      case "l3_graph": {
+        const state: LiveScanCascadeStageState = nothingEligible
+          ? "stopped"
+          : l2Done
+            ? counts.pagesL3 > 0
+              ? "complete"
+              : "stopped"
+            : counts.pagesL2 > 0
+              ? "running"
+              : "waiting";
+        return {
+          ...stage,
+          state,
+          count: counts.pagesL3,
+          total: known(state, counts.pagesL2),
+          detail: nothingEligible
+            ? null
+            : state === "stopped"
+              ? `Ownership was not verified on any of the ${counts.pagesL2} extracted ${pageWord(counts.pagesL2)}.`
+              : state === "waiting"
+                ? null
+                : `${counts.pagesL3} of ${counts.pagesL2} ${pageWord(counts.pagesL2)} confirmed target-owned.`,
+        };
+      }
+
+      case "l4_insight": {
+        const reachedGraph = counts.pagesL3 > 0;
+        const briefsDone = counts.incidentsL4 > 0 && counts.incidentsBriefed >= counts.incidentsL4;
+        const state: LiveScanCascadeStageState = nothingEligible || (l2Done && !reachedGraph)
+          ? "stopped"
+          : briefsDone
+            ? "complete"
+            : reachedGraph
+              ? "running"
+              : "waiting";
+        return {
+          ...stage,
+          state,
+          count: counts.incidentsL4,
+          total: known(state, counts.pagesL3),
+          detail:
+            state === "stopped"
+              ? "No page reached the graph, so no incident was raised."
+              : state === "waiting"
+                ? null
+                : `${counts.incidentsL4} incident${counts.incidentsL4 === 1 ? "" : "s"} raised · `
+                  + `${counts.incidentsBriefed} with an AI brief.`,
+        };
+      }
+    }
+  });
+}
+
+/**
+ * True when no stage is still expecting work.
+ *
+ * The poll loop uses this to decide whether to keep watching after Cloud Run
+ * has exited. `stopped` counts as settled — a batch where nothing cleared L1 is
+ * finished, and waiting for it to change would poll forever.
+ */
+export function isLiveScanCascadeSettled(
+  stages: LiveScanCascadeStage[] | undefined,
+): boolean {
+  if (!stages || stages.length === 0) return false;
+  return stages.every((stage) => stage.state === "complete" || stage.state === "stopped");
 }

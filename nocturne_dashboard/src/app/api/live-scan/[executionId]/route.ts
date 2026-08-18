@@ -2,8 +2,10 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import {
+  deriveLiveScanCascade,
   deriveLiveScanStages,
   isLiveScanTerminal,
+  type LiveScanCascadeCounts,
   type LiveScanStatusResponse,
 } from "@/lib/live-scan";
 import { users } from "@/mocks/organizations";
@@ -13,7 +15,7 @@ import {
   fetchCrawlerLogs,
   getCrawlerExecution,
 } from "@/server/crawler-job";
-import { copyLiveCrawlerRunToRaw } from "@/server/nocturne-backend";
+import { copyLiveCrawlerRunToRaw, getCrawlRunCascade } from "@/server/nocturne-backend";
 import {
   SESSION_COOKIE_NAME,
   sessionCookieOptions,
@@ -146,6 +148,24 @@ export async function GET(request: Request, context: LiveScanStatusRouteContext)
       }
     }
 
+    // Where the batch has reached in L0-L4, once there is a batch to ask about.
+    // Only worth a query after Cloud Run exited: before that the crawler has
+    // written nothing to GCS, so the answer is always "no rows" and every poll
+    // would spend a warehouse round trip proving it. Failure here is not fatal
+    // to the response — the crawl rail above it is still the whole story of the
+    // run, and losing the cascade counts should not cost an analyst their logs.
+    let cascade: LiveScanCascadeCounts | null = null;
+    if (execution.state === "succeeded") {
+      try {
+        cascade = await getCrawlRunCascade(execution.executionId);
+      } catch (cascadeError) {
+        console.warn(
+          "[nocturne-live-scan-status] cascade counts unavailable:",
+          cascadeError instanceof Error ? cascadeError.message : "unknown server error",
+        );
+      }
+    }
+
     const stageLogs = handoffLogs.length > 0 ? [...logs, ...handoffLogs] : logs;
     const response: LiveScanStatusResponse = {
       execution,
@@ -156,6 +176,8 @@ export async function GET(request: Request, context: LiveScanStatusRouteContext)
       logs,
       handoffLogs,
       snowflakeHandoff,
+      cascade,
+      cascadeStages: deriveLiveScanCascade(cascade),
       cursor: logs.length > 0 ? logs[logs.length - 1].timestamp : null,
       isTerminal: isLiveScanTerminal(execution),
       fetchedAt: new Date().toISOString(),
