@@ -65,14 +65,26 @@ on:
         description: 'Comma-separated IP allowlist. Leave empty to keep whatever is already on the service.'
         required: false
         default: ''
-  push:
-    branches: [main]
-    paths:
-      - 'nocturne_dashboard/**'
-      - '.github/workflows/console-deploy.yml'
+
+# Manual only, on purpose.
+#
+# There was a push trigger here that fired on any merge touching
+# nocturne_dashboard/**. It was removed because a deploy is a demo-day event,
+# not a consequence of merging — and because deploys queue rather than cancel
+# (see below), so a run of merges turned into a run of five-minute deploys
+# stacked behind each other.
+#
+# To put it back, restore:
+#
+#   push:
+#     branches: [main]
+#     paths:
+#       - 'nocturne_dashboard/**'
 
 # Never two deploys of one service at once, and never cancel one in flight —
-# a half-applied Cloud Run revision is worse than a queued one.
+# a half-applied Cloud Run revision is worse than a queued one. The cost of
+# that choice is that concurrent triggers queue instead of superseding, which
+# is the right trade when deploys are deliberate and rare.
 concurrency:
   group: console-deploy
   cancel-in-progress: false
