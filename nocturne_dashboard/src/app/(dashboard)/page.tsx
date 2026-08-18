@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import NextLink from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Box, Button, Stack, Typography, alpha } from "@mui/material";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePosture } from "@/contexts/PostureContext";
@@ -21,6 +21,7 @@ import { hostOf } from "@/lib/format";
 
 export default function CommandCenterPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { isFleetScope, activeOrg, switchableOrgs, isSuperAdmin } = useAuth();
   // The fetch, the scope guard and the auto-refresh live in PostureContext so
   // the sidebar badge and the tenant switcher read the same numbers this page
@@ -59,6 +60,15 @@ export default function CommandCenterPage() {
     setRunState({ busy: true, message: "Opening live leak scan…", error: false });
     router.push("/pipeline/live-scan?autostart=1");
   }, [router]);
+
+  const clearGraphFilter = useCallback(() => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("graphFilterType");
+    params.delete("graphFilterKey");
+    params.delete("graphFilterLabel");
+    const query = params.toString();
+    router.push(query ? `/?${query}` : "/");
+  }, [router, searchParams]);
 
   const scored = visibleData?.incidents.filter(
     (incident) => incident.triagePriorityScore !== null,
@@ -157,6 +167,7 @@ export default function CommandCenterPage() {
   }
 
   const metrics = visibleData.totals;
+  const activeGraphFilter = visibleData.appliedGraphFilter;
   const stats = metrics.grounding;
   const topImpact = metrics.topImpactSeverityScore;
   const topImpactBand = metrics.topImpactSeverityBand;
@@ -227,6 +238,47 @@ export default function CommandCenterPage() {
           }}
         >
           Refresh failed: {error}. Displaying the last successful response.
+        </Box>
+      )}
+
+      {activeGraphFilter && (
+        <Box
+          sx={{
+            border: `1px solid ${alpha(colors.ion, 0.35)}`,
+            backgroundColor: alpha(colors.ion, 0.065),
+            borderRadius: "7px",
+            px: 1.5,
+            py: 1.1,
+            display: "flex",
+            alignItems: { xs: "flex-start", sm: "center" },
+            justifyContent: "space-between",
+            gap: 1.5,
+            flexDirection: { xs: "column", sm: "row" },
+          }}
+        >
+          <Box>
+            <Typography
+              sx={{
+                color: colors.ionBright,
+                fontFamily: fonts.mono,
+                fontSize: 10,
+                letterSpacing: "0.12em",
+                textTransform: "uppercase",
+              }}
+            >
+              Filtered from knowledge graph
+            </Typography>
+            <Typography sx={{ color: colors.text2, fontSize: 12, mt: 0.35 }}>
+              Showing incidents connected to{" "}
+              <Box component="span" sx={{ color: colors.text1, fontWeight: 650 }}>
+                {activeGraphFilter.filterLabel ?? activeGraphFilter.filterKey}
+              </Box>{" "}
+              ({formatFilterType(activeGraphFilter.filterType)}).
+            </Typography>
+          </Box>
+          <Button size="small" variant="outlined" onClick={clearGraphFilter}>
+            Clear graph filter
+          </Button>
         </Box>
       )}
 
@@ -683,6 +735,10 @@ function hostname(value: string): string {
   } catch {
     return value;
   }
+}
+
+function formatFilterType(value: string): string {
+  return value.replaceAll("_", " ");
 }
 
 function Td({

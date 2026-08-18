@@ -10,6 +10,10 @@ import {
   verifySessionToken,
 } from "@/server/session";
 import type { DataScope } from "@/types";
+import type {
+  CommandCenterGraphFilter,
+  CommandCenterGraphFilterType,
+} from "@/types/dashboard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,6 +25,18 @@ const RESPONSE_HEADERS = {
 const ORG_ID_PATTERN = /^[a-z0-9]+(?:_[a-z0-9]+)*$/;
 /** Bounds the cache-key space so a hostile client cannot blow up the cache. */
 const MAX_FLEET_SELECTION = 50;
+const MAX_GRAPH_FILTER_KEY_LENGTH = 512;
+const MAX_GRAPH_FILTER_LABEL_LENGTH = 240;
+const COMMAND_CENTER_GRAPH_FILTER_TYPES = new Set<CommandCenterGraphFilterType>([
+  "actor_alias",
+  "claim",
+  "data_asset",
+  "domain",
+  "edge",
+  "marketplace",
+  "organization",
+  "product",
+]);
 
 function invalidSessionResponse() {
   const response = NextResponse.json(
@@ -34,7 +50,37 @@ function invalidSessionResponse() {
   return response;
 }
 
+function parseGraphFilter(
+  searchParams: URLSearchParams,
+): CommandCenterGraphFilter | NextResponse | null {
+  const rawType = searchParams.get("graphFilterType");
+  const rawKey = searchParams.get("graphFilterKey");
+  const rawLabel = searchParams.get("graphFilterLabel");
+
+  if (rawType === null && rawKey === null && rawLabel === null) return null;
+  if (
+    rawType === null
+    || rawKey === null
+    || !COMMAND_CENTER_GRAPH_FILTER_TYPES.has(rawType as CommandCenterGraphFilterType)
+    || rawKey.length === 0
+    || rawKey.length > MAX_GRAPH_FILTER_KEY_LENGTH
+    || (rawLabel !== null && rawLabel.length > MAX_GRAPH_FILTER_LABEL_LENGTH)
+  ) {
+    return NextResponse.json(
+      { error: "The requested graph filter is invalid." },
+      { status: 400, headers: RESPONSE_HEADERS },
+    );
+  }
+
+  return {
+    filterType: rawType as CommandCenterGraphFilterType,
+    filterKey: rawKey,
+    filterLabel: rawLabel && rawLabel.trim().length > 0 ? rawLabel : null,
+  };
+}
+
 export async function GET(request: Request) {
+  const searchParams = new URL(request.url).searchParams;
   const cookieStore = await cookies();
   let verified;
   try {
@@ -62,7 +108,10 @@ export async function GET(request: Request) {
     if (!organization) return invalidSessionResponse();
   }
 
-  const requestedOrgId = new URL(request.url).searchParams.get("orgId");
+  const graphFilter = parseGraphFilter(searchParams);
+  if (graphFilter instanceof NextResponse) return graphFilter;
+
+  const requestedOrgId = searchParams.get("orgId");
   let scope: DataScope = verified.scope;
   if (user.role === "SUPER_ADMIN" && requestedOrgId !== null) {
     if (!ORG_ID_PATTERN.test(requestedOrgId)) {
@@ -79,7 +128,7 @@ export async function GET(request: Request) {
   // is safe to take from the client. Org scope ignores it entirely.
   let include: ReadonlySet<string> | undefined;
   if (scope.kind === "fleet") {
-    const raw = new URL(request.url).searchParams.get("orgIds");
+    const raw = searchParams.get("orgIds");
     if (raw !== null) {
       const ids = raw.split(",").map((id) => id.trim()).filter(Boolean);
       if (ids.length > MAX_FLEET_SELECTION || ids.some((id) => !ORG_ID_PATTERN.test(id))) {
@@ -95,11 +144,14 @@ export async function GET(request: Request) {
   // The selection is part of the cache key: without it a narrowed fleet result
   // would be served to the next caller asking for the whole fleet.
   const selectionKey = include ? [...include].sort().join("+") : "default";
+  const graphFilterKey = graphFilter
+    ? `${graphFilter.filterType}:${graphFilter.filterKey}`
+    : "none";
 
   try {
     const data = await cachedQuery(
-      `command-center:${scopeKey(scope)}:sel=${selectionKey}`,
-      () => nocturneBackend.getCommandCenter(scope, include),
+      `command-center:${scopeKey(scope)}:sel=${selectionKey}:graph=${graphFilterKey}`,
+      () => nocturneBackend.getCommandCenter(scope, include, graphFilter),
     );
     if (scope.kind === "org" && data.organizations.length === 0) {
       return NextResponse.json(
@@ -119,4 +171,3 @@ export async function GET(request: Request) {
     );
   }
 }
-

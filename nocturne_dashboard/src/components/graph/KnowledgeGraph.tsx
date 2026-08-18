@@ -23,6 +23,13 @@ export interface KnowledgeGraphProps {
   payload: GraphPayload;
   onSelectNode?: (node: GraphNode | null) => void;
   onSelectEdge?: (edge: GraphEdge | null) => void;
+  /**
+   * Optional secondary action for pages that want a direct graph-to-filter
+   * gesture. Normal click still drives the inspector; double-click can activate
+   * a node/edge without changing the default graph browsing behavior.
+   */
+  onActivateNode?: (node: GraphNode) => void;
+  onActivateEdge?: (edge: GraphEdge) => void;
   /** A number is pixels; a string lets the caller flex it, e.g. "100%". */
   height?: number | string;
   /**
@@ -192,6 +199,8 @@ export function KnowledgeGraph({
   payload,
   onSelectNode,
   onSelectEdge,
+  onActivateNode,
+  onActivateEdge,
   height = 520,
   layout = "force",
   discoveredBefore = null,
@@ -288,6 +297,22 @@ export function KnowledgeGraph({
         onSelectEdge?.(edge);
         onSelectNode?.(null);
       });
+      // Keep single-click for inspection. Double-click is the optional direct
+      // action hook used by higher-level pages for "filter Command Center".
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      instance.on("node:dblclick", (evt: any) => {
+        const id = evt?.target?.id;
+        const node = payload.nodes.find((n) => n.nodeKey === id) ?? null;
+        if (!node || phaseOf(node.firstSeen, cutoffRef.current) === "unknown") return;
+        onActivateNode?.(node);
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      instance.on("edge:dblclick", (evt: any) => {
+        const id = evt?.target?.id;
+        const edge = payload.edges.find((e) => e.graphEdgeKey === id) ?? null;
+        if (!edge || phaseOf(edge.firstSeen, cutoffRef.current) === "unknown") return;
+        onActivateEdge?.(edge);
+      });
       // Only clear on a genuine empty-canvas click. Element clicks do not reach
       // here in G6 v5, but the guard keeps that an explicit contract.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -333,7 +358,7 @@ export function KnowledgeGraph({
       container.replaceChildren();
       graphRef.current = null;
     };
-  }, [payload, layout, onSelectNode, onSelectEdge]);
+  }, [payload, layout, onSelectNode, onSelectEdge, onActivateNode, onActivateEdge]);
 
   // Restyle in place as the cutoff moves. `draw()` repaints without re-running
   // the layout, so coordinates stay put and the replay reads as a sequence.

@@ -9,6 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import type {
   CommandCenterOrganizationSnapshot,
@@ -83,12 +84,25 @@ function bandForScore(score: number): SeverityBand {
   return "informational";
 }
 
+function graphFilterKey(filter: { filterType: string; filterKey: string } | null): string {
+  return filter ? `${filter.filterType}:${filter.filterKey}` : "none";
+}
+
 export function PostureProvider({ children }: { children: ReactNode }) {
   const { session } = useAuth();
+  const searchParams = useSearchParams();
   const [data, setData] = useState<CommandCenterResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const requestedGraphFilter = useMemo(() => {
+    const filterType = searchParams.get("graphFilterType")?.trim();
+    const filterKey = searchParams.get("graphFilterKey")?.trim();
+    if (!filterType || !filterKey) return null;
+    const filterLabel = searchParams.get("graphFilterLabel")?.trim() || undefined;
+    return { filterType, filterKey, filterLabel };
+  }, [searchParams]);
+  const requestedGraphFilterKey = graphFilterKey(requestedGraphFilter);
   // Persisted so a chosen fleet view survives a reload. Read after mount to
   // avoid a hydration mismatch on the prerendered shell.
   const [fleetSelection, setFleetSelectionState] = useState<string[] | null>(null);
@@ -121,6 +135,13 @@ export function PostureProvider({ children }: { children: ReactNode }) {
       }
       if (session.scope.kind === "fleet" && fleetSelection) {
         params.set("orgIds", fleetSelection.join(","));
+      }
+      if (requestedGraphFilter) {
+        params.set("graphFilterType", requestedGraphFilter.filterType);
+        params.set("graphFilterKey", requestedGraphFilter.filterKey);
+        if (requestedGraphFilter.filterLabel) {
+          params.set("graphFilterLabel", requestedGraphFilter.filterLabel);
+        }
       }
       const url = params.size
         ? `/api/command-center?${params.toString()}`
@@ -155,7 +176,7 @@ export function PostureProvider({ children }: { children: ReactNode }) {
         if (background) setIsRefreshing(false);
       }
     },
-    [session, fleetSelection],
+    [session, fleetSelection, requestedGraphFilter],
   );
 
   useEffect(() => {
@@ -194,11 +215,12 @@ export function PostureProvider({ children }: { children: ReactNode }) {
   const visibleData = useMemo(() => {
     if (!data || !session) return null;
     if (data.scope.kind !== session.scope.kind) return null;
+    if (graphFilterKey(data.appliedGraphFilter) !== requestedGraphFilterKey) return null;
     if (data.scope.kind === "fleet") return data;
     return session.scope.kind === "org" && data.scope.orgId === session.scope.orgId
       ? data
       : null;
-  }, [data, session]);
+  }, [data, requestedGraphFilterKey, session]);
 
   const value = useMemo<PostureContextValue>(() => {
     const incidents = visibleData?.incidents ?? [];

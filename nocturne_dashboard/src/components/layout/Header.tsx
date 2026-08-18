@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Box,
   Checkbox,
@@ -13,6 +13,7 @@ import {
   alpha,
 } from "@mui/material";
 import { BarChart3, Building2, ChevronDown, Lock } from "lucide-react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePosture } from "@/contexts/PostureContext";
 import GlobalSearch from "./GlobalSearch";
@@ -20,12 +21,29 @@ import { colors, fonts, gradients, layout, severityColor, shadows } from "@/them
 
 /** Kept in step with DEMO_ORG_ID in src/server/demo-backend.ts. */
 const DEMO_TENANT_ID = "demo_org";
+const GRAPH_FILTER_QUERY_KEYS = ["graphFilterType", "graphFilterKey", "graphFilterLabel"];
 
 export function Header() {
   const { isSuperAdmin, isFleetScope, activeOrg, switchableOrgs, setScope } = useAuth();
   const { summaryFor, organizations, isLoading, fleetSelection, setFleetSelection } =
     usePosture();
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+
+  const clearGraphFilterParams = useCallback(() => {
+    const next = new URLSearchParams(searchParams.toString());
+    let changed = false;
+    for (const key of GRAPH_FILTER_QUERY_KEYS) {
+      if (!next.has(key)) continue;
+      next.delete(key);
+      changed = true;
+    }
+    if (!changed) return;
+    const query = next.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  }, [pathname, router, searchParams]);
 
   // Enabled tenants per CONFIG.MONITORED_ORGANIZATIONS. Null until the first
   // response lands, so the roster length stands in rather than a flash of "0".
@@ -62,6 +80,7 @@ export function Header() {
     // Never leave the fleet view with nothing in it: an empty aggregate reads
     // as "no incidents" rather than "you deselected everything".
     if (next.size === 0) return;
+    clearGraphFilterParams();
     setFleetSelection([...next]);
 
     // Narrowing to a single tenant means "show me only this one", so move the
@@ -201,6 +220,7 @@ export function Header() {
             <MenuItem
               selected={isFleetScope}
               onClick={() => {
+                clearGraphFilterParams();
                 setScope({ kind: "fleet" });
                 setAnchorEl(null);
               }}
@@ -231,7 +251,10 @@ export function Header() {
               <Box
                 component="button"
                 type="button"
-                onClick={() => setFleetSelection(null)}
+                onClick={() => {
+                  clearGraphFilterParams();
+                  setFleetSelection(null);
+                }}
                 sx={{
                   background: "none",
                   border: "none",
@@ -254,6 +277,7 @@ export function Header() {
                 key={org.orgId}
                 selected={!isFleetScope && activeOrg?.orgId === org.orgId}
                 onClick={() => {
+                  clearGraphFilterParams();
                   setScope({ kind: "org", orgId: org.orgId });
                   setAnchorEl(null);
                 }}

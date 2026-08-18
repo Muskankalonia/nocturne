@@ -47,6 +47,8 @@ import type {
   BreachMonitorRecord,
   BreachMonitorResponse,
   BreachMonitorStatus,
+  CommandCenterGraphFilter,
+  IncidentBandCounts,
   CommandCenterMetrics,
   CommandCenterOrganizationSnapshot,
   CommandCenterResponse,
@@ -114,6 +116,7 @@ export interface NocturneBackend {
   getCommandCenter(
     scope: DataScope,
     include?: ReadonlySet<string>,
+    graphFilter?: CommandCenterGraphFilter | null,
   ): Promise<CommandCenterResponse>;
   getBreachMonitor(
     scope: DataScope,
@@ -1630,6 +1633,50 @@ function aggregateMetrics(
   return totals;
 }
 
+function aggregateGraphFilteredMetrics(
+  organizations: CommandCenterOrganizationSnapshot[],
+  incidents: DashboardIncident[],
+): CommandCenterMetrics {
+  const totals = aggregateMetrics(organizations, incidents);
+  const incidentsByBand: IncidentBandCounts = {
+    critical: 0,
+    high: 0,
+    medium: 0,
+    low: 0,
+    informational: 0,
+  };
+  let topImpactSeverityScore: number | null = null;
+  let topImpactSeverityBand: SeverityBand | null = null;
+
+  for (const incident of incidents) {
+    if (incident.impactSeverityBand) {
+      incidentsByBand[incident.impactSeverityBand] += 1;
+    }
+    if (
+      incident.impactSeverityScore !== null
+      && (
+        topImpactSeverityScore === null
+        || incident.impactSeverityScore > topImpactSeverityScore
+      )
+    ) {
+      topImpactSeverityScore = incident.impactSeverityScore;
+      topImpactSeverityBand = incident.impactSeverityBand;
+    }
+  }
+
+  return {
+    ...totals,
+    topImpactSeverityScore,
+    topImpactSeverityBand,
+    openIncidentCount: incidents.length,
+    incidentsByBand,
+    pipeline: {
+      ...totals.pipeline,
+      incidentsRaised: incidents.length,
+    },
+  };
+}
+
 function buildCascade(metrics: CommandCenterMetrics): CommandCenterResponse["cascade"] {
   const counts = metrics.pipeline;
   return [
@@ -2167,9 +2214,29 @@ function manualUploadStages(
 }
 
 export class SnowflakeNocturneBackend implements NocturneBackend {
-  async getCommandCenter(scope: DataScope): Promise<CommandCenterResponse> {
+  async getCommandCenter(
+    scope: DataScope,
+    _include?: ReadonlySet<string>,
+    graphFilter?: CommandCenterGraphFilter | null,
+  ): Promise<CommandCenterResponse> {
     const filter = scopeFilter(scope);
     const incidentFilter = crawlerIncidentFilter(scope);
+    const incidentBaseSql = `SELECT ${INCIDENT_COLUMNS}
+         FROM NOCTURNE.DASHBOARD.VW_INCIDENTS${incidentFilter.clause}`;
+    const incidentSql = graphFilter
+      ? `SELECT DISTINCT INCIDENT.*
+         FROM (${incidentBaseSql}) AS INCIDENT
+         INNER JOIN NOCTURNE.DASHBOARD.VW_GRAPH_FILTER_INDEX AS GRAPH_FILTER
+           ON GRAPH_FILTER.ORG_ID = INCIDENT.ORG_ID
+          AND GRAPH_FILTER.INCIDENT_KEY = INCIDENT.INCIDENT_KEY
+          AND GRAPH_FILTER.FILTER_TYPE = ?
+          AND GRAPH_FILTER.FILTER_KEY = ?
+         ORDER BY INCIDENT.TRIAGE_PRIORITY_SCORE DESC, INCIDENT.INCIDENT_KEY`
+      : `${incidentBaseSql}
+         ORDER BY TRIAGE_PRIORITY_SCORE DESC, INCIDENT_KEY`;
+    const incidentBinds: Binds = graphFilter
+      ? ([...(incidentFilter.binds as unknown[]), graphFilter.filterType, graphFilter.filterKey] as Binds)
+      : incidentFilter.binds;
     const [summaryRows, incidentRows] = await Promise.all([
       executeQuery(
         `SELECT ${SUMMARY_COLUMNS}
@@ -2177,12 +2244,7 @@ export class SnowflakeNocturneBackend implements NocturneBackend {
          ORDER BY ORG_ID`,
         filter.binds,
       ),
-      executeQuery(
-        `SELECT ${INCIDENT_COLUMNS}
-         FROM NOCTURNE.DASHBOARD.VW_INCIDENTS${incidentFilter.clause}
-         ORDER BY TRIAGE_PRIORITY_SCORE DESC, INCIDENT_KEY`,
-        incidentFilter.binds,
-      ),
+      executeQuery(incidentSql, incidentBinds),
     ]);
 
     const organizations = summaryRows.map(mapOrganization);
@@ -2192,7 +2254,9 @@ export class SnowflakeNocturneBackend implements NocturneBackend {
     const incidents = incidentRows
       .map(mapIncident)
       .filter((incident) => enabledOrgIds.has(incident.orgId));
-    const totals = aggregateMetrics(organizations, incidents);
+    const totals = graphFilter
+      ? aggregateGraphFilteredMetrics(organizations, incidents)
+      : aggregateMetrics(organizations, incidents);
 
     return {
       scope,
@@ -2200,6 +2264,7 @@ export class SnowflakeNocturneBackend implements NocturneBackend {
       totals,
       cascade: buildCascade(totals),
       incidents,
+      appliedGraphFilter: graphFilter ?? null,
       lastUpdatedAt: latestTimestamp(
         organizations.map((organization) => organization.lastUpdatedAt),
       ),
@@ -2654,9 +2719,10 @@ function isConsoleTenant(row: { orgId: string }): boolean {
 async function fleetCommandCenter(
   scope: DataScope,
   include?: ReadonlySet<string>,
+  graphFilter?: CommandCenterGraphFilter | null,
 ): Promise<CommandCenterResponse> {
-  const live = await snowflakeBackend.getCommandCenter(scope);
-  const demo = getDemoCommandCenter();
+  const live = await snowflakeBackend.getCommandCenter(scope, undefined, graphFilter);
+  const demo = graphFilter ? null : getDemoCommandCenter();
 
   // The demo tenant's figures are fabricated, so it is opt-in: leaving it in
   // by default would put invented incidents into the fleet totals a reviewer
@@ -2666,12 +2732,14 @@ async function fleetCommandCenter(
 
   const organizations = [
     ...live.organizations.filter(isConsoleTenant),
-    ...demo.organizations,
+    ...(demo?.organizations ?? []),
   ].filter(selected);
-  const incidents = [...live.incidents.filter(isConsoleTenant), ...demo.incidents]
+  const incidents = [...live.incidents.filter(isConsoleTenant), ...(demo?.incidents ?? [])]
     .filter(selected)
     .sort((a, b) => (b.triagePriorityScore ?? -1) - (a.triagePriorityScore ?? -1));
-  const totals = aggregateMetrics(organizations, incidents);
+  const totals = graphFilter
+    ? aggregateGraphFilteredMetrics(organizations, incidents)
+    : aggregateMetrics(organizations, incidents);
 
   return {
     ...live,
@@ -2679,6 +2747,7 @@ async function fleetCommandCenter(
     totals,
     cascade: buildCascade(totals),
     incidents,
+    appliedGraphFilter: graphFilter ?? null,
   };
 }
 
@@ -2693,10 +2762,15 @@ async function fleetCommandCenter(
  * fleet scope and every real tenant still reach Snowflake. See demo-backend.ts.
  */
 export const nocturneBackend: NocturneBackend = {
-  getCommandCenter(scope, include) {
-    if (isDemoScope(scope)) return Promise.resolve(getDemoCommandCenter());
-    if (scope.kind === "fleet") return fleetCommandCenter(scope, include);
-    return snowflakeBackend.getCommandCenter(scope);
+  getCommandCenter(scope, include, graphFilter) {
+    if (isDemoScope(scope)) {
+      return Promise.resolve({
+        ...getDemoCommandCenter(),
+        appliedGraphFilter: graphFilter ?? null,
+      });
+    }
+    if (scope.kind === "fleet") return fleetCommandCenter(scope, include, graphFilter);
+    return snowflakeBackend.getCommandCenter(scope, undefined, graphFilter);
   },
   async getBreachMonitor(scope, access, include) {
     if (isDemoScope(scope)) return getDemoBreachMonitor();
