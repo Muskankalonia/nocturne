@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import type { LiveScanListResponse, LiveScanStartResponse } from "@/lib/live-scan";
-import { users } from "@/mocks/organizations";
+import { organizations, users } from "@/mocks/organizations";
 import {
   CrawlerApiError,
   CrawlerConfigError,
@@ -19,6 +19,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const RESPONSE_HEADERS = { "Cache-Control": "no-store", Vary: "Cookie" };
+const DEMO_ORG_ID = "demo_org";
+const ORG_ID_PATTERN = /^[a-z0-9]+(?:_[a-z0-9]+)*$/;
 
 /**
  * Stops a double-click from spending two crawls. Short, because the real guard
@@ -38,11 +40,10 @@ function unauthorized() {
 }
 
 /**
- * A live crawl is account-wide: the deployed crawler image walks every enabled
- * organization in MONITORED_ORGANIZATIONS in one pass. So this is fleet-admin
- * only, the same rule the manual ingest kick uses — a tenant user must not be
- * able to spend the host account's compute, and must not be able to start work
- * that reaches into other tenants' scopes.
+ * A live crawl spends shared Cloud Run/Tor resources, so it is fleet-admin
+ * only. The run itself is still scoped to one selected organization; we pass
+ * ORG_ID/QUERY/KEYWORDS into the Cloud Run Job so the crawler never fans out
+ * across tenants during an on-demand demo.
  */
 async function requireFleetAdmin(): Promise<
   { ok: true } | { ok: false; response: NextResponse }
@@ -78,6 +79,73 @@ async function requireFleetAdmin(): Promise<
   return { ok: true };
 }
 
+function uniqueList(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(trimmed);
+  }
+  return result;
+}
+
+function crawlerOptionsForOrg(orgId: string) {
+  if (!ORG_ID_PATTERN.test(orgId)) {
+    return { ok: false as const, error: "Select a valid organization before starting a scan." };
+  }
+  if (orgId === DEMO_ORG_ID) {
+    return {
+      ok: false as const,
+      error: "Demo Organization is sample data. Select Odido or European Commission before starting a live leak scan.",
+    };
+  }
+
+  const organization = organizations.find((candidate) => candidate.orgId === orgId);
+  if (!organization || !organization.enabled) {
+    return {
+      ok: false as const,
+      error: "Select an enabled monitored organization before starting a live leak scan.",
+    };
+  }
+
+  const leakTerms = [
+    "leak",
+    "breach",
+    "credentials",
+    "credential",
+    "password",
+    "passwords",
+    "dump",
+    "database",
+    "customer",
+    "employee",
+    "access",
+    "sale",
+    "ransom",
+    "escrow",
+  ];
+  const targetTerms = uniqueList([
+    organization.canonicalName,
+    ...organization.aliases,
+    ...organization.domains,
+    ...organization.products,
+  ]);
+
+  return {
+    ok: true as const,
+    organization,
+    options: {
+      orgId: organization.orgId,
+      query: `"${organization.canonicalName}"`,
+      keywords: uniqueList([...targetTerms, ...leakTerms]),
+    },
+  };
+}
+
 function failure(error: unknown, fallback: string) {
   console.error(
     "[nocturne-live-scan] failed:",
@@ -104,9 +172,25 @@ function failure(error: unknown, fallback: string) {
   );
 }
 
-export async function POST() {
+export async function POST(request: Request) {
   const auth = await requireFleetAdmin();
   if (!auth.ok) return auth.response;
+
+  let payload: { orgId?: unknown } = {};
+  try {
+    payload = (await request.json()) as { orgId?: unknown };
+  } catch {
+    payload = {};
+  }
+
+  const orgId = typeof payload.orgId === "string" ? payload.orgId.trim() : "";
+  const crawlerOptions = crawlerOptionsForOrg(orgId);
+  if (!crawlerOptions.ok) {
+    return NextResponse.json(
+      { error: crawlerOptions.error },
+      { status: 400, headers: RESPONSE_HEADERS },
+    );
+  }
 
   const now = Date.now();
   const waited = now - lastRunAt;
@@ -129,17 +213,17 @@ export async function POST() {
       const response: LiveScanStartResponse = {
         executionId: running.executionId,
         statusUrl: `/api/live-scan/${running.executionId}`,
-        message: "A live scan is already running. Showing that run.",
+        message: `A live scan is already running. Showing that run before starting ${crawlerOptions.organization.canonicalName}.`,
       };
       return NextResponse.json(response, { status: 200, headers: RESPONSE_HEADERS });
     }
 
     lastRunAt = now;
-    const execution = await startCrawlerRun();
+    const execution = await startCrawlerRun(crawlerOptions.options);
     const response: LiveScanStartResponse = {
       executionId: execution.executionId,
       statusUrl: `/api/live-scan/${execution.executionId}`,
-      message: "Live leak scan started. Tor takes about 90 seconds to bootstrap.",
+      message: `Live leak scan started for ${crawlerOptions.organization.canonicalName}. Tor takes about 90 seconds to bootstrap.`,
     };
     return NextResponse.json(response, { status: 202, headers: RESPONSE_HEADERS });
   } catch (error) {

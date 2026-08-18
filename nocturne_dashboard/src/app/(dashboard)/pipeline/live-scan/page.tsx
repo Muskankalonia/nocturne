@@ -66,6 +66,7 @@ const TERMINAL_GRACE_MS = 20_000;
  * watching cares about, and Cloud Logging keeps the full record anyway.
  */
 const LOG_BUFFER_LIMIT = 4_000;
+const DEMO_ORG_ID = "demo_org";
 
 function stageIcon(stage: LiveScanStage) {
   if (stage.state === "complete") return <CheckCircle2 size={14} />;
@@ -459,7 +460,7 @@ function ExecutionRow({
 }
 
 export default function LiveScanPage() {
-  const { session, isLoading: isAuthLoading } = useAuth();
+  const { session, activeOrg, isFleetScope, isLoading: isAuthLoading } = useAuth();
   const router = useRouter();
   const isFleetAdmin = session?.user.role === "SUPER_ADMIN";
 
@@ -476,6 +477,16 @@ export default function LiveScanPage() {
 
   /** Session and run history still resolving; nothing on the page is real yet. */
   const isBootstrapping = isAuthLoading || isLoading;
+
+  const liveScanBlockedReason = useMemo(() => {
+    if (!isFleetAdmin) return "Only a fleet administrator can start a live leak scan.";
+    if (isFleetScope) return "Select one real organization before starting a live leak scan.";
+    if (!activeOrg) return "Select one organization before starting a live leak scan.";
+    if (activeOrg.orgId === DEMO_ORG_ID) {
+      return "Demo Organization is sample data. Select Odido or European Commission before starting a live leak scan.";
+    }
+    return null;
+  }, [activeOrg, isFleetAdmin, isFleetScope]);
 
   /**
    * Cursor and dedupe set, held in refs rather than state.
@@ -549,10 +560,11 @@ export default function LiveScanPage() {
       ),
     );
 
-    const fresh = body.logs.filter((line) => !streamRef.current.seen.has(line.id));
+    const incomingLogs = [...body.logs, ...(body.handoffLogs ?? [])];
+    const fresh = incomingLogs.filter((line) => !streamRef.current.seen.has(line.id));
+    streamRef.current.cursor = body.cursor ?? streamRef.current.cursor;
     if (fresh.length > 0) {
       for (const line of fresh) streamRef.current.seen.add(line.id);
-      streamRef.current.cursor = body.cursor ?? streamRef.current.cursor;
       setLogs((current) => {
         const next = [...current, ...fresh];
         return next.length > LOG_BUFFER_LIMIT ? next.slice(-LOG_BUFFER_LIMIT) : next;
@@ -651,12 +663,18 @@ export default function LiveScanPage() {
   }, [isFleetAdmin, pollSelected, selectedExecutionId]);
 
   const startScan = useCallback(async () => {
+    if (liveScanBlockedReason || !activeOrg) {
+      setError(liveScanBlockedReason ?? "Select an organization before starting a live leak scan.");
+      return;
+    }
     setIsStarting(true);
     setError(null);
     setNotice(null);
     try {
       const response = await fetch("/api/live-scan", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orgId: activeOrg.orgId }),
         credentials: "same-origin",
         cache: "no-store",
       });
@@ -677,7 +695,7 @@ export default function LiveScanPage() {
     } finally {
       setIsStarting(false);
     }
-  }, [loadExecutions]);
+  }, [activeOrg, liveScanBlockedReason, loadExecutions]);
 
   /**
    * "Run pipeline" on the posture page lands here with ?autostart=1 and expects
@@ -701,12 +719,12 @@ export default function LiveScanPage() {
    */
   const autostartRef = useRef(false);
   useEffect(() => {
-    if (autostartRef.current || isBootstrapping || !isFleetAdmin) return;
+    if (autostartRef.current || isBootstrapping || !isFleetAdmin || liveScanBlockedReason) return;
     if (new URLSearchParams(window.location.search).get("autostart") !== "1") return;
     autostartRef.current = true;
     router.replace("/pipeline/live-scan", { scroll: false });
     void startScan();
-  }, [isBootstrapping, isFleetAdmin, router, startScan]);
+  }, [isBootstrapping, isFleetAdmin, liveScanBlockedReason, router, startScan]);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -717,10 +735,14 @@ export default function LiveScanPage() {
   // not from the single window the last poll returned.
   const stages = useMemo(() => deriveLiveScanStages(execution, logs), [execution, logs]);
   const isRunning = execution ? !isLiveScanTerminal(execution) : false;
-  const pagesSaved = useMemo(
-    () => logs.filter((line) => line.text.includes("SAVED |")).length,
-    [logs],
-  );
+  const pagesSaved = useMemo(() => {
+    const savedLines = logs.filter((line) => line.text.includes("SAVED |")).length;
+    const summary = [...logs]
+      .reverse()
+      .map((line) => /Pages saved(?: \(keyword match\))?:\s*(\d+)/.exec(line.text))
+      .find((match): match is RegExpExecArray => match !== null);
+    return summary ? Number(summary[1]) : savedLines;
+  }, [logs]);
   const failureCount = useMemo(
     () => logs.filter((line) => line.tone === "critical" || line.text.includes("FAILED:")).length,
     [logs],
@@ -748,7 +770,8 @@ export default function LiveScanPage() {
         startIcon={
           isStarting ? <Loader2 size={14} className="spin" /> : <Terminal size={14} />
         }
-        disabled={isBootstrapping || isStarting || !isFleetAdmin}
+        disabled={isBootstrapping || isStarting || !isFleetAdmin || Boolean(liveScanBlockedReason)}
+        title={liveScanBlockedReason ?? undefined}
         onClick={() => void startScan()}
       >
         {isStarting ? "Starting…" : "Run Live Leak Scan"}
@@ -765,10 +788,10 @@ export default function LiveScanPage() {
         />
         <Panel>
           <Typography sx={{ color: colors.text2, fontSize: 12.5, lineHeight: 1.7 }}>
-            A live scan crawls Tor for every monitored organization in one pass and spends
-            shared compute, so it is restricted to fleet administrators. To feed your own
-            data into the cascade, use Upload Paste Dump instead — that runs against your
-            organization only.
+            A live scan crawls Tor for one selected monitored organization and spends shared
+            compute, so it is restricted to fleet administrators. To feed your own data into
+            the cascade, use Upload Paste Dump instead — that runs against your organization
+            only without starting the crawler.
           </Typography>
         </Panel>
       </Stack>
@@ -796,6 +819,11 @@ export default function LiveScanPage() {
       {notice && (
         <Alert severity="info" variant="outlined" onClose={() => setNotice(null)}>
           {notice}
+        </Alert>
+      )}
+      {liveScanBlockedReason && isFleetAdmin && !isBootstrapping && (
+        <Alert severity="warning" variant="outlined">
+          {liveScanBlockedReason}
         </Alert>
       )}
 
@@ -837,7 +865,8 @@ export default function LiveScanPage() {
           <Stack gap={1.5}>
             <Typography sx={{ color: colors.text2, fontSize: 12.3, lineHeight: 1.65 }}>
               This starts the <b>nocturne-crawler</b> container on Cloud Run. It brings up Tor,
-              queries Ahmia and Dread for every enabled organization, walks the results
+              queries Ahmia and Dread for{" "}
+              <b>{activeOrg?.canonicalName ?? "the selected organization"}</b> only, walks the results
               breadth-first, and writes keyword-matching pages to GCS as schema-v2 JSONL.gz.
               Snowflake picks the batch up from there and the L0–L4 cascade runs behind it.
             </Typography>
@@ -851,13 +880,16 @@ export default function LiveScanPage() {
               startIcon={
                 isStarting ? <Loader2 size={16} className="spin" /> : <Terminal size={16} />
               }
-              disabled={isBootstrapping || isStarting}
+              disabled={isBootstrapping || isStarting || Boolean(liveScanBlockedReason)}
+              title={liveScanBlockedReason ?? undefined}
               onClick={() => void startScan()}
             >
               {isBootstrapping
                 ? "Loading workspace…"
                 : isStarting
                   ? "Starting crawler…"
+                  : liveScanBlockedReason
+                    ? "Select organization first"
                   : "Run Live Leak Scan"}
             </Button>
             {(isStarting || isRunning) && (

@@ -61,6 +61,12 @@ interface CrawlerTarget {
   job: string;
 }
 
+export interface CrawlerRunOptions {
+  orgId: string;
+  query: string;
+  keywords: string[];
+}
+
 function crawlerTarget(): CrawlerTarget {
   const projectId =
     process.env.NOCTURNE_CRAWLER_PROJECT?.trim()
@@ -233,7 +239,7 @@ function jobResourceName({ projectId, region, job }: CrawlerTarget): string {
  * two runs started seconds apart would make "the newest execution" ambiguous,
  * and attaching the log stream to the wrong one is worse than failing.
  */
-export async function startCrawlerRun(): Promise<LiveScanExecution> {
+export async function startCrawlerRun(options: CrawlerRunOptions): Promise<LiveScanExecution> {
   const target = crawlerTarget();
   const operation = await callGoogleApi<{
     name?: string;
@@ -242,7 +248,20 @@ export async function startCrawlerRun(): Promise<LiveScanExecution> {
     error?: { message?: string };
   }>(`https://run.googleapis.com/v2/${jobResourceName(target)}:run`, {
     method: "POST",
-    body: {},
+    body: {
+      overrides: {
+        containerOverrides: [
+          {
+            env: [
+              { name: "ORG_ID", value: options.orgId },
+              { name: "QUERY", value: options.query },
+              { name: "KEYWORDS", value: options.keywords.join(",") },
+              { name: "ALLOW_DEMO_ORG_CRAWL", value: "false" },
+            ],
+          },
+        ],
+      },
+    },
   });
 
   if (operation.error?.message) {
@@ -309,6 +328,35 @@ function logEntryText(entry: LogEntryResource): string {
   if (typeof message === "string") return message;
   if (entry.jsonPayload) return JSON.stringify(entry.jsonPayload);
   return "";
+}
+
+/**
+ * Keep the UI console useful.
+ *
+ * The raw Cloud Logging record remains complete; this only removes Tor/Chrome
+ * boilerplate from the dashboard stream so the analyst sees crawler decisions:
+ * which organization/query ran, what pages were saved/skipped, queue waits, and
+ * fatal conditions. A noisy demo log is not transparency — it is camouflage.
+ */
+function shouldHideCrawlerLog(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return true;
+  if (/^=+$/.test(trimmed)) return true;
+  if (/^Aug \d+ .* \[(notice|warn)\]/.test(trimmed)) return true;
+  if (/^\(Session info:/.test(trimmed)) return true;
+  if (/^Stacktrace:?$/i.test(trimmed)) return true;
+  if (/^\s*#\d+\s+/.test(trimmed)) return true;
+  if (trimmed.startsWith("chrome=")) return true;
+  if (trimmed.includes("Tor can't help you if you use it wrong")) return true;
+  if (trimmed.includes("Read configuration file")) return true;
+  if (trimmed.includes("Opening Socks listener")) return true;
+  if (trimmed.includes("Opened Socks listener")) return true;
+  if (trimmed.includes("Set list of supported TLS groups")) return true;
+  if (trimmed.includes("Starting with guard context")) return true;
+  if (trimmed.includes("I learned some more directory information")) return true;
+  if (trimmed.includes("The current consensus")) return true;
+  if (trimmed.includes("Bootstrapped ") && !trimmed.includes("100%")) return true;
+  return false;
 }
 
 /**
@@ -385,8 +433,9 @@ export async function fetchCrawlerLogs(
 
   return (result.entries ?? [])
     .map((entry, index): LiveScanLogLine | null => {
-      const text = logEntryText(entry);
+      const text = logEntryText(entry).trimEnd();
       if (!text.trim()) return null;
+      if (shouldHideCrawlerLog(text)) return null;
       return {
         id: entry.insertId ?? `${entry.timestamp ?? ""}-${index}`,
         timestamp: entry.timestamp ?? "",

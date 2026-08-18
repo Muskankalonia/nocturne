@@ -84,10 +84,29 @@ export interface LiveScanListResponse {
   fetchedAt: string;
 }
 
+export interface LiveScanSnowflakeHandoff {
+  copiedAt: string;
+  runId: string;
+  orgId: string | null;
+  sourcePattern: string;
+  rowsLoaded: number;
+  rawRows: number;
+  rawFiles: number;
+  lastRawIngestedAt: string | null;
+  detail: string;
+}
+
 export interface LiveScanStatusResponse {
   execution: LiveScanExecution;
   stages: LiveScanStage[];
   logs: LiveScanLogLine[];
+  /**
+   * Server-generated status lines for work that happens after Cloud Run exits.
+   * These are intentionally separate from `logs` so the polling cursor always
+   * remains a real Cloud Logging timestamp.
+   */
+  handoffLogs?: LiveScanLogLine[];
+  snowflakeHandoff?: LiveScanSnowflakeHandoff | null;
   /**
    * Newest timestamp in `logs`, echoed back by the client as `?since=` to fetch
    * only what has appeared since. Null when this page was empty, in which case
@@ -120,7 +139,7 @@ const STAGE_TEMPLATE: ReadonlyArray<Omit<LiveScanStage, "state" | "detail">> = [
   {
     id: "search",
     label: "Search engines",
-    caption: "Query Ahmia and Dread for every enabled organization.",
+    caption: "Query Ahmia and Dread for the selected organization only.",
   },
   {
     id: "frontier",
@@ -163,8 +182,8 @@ export const LIVE_SCAN_IDLE_STAGES: LiveScanStage[] = STAGE_TEMPLATE.map((stage)
  * the *newest* log line is also the furthest point the run has reached.
  */
 const STAGE_MARKERS: ReadonlyArray<{ stage: LiveScanStageId; markers: string[] }> = [
-  { stage: "handoff", markers: ["CRAWL COMPLETE"] },
-  { stage: "stage", markers: ["page(s) saved ->", "Pages saved:", "Output: gs://"] },
+  { stage: "handoff", markers: ["COPY loaded", "raw page(s) into Snowflake"] },
+  { stage: "stage", markers: ["CRAWL COMPLETE", "page(s) saved ->", "Pages saved:", "Output: gs://"] },
   { stage: "crawl", markers: ["SAVED |", "NO KEYWORD MATCH", "Depth 0 |", "Depth 1 |", "Depth 2 |"] },
   { stage: "frontier", markers: ["Entry points (", "No results for this query"] },
   { stage: "search", markers: ["[SEARCH:", "[STEP 1] Searching"] },
@@ -201,6 +220,7 @@ export function toneForLogLine(text: string, severity?: string | null): LiveScan
     return "critical";
   }
   if (text.includes("FATAL:") || text.includes("Traceback")) return "critical";
+  if (text.includes("Runtime budget reached") || text.includes("partial_success")) return "medium";
   if (
     text.includes("FAILED:")
     || text.includes("WARNING")
@@ -214,6 +234,8 @@ export function toneForLogLine(text: string, severity?: string | null): LiveScan
     || text.includes("Tor verified!")
     || text.includes("CRAWL COMPLETE")
     || text.includes("page(s) saved ->")
+    || text.includes("COPY loaded")
+    || text.includes("raw page(s) into Snowflake")
   ) {
     return "ok";
   }
@@ -226,6 +248,21 @@ export function toneForLogLine(text: string, severity?: string | null): LiveScan
     return "ion";
   }
   return "neutral";
+}
+
+function hasSavedCrawlerOutput(logs: LiveScanLogLine[]): boolean {
+  return logs.some(
+    (line) => line.text.includes("SAVED |") || line.text.includes("page(s) saved ->"),
+  );
+}
+
+function hasFinalizedCrawlerOutput(logs: LiveScanLogLine[]): boolean {
+  return logs.some(
+    (line) =>
+      line.text.includes("CRAWL COMPLETE")
+      || line.text.includes("Pages saved:")
+      || line.text.includes("Output: gs://"),
+  );
 }
 
 /**
@@ -261,7 +298,10 @@ export function deriveLiveScanStages(
 
   const failed = execution.state === "failed" || execution.state === "cancelled";
   const succeeded = execution.state === "succeeded";
-  if (succeeded) furthest = STAGE_ORDER.handoff;
+  const savedCrawlerOutput = hasSavedCrawlerOutput(logs);
+  const finalizedCrawlerOutput = hasFinalizedCrawlerOutput(logs);
+  if (finalizedCrawlerOutput) furthest = Math.max(furthest, STAGE_ORDER.stage);
+  if (succeeded) furthest = Math.max(furthest, STAGE_ORDER.stage);
 
   // A crawl that never printed a milestone is still starting up; nothing past
   // dispatch has actually happened yet.
@@ -282,8 +322,18 @@ export function deriveLiveScanStages(
     if (position < furthest) return { ...stage, state: "complete" as const, detail };
     if (position > furthest) return { ...stage, state: "waiting" as const, detail: null };
 
-    // The stage the run is sitting on.
-    if (failed) {
+    // The stage the run is sitting on. A Cloud Run timeout after matched pages
+    // were written is still a crawler failure, but not a total extraction
+    // failure: mark the page-fetch stage as partial and leave the handoff as
+    // waiting unless the manifest/output summary confirms finalization.
+    if (failed && savedCrawlerOutput && !finalizedCrawlerOutput && stage.id === "crawl") {
+      return {
+        ...stage,
+        state: "error" as const,
+        detail: "Some pages were saved before the run ended; final GCS manifest may be incomplete.",
+      };
+    }
+    if (failed && !finalizedCrawlerOutput && (!savedCrawlerOutput || position <= furthest)) {
       return {
         ...stage,
         state: "error" as const,
@@ -292,6 +342,9 @@ export function deriveLiveScanStages(
           ?? detail
           ?? (execution.state === "cancelled" ? "Run cancelled." : "Run failed here."),
       };
+    }
+    if (failed && finalizedCrawlerOutput) {
+      return { ...stage, state: "complete" as const, detail };
     }
     if (succeeded) return { ...stage, state: "complete" as const, detail };
     return { ...stage, state: "running" as const, detail };
