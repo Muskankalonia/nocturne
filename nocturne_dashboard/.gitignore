@@ -21,3 +21,6 @@ snowflake.log
 
 # Extension secret overrides used by the emulator
 extensions/*.secret.local
+
+# Vitest coverage output
+coverage/

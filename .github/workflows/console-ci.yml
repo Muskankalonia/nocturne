@@ -1,14 +1,15 @@
-# Console CI — typecheck and production build of the Next.js analyst console.
+# Console CI — typecheck, unit tests and production build of the analyst console.
 #
 # Runs on every pull request and every push to main. Needs no credentials at
 # all: the console reads Snowflake configuration at request time, not at build
-# time, so `next build` completes with no .env.local present. That is what makes
-# this job safe to run on a fork's pull request and free to run on every push.
+# time, so `next build` completes with no .env.local present, and the unit tests
+# cover pure logic that never opens a connection. That is what makes this job
+# safe to run on a fork's pull request and free to run on every push.
 #
-# It exists because the two things it checks are exactly the two things that
-# break a deploy, and both break silently until you try. A route handler that
-# references a backend method nobody kept is a clean `git commit` and a failed
-# `./deploy.sh` twenty minutes later.
+# It exists because the three things it checks are exactly the three things that
+# break a deploy, and all of them break silently until you try. A route handler
+# that references a backend method nobody kept is a clean `git commit` and a
+# failed `./deploy.sh` twenty minutes later.
 
 name: Console CI
 
@@ -37,7 +38,7 @@ defaults:
 
 jobs:
   build:
-    name: Typecheck and build
+    name: Typecheck, test and build
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -63,6 +64,45 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      # Thresholds live in vitest.config.ts (90% across statements, branches,
+      # functions and lines) so `npm run test:coverage` fails the same way on a
+      # laptop as it does here. Nothing to configure twice.
+      - name: Unit tests with coverage
+        run: npm run test:coverage
+
+      # Renders the figure into the run's summary page rather than leaving it
+      # buried in the log. Reads the file vitest already wrote; it does not
+      # recompute anything, so it cannot disagree with the gate above.
+      - name: Publish coverage summary
+        if: always()
+        run: |
+          if [ ! -f coverage/coverage-summary.json ]; then
+            echo "No coverage summary produced." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          node -e '
+            const total = require("./coverage/coverage-summary.json").total;
+            const row = (name) =>
+              `| ${name} | ${total[name].pct}% | ${total[name].covered}/${total[name].total} |`;
+            console.log([
+              "## Console unit test coverage",
+              "",
+              "| Metric | Coverage | Covered |",
+              "| --- | --- | --- |",
+              row("statements"), row("branches"), row("functions"), row("lines"),
+              "",
+              "Gate: 90% on each metric. Scope is the pure-logic allowlist in `vitest.config.ts`.",
+            ].join("\n"));
+          ' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: console-coverage
+          path: nocturne_dashboard/coverage/
+          retention-days: 7
 
       - name: Build
         run: npm run build

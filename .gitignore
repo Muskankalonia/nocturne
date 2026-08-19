@@ -31,3 +31,15 @@ architecture.pdf
 
 # Firebase CLI debug log — records project id and deploy target.
 firebase-debug.log
+
+# Test coverage output
+.coverage
+coverage.xml
+coverage.json
+htmlcov/
+.pytest_cache/
+
+# GCP service account keys. nocturne-deployer.json is a live private key for
+# the GitHub Actions deployer; one `git add -A` would publish it.
+*-deployer.json
+*-service-account*.json

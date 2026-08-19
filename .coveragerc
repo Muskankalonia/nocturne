@@ -1,0 +1,35 @@
+# Coverage gate for the Python side of the pipeline.
+#
+# `include` is an allowlist, not the whole tree, and the reason is the same one
+# that shapes the console's vitest config: these tests cover code that decides
+# something, not code that moves bytes across a boundary.
+#
+# The two modules gated here are the ones where that logic dominates the file —
+# the crawler's output sinks and the bridge that turns a monitored-organization
+# profile into crawl settings. Both are pure enough to hold above 90%, and both
+# fail silently when they are wrong, which is what makes a gate worth having.
+#
+# deploy_pipeline.py and nocturne_crawler/scraper.py are deliberately not gated.
+# They are dominated by Snowflake cursors and Selenium drivers, so a "coverage"
+# number for them would mostly measure how thoroughly the mocks were exercised.
+# Their pure helpers are still tested — see tests/test_deploy_pipeline.py and
+# tests/test_scraper.py — and the CI job prints an ungated report for both so
+# the real figure stays visible rather than being quietly excluded.
+
+[run]
+branch = True
+include =
+    scripts/org_crawl_config.py
+    src/nocturne_crawler/storage.py
+
+[report]
+fail_under = 90
+show_missing = True
+skip_covered = False
+exclude_lines =
+    pragma: no cover
+    # Entry-point guards run only when the file is executed as a script.
+    if __name__ == .__main__.:
+    # Protocol declarations have no runtime body worth covering.
+    \.\.\.
+    raise NotImplementedError
