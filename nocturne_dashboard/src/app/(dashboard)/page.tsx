@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Box, Button, Stack, Typography, alpha } from "@mui/material";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePosture } from "@/contexts/PostureContext";
+import { PriorityQueueActions } from "@/components/triage/PriorityQueueActions";
 import { Panel } from "@/components/ui/Panel";
 import { Cascade } from "@/components/ui/Cascade";
 import { PostureFlow } from "@/components/ui/PostureFlow";
@@ -407,6 +408,7 @@ export default function CommandCenterPage() {
                   "Impact",
                   "Confidence",
                   "Triage",
+                  "Response",
                 ].map((h) => (
                   <Box
                     key={h}
@@ -434,7 +436,7 @@ export default function CommandCenterPage() {
                 <Box component="tr">
                   <Box
                     component="td"
-                    colSpan={isFleetScope ? 7 : 6}
+                    colSpan={isFleetScope ? 8 : 7}
                     sx={{ py: 4, textAlign: "center", color: colors.text3 }}
                   >
                     No confirmed target incidents are available for this scope.
@@ -578,6 +580,21 @@ export default function CommandCenterPage() {
                       band={row.triagePriorityBand}
                       score={row.triagePriorityScore}
                     />
+                  </Td>
+                  {/* The queue stops being read-only here. `stopPropagation`
+                      on the cell keeps a click on a button from also firing
+                      the row's navigate-to-detail handler. */}
+                  <Td>
+                    <Box
+                      onClick={(event: React.MouseEvent) => event.stopPropagation()}
+                    >
+                      <PriorityQueueActions
+                        incidentKey={row.incidentKey}
+                        orgId={row.orgId}
+                        remediationStatus={row.remediationStatus}
+                        onChanged={() => refresh()}
+                      />
+                    </Box>
                   </Td>
                 </Box>
               ))}

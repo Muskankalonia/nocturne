@@ -163,6 +163,152 @@ GRANT SELECT, INSERT ON TABLE NOCTURNE.CONFIG.ALERT_DELIVERIES
 GRANT SELECT, INSERT, UPDATE ON TABLE NOCTURNE.CONFIG.USER_PROFILES
   TO ROLE IDENTIFIER($NOCTURNE_DASHBOARD_ROLE);
 
+-- =============================================================================
+-- Triage and mitigation state.
+--
+-- Everything below is analyst-authored workflow, not pipeline output. It lives
+-- in CONFIG rather than RAW for exactly that reason: the detection cascade is
+-- deterministic and reproducible from the crawled pages, and a human deciding
+-- "we have handled this" is neither. Keeping the two apart means a full pipeline
+-- rebuild never silently discards a mitigation decision.
+--
+-- These tables are declared here, before step 16, because the dashboard views
+-- join them. A view cannot be created ahead of the table it reads.
+-- =============================================================================
+
+-- Current remediation state for one incident. One row per incident, updated in
+-- place; the history lives in INCIDENT_ACTION_AUDIT next to it.
+--
+-- STATUS is deliberately open text rather than an enum: Snowflake has no
+-- enforced enum, and a CHECK constraint here would mean a UI-side vocabulary
+-- change needs a migration. The console normalizes before writing, and the
+-- views below coalesce anything unrecognized back to 'new'.
+CREATE TABLE IF NOT EXISTS NOCTURNE.CONFIG.INCIDENT_REMEDIATION (
+  ORG_ID STRING NOT NULL,
+  INCIDENT_KEY STRING NOT NULL,
+  REMEDIATION_STATUS STRING NOT NULL,
+  -- Set when the status becomes 'mitigated', cleared when it is unmarked, so
+  -- "when was this closed out" survives a later status change.
+  MITIGATED_AT TIMESTAMP_TZ,
+  MITIGATED_BY STRING,
+  NOTE STRING,
+  -- 'console' or 'jira'. The Jira webhook and the UI write the same row, and
+  -- without this the two loops cannot tell whose change they are observing —
+  -- which is how a close-sync turns into an infinite ping-pong.
+  UPDATED_VIA STRING DEFAULT 'console' NOT NULL,
+  UPDATED_BY STRING,
+  UPDATED_AT TIMESTAMP_TZ DEFAULT CURRENT_TIMESTAMP() NOT NULL,
+  CONSTRAINT PK_INCIDENT_REMEDIATION PRIMARY KEY (ORG_ID, INCIDENT_KEY)
+);
+
+-- Append-only trail of every triage action taken, including the ones that
+-- changed no state. This is the audit record the Snowflake requirement asks
+-- for: who dispatched what, who mitigated what, and when.
+CREATE TABLE IF NOT EXISTS NOCTURNE.CONFIG.INCIDENT_ACTION_AUDIT (
+  ACTION_ID STRING DEFAULT UUID_STRING() NOT NULL,
+  ORG_ID STRING NOT NULL,
+  -- Null for actions that are not incident-scoped, such as a period export.
+  INCIDENT_KEY STRING,
+  ACTION STRING NOT NULL,
+  ACTOR STRING NOT NULL,
+  OUTCOME STRING NOT NULL,
+  DETAIL VARIANT,
+  CREATED_AT TIMESTAMP_TZ DEFAULT CURRENT_TIMESTAMP() NOT NULL,
+  CONSTRAINT PK_INCIDENT_ACTION_AUDIT PRIMARY KEY (ACTION_ID)
+);
+
+-- One row per (incident, channel) delivery to an external system. The primary
+-- key is the idempotency guard, the same shape as ALERT_DELIVERIES: dispatching
+-- twice must not open a second Jira ticket.
+CREATE TABLE IF NOT EXISTS NOCTURNE.CONFIG.INCIDENT_INTEGRATIONS (
+  ORG_ID STRING NOT NULL,
+  INCIDENT_KEY STRING NOT NULL,
+  -- 'jira' | 'slack' | 'email'
+  CHANNEL STRING NOT NULL,
+  -- Jira issue key, Slack message ts, or null for email fan-out.
+  EXTERNAL_ID STRING,
+  EXTERNAL_URL STRING,
+  -- 'open' | 'closed' | 'failed' | 'sent'
+  STATE STRING DEFAULT 'open' NOT NULL,
+  LAST_ERROR STRING,
+  CREATED_BY STRING,
+  CREATED_AT TIMESTAMP_TZ DEFAULT CURRENT_TIMESTAMP() NOT NULL,
+  UPDATED_AT TIMESTAMP_TZ DEFAULT CURRENT_TIMESTAMP() NOT NULL,
+  CONSTRAINT PK_INCIDENT_INTEGRATIONS PRIMARY KEY (ORG_ID, INCIDENT_KEY, CHANNEL)
+);
+
+-- Headless-browser captures of needs-review pages, so an admin can look at the
+-- actual page before deciding whether it is a breach.
+--
+-- The image itself never lands here. Only its GCS location does: a screenshot
+-- of a dark-web listing is unmasked source material, and the whole interface
+-- contract of NOCTURNE.DASHBOARD is that raw page content does not cross it.
+-- Access is mediated by a signed URL minted per request instead.
+CREATE TABLE IF NOT EXISTS NOCTURNE.CONFIG.PAGE_SCREENSHOTS (
+  ORG_ID STRING NOT NULL,
+  -- MONITOR_KEY from VW_BREACH_MONITOR, which is stable for both incident rows
+  -- and the document-level rows that never became incidents.
+  MONITOR_KEY STRING NOT NULL,
+  DEDUPE_KEY STRING,
+  URL STRING NOT NULL,
+  -- 'requested' | 'capturing' | 'captured' | 'failed'
+  STATUS STRING DEFAULT 'requested' NOT NULL,
+  OBJECT_URI STRING,
+  PAGE_TITLE STRING,
+  CAPTURE_ERROR STRING,
+  REQUESTED_BY STRING NOT NULL,
+  REQUESTED_AT TIMESTAMP_TZ DEFAULT CURRENT_TIMESTAMP() NOT NULL,
+  CAPTURED_AT TIMESTAMP_TZ,
+  CONSTRAINT PK_PAGE_SCREENSHOTS PRIMARY KEY (ORG_ID, MONITOR_KEY)
+);
+
+-- The admin's verdict on a needs-review row after looking at the capture.
+-- Kept separate from INCIDENT_REMEDIATION because it answers a different
+-- question: not "has this been handled" but "is this ours at all".
+CREATE TABLE IF NOT EXISTS NOCTURNE.CONFIG.REVIEW_DECISIONS (
+  ORG_ID STRING NOT NULL,
+  MONITOR_KEY STRING NOT NULL,
+  -- 'confirmed_breach' | 'not_a_breach'
+  DECISION STRING NOT NULL,
+  NOTE STRING,
+  DECIDED_BY STRING NOT NULL,
+  DECIDED_AT TIMESTAMP_TZ DEFAULT CURRENT_TIMESTAMP() NOT NULL,
+  CONSTRAINT PK_REVIEW_DECISIONS PRIMARY KEY (ORG_ID, MONITOR_KEY)
+);
+
+-- Generated evidence and weekly reports. The artifact is not stored; this is
+-- the record that one was produced, for whom, over what window.
+CREATE TABLE IF NOT EXISTS NOCTURNE.CONFIG.REPORT_RUNS (
+  REPORT_ID STRING DEFAULT UUID_STRING() NOT NULL,
+  ORG_ID STRING,
+  -- 'evidence_pdf' | 'evidence_csv' | 'weekly_pdf'
+  KIND STRING NOT NULL,
+  PERIOD_START TIMESTAMP_TZ NOT NULL,
+  PERIOD_END TIMESTAMP_TZ NOT NULL,
+  INCIDENT_COUNT NUMBER,
+  DELIVERY STRING NOT NULL,
+  RECIPIENTS ARRAY,
+  GENERATED_BY STRING NOT NULL,
+  GENERATED_AT TIMESTAMP_TZ DEFAULT CURRENT_TIMESTAMP() NOT NULL,
+  CONSTRAINT PK_REPORT_RUNS PRIMARY KEY (REPORT_ID)
+);
+
+-- The console owns this workflow state end to end, so it needs write access.
+-- DELETE is granted nowhere: unmarking a mitigation is an UPDATE that clears
+-- MITIGATED_AT, and the audit row for it stays.
+GRANT SELECT, INSERT, UPDATE ON TABLE NOCTURNE.CONFIG.INCIDENT_REMEDIATION
+  TO ROLE IDENTIFIER($NOCTURNE_DASHBOARD_ROLE);
+GRANT SELECT, INSERT ON TABLE NOCTURNE.CONFIG.INCIDENT_ACTION_AUDIT
+  TO ROLE IDENTIFIER($NOCTURNE_DASHBOARD_ROLE);
+GRANT SELECT, INSERT, UPDATE ON TABLE NOCTURNE.CONFIG.INCIDENT_INTEGRATIONS
+  TO ROLE IDENTIFIER($NOCTURNE_DASHBOARD_ROLE);
+GRANT SELECT, INSERT, UPDATE ON TABLE NOCTURNE.CONFIG.PAGE_SCREENSHOTS
+  TO ROLE IDENTIFIER($NOCTURNE_DASHBOARD_ROLE);
+GRANT SELECT, INSERT, UPDATE ON TABLE NOCTURNE.CONFIG.REVIEW_DECISIONS
+  TO ROLE IDENTIFIER($NOCTURNE_DASHBOARD_ROLE);
+GRANT SELECT, INSERT ON TABLE NOCTURNE.CONFIG.REPORT_RUNS
+  TO ROLE IDENTIFIER($NOCTURNE_DASHBOARD_ROLE);
+
 SELECT
   ORG_ID,
   CANONICAL_NAME,

@@ -219,11 +219,19 @@ export interface ThreatActorsResponse {
   fetchedAt: string;
 }
 
-/** The three mutually exclusive audit categories exposed by VW_BREACH_MONITOR. */
+/**
+ * The audit categories exposed by VW_BREACH_MONITOR.
+ *
+ * The first three are the pipeline's own verdicts. `dismissed` is not: it is
+ * what a needs-review row becomes after an admin has looked at the captured
+ * page and ruled that it is not a breach. The pipeline's original verdict is
+ * still carried alongside, in `pipelineMonitorStatus`.
+ */
 export type BreachMonitorStatus =
   | "confirmed_yours"
   | "needs_review"
-  | "another_company";
+  | "another_company"
+  | "dismissed";
 
 /** How far a Breach Monitor row progressed through the cached pipeline. */
 export type BreachMonitorPipelineState =
@@ -272,6 +280,15 @@ export interface BreachMonitorRecord {
   actorCredibilityScore: number | null;
   groundingLevel: GroundingLevel | null;
   remediationStatus: RemediationStatus;
+  mitigatedAt: string | null;
+  mitigatedBy: string | null;
+  /** The cascade's own verdict, before any analyst override. */
+  pipelineMonitorStatus: BreachMonitorStatus;
+  reviewDecision: "confirmed_breach" | "not_a_breach" | null;
+  reviewDecidedBy: string | null;
+  reviewDecidedAt: string | null;
+  screenshotStatus: "requested" | "capturing" | "captured" | "failed" | null;
+  screenshotCapturedAt: string | null;
   detailAvailable: boolean;
 }
 
@@ -282,6 +299,8 @@ export interface BreachMonitorSummary {
   exposedDataClassCount: number;
   needsReview: number;
   anotherCompany: number;
+  mitigated: number;
+  dismissed: number;
 }
 
 /** Serializable response shared by single-organization and fleet views. */

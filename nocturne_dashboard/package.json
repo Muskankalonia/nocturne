@@ -28,6 +28,7 @@
     "firebase-admin": "^14.2.0",
     "lucide-react": "^0.469.0",
     "next": "^15.5.22",
+    "puppeteer": "^25.4.0",
     "react": "^19.0.0",
     "react-apexcharts": "^1.7.0",
     "react-dom": "^19.0.0",

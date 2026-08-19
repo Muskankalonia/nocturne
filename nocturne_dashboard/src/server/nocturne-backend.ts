@@ -282,6 +282,23 @@ const BREACH_MONITOR_COLUMNS = `
   ACTOR_CREDIBILITY_SCORE,
   GROUNDING_LEVEL,
   REMEDIATION_STATUS,
+  TO_VARCHAR(
+    MITIGATED_AT,
+    'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM'
+  ) AS MITIGATED_AT,
+  MITIGATED_BY,
+  PIPELINE_MONITOR_STATUS,
+  REVIEW_DECISION,
+  REVIEW_DECIDED_BY,
+  TO_VARCHAR(
+    REVIEW_DECIDED_AT,
+    'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM'
+  ) AS REVIEW_DECIDED_AT,
+  SCREENSHOT_STATUS,
+  TO_VARCHAR(
+    SCREENSHOT_CAPTURED_AT,
+    'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM'
+  ) AS SCREENSHOT_CAPTURED_AT,
   DETAIL_AVAILABLE
 `;
 
@@ -1039,7 +1056,13 @@ async function getConnection(): Promise<Connection> {
   return connectionPromise;
 }
 
-async function executeQuery(
+/**
+ * Exported so the triage-action module can share this connection rather than
+ * opening a second one. The pool here is a single long-lived connection; a
+ * parallel module with its own would double the warehouse sessions for no gain
+ * and make the query tag lie about who is asking.
+ */
+export async function executeQuery(
   sqlText: string,
   binds: Binds = [],
 ): Promise<SnowflakeRow[]> {
@@ -1327,6 +1350,23 @@ function mapBreachMonitorRecord(row: SnowflakeRow): BreachMonitorRecord {
       row.REMEDIATION_STATUS,
       "new",
     ) as RemediationStatus,
+    mitigatedAt: nullableString(row.MITIGATED_AT),
+    mitigatedBy: nullableString(row.MITIGATED_BY),
+    // Falls back to the effective status so a deployment that has not yet run
+    // step 16 renders sensibly instead of showing an empty column.
+    pipelineMonitorStatus: stringValue(
+      row.PIPELINE_MONITOR_STATUS,
+      stringValue(row.MONITOR_STATUS),
+    ) as BreachMonitorStatus,
+    reviewDecision: nullableString(
+      row.REVIEW_DECISION,
+    ) as BreachMonitorRecord["reviewDecision"],
+    reviewDecidedBy: nullableString(row.REVIEW_DECIDED_BY),
+    reviewDecidedAt: nullableString(row.REVIEW_DECIDED_AT),
+    screenshotStatus: nullableString(
+      row.SCREENSHOT_STATUS,
+    ) as BreachMonitorRecord["screenshotStatus"],
+    screenshotCapturedAt: nullableString(row.SCREENSHOT_CAPTURED_AT),
     detailAvailable: booleanValue(row.DETAIL_AVAILABLE),
   };
 }
@@ -1540,6 +1580,11 @@ function summarizeBreachMonitor(
     anotherCompany: rows.filter(
       (row) => row.monitorStatus === "another_company",
     ).length,
+    // Counted across every row, not only confirmed ones: an incident stays
+    // mitigated after an admin dismisses the page that raised it, and the tab
+    // has to keep showing it or the row appears to vanish.
+    mitigated: rows.filter((row) => row.remediationStatus === "mitigated").length,
+    dismissed: rows.filter((row) => row.monitorStatus === "dismissed").length,
   };
 }
 
@@ -2711,19 +2756,10 @@ export const nocturneBackend: NocturneBackend = {
 
     const demo = getDemoBreachMonitor();
     const rows = [...live.rows.filter(isConsoleTenant), ...demo.rows].filter(selected);
-    const confirmed = rows.filter((row) => row.monitorStatus === "confirmed_yours");
-    return {
-      ...live,
-      rows,
-      summary: {
-        totalRows: rows.length,
-        confirmedLeaks: confirmed.length,
-        recordsClaimed: confirmed.reduce((sum, r) => sum + (r.quantityClaimed ?? 0), 0),
-        exposedDataClassCount: new Set(confirmed.flatMap((r) => r.leakTypes)).size,
-        needsReview: rows.filter((r) => r.monitorStatus === "needs_review").length,
-        anotherCompany: rows.filter((r) => r.monitorStatus === "another_company").length,
-      },
-    };
+    // The same roll-up the org-scoped path uses. It had been reimplemented
+    // inline here, which is how the fleet view ends up disagreeing with a
+    // single tenant's own numbers the next time a counter is added.
+    return { ...live, rows, summary: summarizeBreachMonitor(rows) };
   },
   getIncidentDetail(scope, incidentKey) {
     if (isDemoScope(scope)) return Promise.resolve(getDemoIncidentDetail(incidentKey));

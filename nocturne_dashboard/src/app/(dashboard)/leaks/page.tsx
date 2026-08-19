@@ -2,10 +2,23 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Box, Button, Skeleton, Stack, Typography, alpha } from "@mui/material";
-import { Download, RefreshCw } from "lucide-react";
+import {
+  Box,
+  Button,
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  IconButton,
+  Skeleton,
+  Stack,
+  Typography,
+  alpha,
+} from "@mui/material";
+import { Download, Eye, RefreshCw, X } from "lucide-react";
 import type { AgGridReact } from "ag-grid-react";
 import type { ColDef, ICellRendererParams, RowClassParams } from "ag-grid-community";
+import { ExportEvidenceButton } from "@/components/triage/ExportEvidenceButton";
+import { ReviewCapturePanel } from "@/components/triage/ReviewCapturePanel";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePosture } from "@/contexts/PostureContext";
 import { DataTable } from "@/components/ui/DataTable";
@@ -27,12 +40,19 @@ import type {
   BreachMonitorStatus,
 } from "@/types/dashboard";
 
-type StatusFilter = "all" | "confirmed" | "ambiguous" | "other";
+type StatusFilter =
+  | "all"
+  | "confirmed"
+  | "ambiguous"
+  | "mitigated"
+  | "dismissed"
+  | "other";
 
 const monitorStatusLabel: Record<BreachMonitorStatus, string> = {
   confirmed_yours: "Confirmed Breach",
   needs_review: "Needs Review",
   another_company: "Other Company Breach ",
+  dismissed: "Dismissed",
 };
 
 const monitorStatusTone: Record<
@@ -42,6 +62,7 @@ const monitorStatusTone: Record<
   confirmed_yours: "ok",
   needs_review: "medium",
   another_company: "neutral",
+  dismissed: "neutral",
 };
 
 const configuredRefreshMs = Number(
@@ -65,6 +86,10 @@ export default function BreachMonitorPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The row whose captured page is open for review. Needs-review rows have no
+  // incident and therefore no detail page to navigate to, so the verdict is
+  // taken here, over the capture.
+  const [reviewRow, setReviewRow] = useState<BreachMonitorRecord | null>(null);
 
   const load = useCallback(async (signal?: AbortSignal, background = false) => {
     if (!session) return;
@@ -121,6 +146,8 @@ export default function BreachMonitorPage() {
     if (
       next === "confirmed"
       || next === "ambiguous"
+      || next === "mitigated"
+      || next === "dismissed"
       || (next === "other" && canViewExternalContext)
     ) {
       setStatus(next);
@@ -175,9 +202,23 @@ export default function BreachMonitorPage() {
   const rows = useMemo(() => {
     switch (status) {
       case "confirmed":
-        return scoped.filter((row) => row.monitorStatus === "confirmed_yours");
+        return scoped.filter(
+          (row) =>
+            row.monitorStatus === "confirmed_yours"
+            && row.remediationStatus !== "mitigated",
+        );
       case "ambiguous":
-        return scoped.filter((row) => row.monitorStatus === "needs_review");
+        // A row someone has already handled is not still waiting for review, so
+        // the queue that means "needs a decision" excludes mitigated rows.
+        return scoped.filter(
+          (row) =>
+            row.monitorStatus === "needs_review"
+            && row.remediationStatus !== "mitigated",
+        );
+      case "mitigated":
+        return scoped.filter((row) => row.remediationStatus === "mitigated");
+      case "dismissed":
+        return scoped.filter((row) => row.monitorStatus === "dismissed");
       case "other":
         return canViewExternalContext
           ? scoped.filter((row) => row.monitorStatus === "another_company")
@@ -192,6 +233,8 @@ export default function BreachMonitorPage() {
       ["all", "All"],
       ["confirmed", "Confirmed Breach"],
       ["ambiguous", "Needs Review"],
+      ["mitigated", "Mitigated"],
+      ["dismissed", "Dismissed"],
     ];
     if (canViewExternalContext) {
       permittedTabs.push(["other", "Other Company Breach"]);
@@ -222,6 +265,32 @@ export default function BreachMonitorPage() {
         fourthLabel: "Stopped before incident",
         fourthValue: rows.filter((row) => !row.detailAvailable).length,
         fourthAccent: severityColor.high,
+        recordsClaimed,
+        exposedDataClasses,
+      };
+    }
+
+    if (status === "mitigated") {
+      return {
+        primaryLabel: "Mitigated",
+        primaryValue: rows.length,
+        primaryAccent: colors.verified,
+        fourthLabel: "Closed via Jira",
+        fourthValue: rows.filter((row) => row.mitigatedBy?.startsWith("jira:")).length,
+        fourthAccent: colors.ion,
+        recordsClaimed,
+        exposedDataClasses,
+      };
+    }
+
+    if (status === "dismissed") {
+      return {
+        primaryLabel: "Dismissed after review",
+        primaryValue: rows.length,
+        primaryAccent: colors.text2,
+        fourthLabel: "Ruled not a breach",
+        fourthValue: rows.filter((row) => row.reviewDecision === "not_a_breach").length,
+        fourthAccent: colors.text2,
         recordsClaimed,
         exposedDataClasses,
       };
@@ -405,18 +474,77 @@ export default function BreachMonitorPage() {
       {
         headerName: "Workflow",
         field: "remediationStatus",
-        minWidth: 130,
+        minWidth: 140,
         cellRenderer: (p: ICellRendererParams<BreachMonitorRecord>) =>
           p.data ? (
-            <Tag tone={remediationTone[p.data.remediationStatus]}>
-              {remediationLabel[p.data.remediationStatus]}
-            </Tag>
+            <Stack sx={{ lineHeight: 1.3 }}>
+              <Box>
+                <Tag tone={remediationTone[p.data.remediationStatus]}>
+                  {remediationLabel[p.data.remediationStatus]}
+                </Tag>
+              </Box>
+              {p.data.mitigatedAt && (
+                <Box sx={{ color: colors.text3, fontSize: 9.5, fontFamily: fonts.mono }}>
+                  {p.data.mitigatedAt.slice(0, 10)}
+                  {p.data.mitigatedBy?.startsWith("jira:") ? " · jira" : ""}
+                </Box>
+              )}
+            </Stack>
           ) : null,
+      },
+      {
+        headerName: "Action",
+        // Not backed by a field: this column is a control, so it neither sorts
+        // nor filters, and the grid's search must not try to match against it.
+        colId: "action",
+        minWidth: 132,
+        maxWidth: 150,
+        sortable: false,
+        filter: false,
+        cellRenderer: (p: ICellRendererParams<BreachMonitorRecord>) => {
+          const row = p.data;
+          if (!row) return null;
+
+          // A row that never became an incident has nothing to open, but it is
+          // exactly the row an admin needs to look at — so it gets the capture
+          // and the verdict instead of a dead link.
+          if (!row.detailAvailable || !row.incidentKey) {
+            if (row.monitorStatus === "another_company") return null;
+            return (
+              <Button
+                size="small"
+                variant="text"
+                startIcon={<Eye size={13} />}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setReviewRow(row);
+                }}
+                sx={{ fontSize: 11, color: colors.ion, px: 0.8 }}
+              >
+                {row.reviewDecision ? "View ruling" : "Review page"}
+              </Button>
+            );
+          }
+
+          return (
+            <Button
+              size="small"
+              variant="text"
+              onClick={(event) => {
+                event.stopPropagation();
+                router.push(`/leaks/${encodeURIComponent(row.incidentKey!)}`);
+              }}
+              sx={{ fontSize: 11, color: colors.ion, px: 0.8 }}
+            >
+              Open &amp; act
+            </Button>
+          );
+        },
       },
     ];
 
     return isFleetScope ? [orgCol, ...rest] : rest;
-  }, [isFleetScope]);
+  }, [isFleetScope, router]);
 
   const getRowClass = useCallback((p: RowClassParams<BreachMonitorRecord>) => {
     const band = p.data?.impactSeverityBand;
@@ -489,6 +617,9 @@ export default function BreachMonitorPage() {
             >
               {isRefreshing ? "Refreshing…" : "Refresh"}
             </Button>
+            {/* Two exports, deliberately. This one is the grid as filtered on
+                screen; the other is a period-scoped evidence artifact built
+                server-side from Snowflake and independent of the view. */}
             <Button
               variant="outlined"
               size="small"
@@ -496,8 +627,12 @@ export default function BreachMonitorPage() {
               onClick={() => gridRef.current?.api.exportDataAsCsv({ fileName: "nocturne-leaks.csv" })}
               sx={{ borderColor: colors.edgeHi, color: colors.ion }}
             >
-              Export CSV
+              Export view
             </Button>
+            <ExportEvidenceButton
+              orgId={session?.scope.kind === "org" ? session.scope.orgId : null}
+              label="Evidence report"
+            />
           </Stack>
         }
       />
@@ -607,6 +742,48 @@ export default function BreachMonitorPage() {
           </Typography>
         </Stack>
       </Panel>
+
+      {/* Capture-and-rule for a row the cascade could not decide. Rendered as a
+          dialog rather than a route because these rows have no incident key to
+          hang a URL on. */}
+      <Dialog
+        open={reviewRow !== null}
+        onClose={() => setReviewRow(null)}
+        maxWidth="md"
+        fullWidth
+        scroll="paper"
+      >
+        <DialogTitle sx={{ fontSize: 15, pr: 6 }}>
+          {reviewRow?.title}
+          <IconButton
+            aria-label="Close"
+            onClick={() => setReviewRow(null)}
+            sx={{ position: "absolute", right: 8, top: 8 }}
+          >
+            <X size={16} />
+          </IconButton>
+          <Typography sx={{ fontSize: 11.5, color: colors.text3, mt: 0.5 }}>
+            {reviewRow && humanize(reviewRow.routingReason)}
+          </Typography>
+        </DialogTitle>
+        <DialogContent dividers>
+          {reviewRow && (
+            <ReviewCapturePanel
+              orgId={reviewRow.orgId}
+              monitorKey={reviewRow.monitorKey}
+              url={reviewRow.url}
+              decision={reviewRow.reviewDecision}
+              decidedBy={reviewRow.reviewDecidedBy}
+              canDecide={session?.user.role === "SUPER_ADMIN"}
+              onDecided={() => {
+                // Refresh rather than patching locally: the ruling changes the
+                // row's effective status, which is computed in Snowflake.
+                void load(undefined, true);
+              }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </Stack>
   );
 }

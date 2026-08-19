@@ -1,5 +1,6 @@
 beautifulsoup4==4.13.5
 google-cloud-storage==2.19.0
+playwright>=1.62.0
 PySocks==1.7.1
 PyYAML==6.0.2
 requests==2.32.5

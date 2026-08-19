@@ -19,6 +19,7 @@ import {
   Building2,
   ChevronDown,
   ChevronRight,
+  FileText,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -45,6 +46,7 @@ const icons: Record<string, LucideIcon> = {
   Share2,
   UserSearch,
   Activity,
+  FileText,
   Settings,
 };
 

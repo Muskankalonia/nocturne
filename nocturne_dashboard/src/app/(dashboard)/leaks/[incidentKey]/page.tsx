@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Box, Button, Divider, Stack, Typography, alpha } from "@mui/material";
 import { ArrowLeft, Network } from "lucide-react";
 import { scopeOrgId, useAuth } from "@/contexts/AuthContext";
+import { IncidentActionBar } from "@/components/triage/IncidentActionBar";
 import { Panel } from "@/components/ui/Panel";
 import {
   CanvasSkeleton,
@@ -167,6 +168,17 @@ export default function IncidentDetailPage({
           <SeverityChip band={incident.triagePriorityBand} score={incident.triagePriorityScore} />
         </Box>
       </Stack>
+
+      {/* The response surface. Placed above the evidence rather than below it:
+          an analyst arriving from an alert has already decided to act, and
+          making them scroll past the whole dossier to find the button is how a
+          "read-only list" stays read-only in practice. */}
+      <Panel title="Triage & response">
+        <IncidentActionBar
+          incidentKey={incident.incidentKey}
+          orgId={incident.orgId}
+        />
+      </Panel>
 
       <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", lg: "1.55fr 1fr" } }}>
         {/* narrative */}

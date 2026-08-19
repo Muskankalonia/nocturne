@@ -168,7 +168,7 @@ modest one that is nailed down.
 | :------------------------- | :------------------------------------------------------------------------- |
 | `src/nocturne_crawler/`  | BFS dark-web crawler — Tor SOCKS, headless Chromium, GCS output           |
 | `config.yaml`            | Organization slug, query, keywords, depth and page limits                  |
-| `snowflake/01–16_*.sql` | The pipeline, in dependency order — ingestion through view layer          |
+| `snowflake/01–17_*.sql` | The pipeline, in dependency order — ingestion through view layer          |
 | `snowflake/tests/`       | SQL unit tests for the UDFs and routing logic                              |
 | `deploy_pipeline.py`     | Deploys, validates, and reports on the full pipeline                       |
 | `nocturne_dashboard/`    | Next.js 15 analyst console ([its own README](nocturne_dashboard/README.md)) |
@@ -199,6 +199,7 @@ modest one that is nailed down.
 | 14   | `14_ai_incident_insights.sql`           | Triggered `AI_COMPLETE` cache — one narrative per incident                |
 | 15   | `15_seed_validate_golive.sql`           | Validates organization isolation, resumes all tasks                         |
 | 16   | `16_dashboard_interface.sql`            | The 13 stable read-only views the console consumes                          |
+| 17   | `17_triage_actions.sql`                 | Action state, audit trail, report projection, screenshot capture queue      |
 
 </details>
 
@@ -317,10 +318,78 @@ scales to zero when idle; set it to `1` for a demo, at the cost of a warm instan
 
 ---
 
+## Triage and response
+
+Finding the breach is half the job. The console closes the other half: every
+confirmed incident carries actions that write back to Snowflake and reach the
+systems a SOC actually works in.
+
+| Action                        | What it does                                                                                             |
+| :---------------------------- | :------------------------------------------------------------------------------------------------------- |
+| **Mark as mitigated**   | Writes `INCIDENT_REMEDIATION`, moves the row to the Mitigated tab, and closes the linked Jira ticket    |
+| **Unmark**              | Reopens it, comments on the ticket, and posts the reversal to the Slack thread                           |
+| **Dispatch SOC alert**  | Emails every configured recipient, opens a Jira ticket, and posts to Slack — each channel independent   |
+| **Export evidence**     | A PDF summary or a CSV of incidents over 24 h / 7 d / 30 d / 90 d                                        |
+| **Weekly report**       | The same document, downloadable from `/reports` or emailed on a schedule with the PDF attached         |
+| **Capture page**        | Renders a needs-review page over Tor so an admin can look at it and rule on it                           |
+
+Every one of these appends to `NOCTURNE.CONFIG.INCIDENT_ACTION_AUDIT`: who did
+what, when, and whether each channel actually landed.
+
+### Jira closes both ways
+
+Marking an incident mitigated in the console closes its ticket. Closing the
+ticket in Jira marks the incident mitigated. The loop terminates because each
+row records which side wrote it — `UPDATED_VIA` is `console` or `jira` — and
+because the inbound webhook is a no-op on an incident that is already mitigated.
+
+The inbound half is the only route in the console that accepts instructions from
+an external system, and it is written that way: the request is authenticated
+with an HMAC over the raw body, the payload's claim about *which* incident is
+never trusted (the issue key is looked up in `INCIDENT_INTEGRATIONS`, and a
+ticket Nocturne did not open resolves to nothing), and the only state change
+reachable from it is `mitigated`.
+
+Every integration is optional. With no Jira, Slack, or email configured, the
+buttons report that plainly and the rest of the console is unaffected — a
+deployment without those accounts is a supported configuration, not a broken one.
+
+### Looking at the page without visiting it
+
+Rows the cascade could not resolve sit in **Needs Review**, and the only way to
+resolve them is for a person to read the page. That should not mean an analyst
+opening Tor Browser and loading a criminal marketplace from their own laptop.
+
+Instead the console writes a request row and
+`scripts/capture_screenshots.py` — a separate process, behind Tor, holding
+nothing but its own credentials — claims it, renders the page in a throwaway
+browser context, and uploads a PNG. The admin sees a flat image, rules
+**this is our breach** or **not a breach**, and the row moves to Confirmed or
+Dismissed.
+
+The cascade's own verdict is kept alongside the human one in
+`PIPELINE_MONITOR_STATUS` and stays visible. A product whose entire claim is
+that its reasoning is inspectable cannot quietly overwrite that reasoning the
+moment someone disagrees with it.
+
+```bash
+# needs a local Tor SOCKS proxy on 9050, the same one the crawler uses
+pip install -r requirements.txt && playwright install chromium
+python scripts/capture_screenshots.py --watch
+```
+
+The image never crosses the `NOCTURNE.DASHBOARD` boundary. Snowflake stores only
+the object's location; the console streams the bytes back through an
+authenticated route, so access is re-checked on every load and ends when a
+session does. There are no signed URLs — a link to a screenshot of a leak
+listing is a bearer token that outlives the session that minted it.
+
+---
+
 ## The analyst console
 
-Next.js 15 (App Router) · React 19 · MUI v6 · TypeScript, reading the thirteen views
-from step 16. Public landing page at `/start`; everything else is behind a signed,
+Next.js 15 (App Router) · React 19 · MUI v6 · TypeScript, reading the views from
+steps 16 and 17. Public landing page at `/start`; everything else is behind a signed,
 HttpOnly session cookie with tenant scope enforced server-side on every route.
 
 <p align="center">
@@ -341,6 +410,7 @@ HttpOnly session cookie with tenant scope enforced server-side on every route.
 | **Knowledge Graph** | The entities and edges behind an incident, interactively               |
 | **Threat Actors**   | Who is claiming what, and how credible they have been                  |
 | **Pipeline**        | Cascade health, rejection reasons, AI cache hit rates, version drift   |
+| **Reports**         | Evidence exports over a window, and the weekly summary                 |
 
 <p align="center">
   <a href="https://nocturne-console.web.app"><strong>→ Open the console</strong></a>

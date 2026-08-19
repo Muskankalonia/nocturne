@@ -10,8 +10,10 @@
 FROM node:22-slim AS builder
 WORKDIR /app
 
-# puppeteer is a devDependency used only by the local click tests. Left alone it
-# downloads a ~150MB Chromium on every image build, for nothing.
+# Puppeteer renders the evidence and weekly report PDFs at runtime, so a
+# Chromium has to be present — but not the one Puppeteer bundles. Skipping its
+# ~150MB download here and installing Debian's chromium in the runtime stage
+# keeps a single copy in the final image instead of one in each stage.
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 ENV NEXT_TELEMETRY_DISABLED=1
 
@@ -36,6 +38,21 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # localhost inside the container and Cloud Run's health check never connects.
 ENV PORT=8080
 ENV HOSTNAME=0.0.0.0
+
+# Chromium for report rendering. The fonts matter: without them the PDF renders
+# every non-Latin character as a box, and a report about a leak on a Russian
+# forum is exactly where that shows up.
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        chromium \
+        fonts-liberation \
+        fonts-dejavu-core \
+        fonts-noto-core \
+        fonts-noto-cjk \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --system --gid 1001 nodejs \
     && useradd --system --uid 1001 --gid nodejs nextjs
