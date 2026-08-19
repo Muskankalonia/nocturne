@@ -44,3 +44,12 @@ htmlcov/
 # the GitHub Actions deployer; one `git add -A` would publish it.
 *-deployer.json
 *-service-account*.json
+
+# Data transfer scripts (contain account identifiers and auth tokens)
+scripts/export_source.py
+scripts/import_dest.py
+scripts/load_all_data.py
+scripts/gen_sql_batches.py
+scripts/gen_remaining_ddls.py
+scripts/gen_import_sql.py
+scripts/transfer_data.py
