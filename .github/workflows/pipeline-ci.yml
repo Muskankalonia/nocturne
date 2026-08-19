@@ -1,0 +1,127 @@
+# Pipeline CI — unit tests for the Python side: the crawler and the deployer.
+#
+# Deliberately separate from the workflow that *deploys* the Snowflake pipeline.
+# This one never connects to anything. Every test injects a fake at the call
+# site — a fake GCS client, a fake Snowflake cursor — so the suite runs with no
+# credentials, costs nothing, and is safe on a fork's pull request.
+#
+# The SQL statement splitter is the piece most worth having covered. It sits
+# between the .sql files in this repo and what actually executes in the
+# warehouse, and every way it can be wrong is silent: a mis-split file does not
+# raise, it deploys a fragment.
+
+name: Pipeline CI
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'snowflake/**'
+      - 'deploy_pipeline.py'
+      - 'requirements.txt'
+      - '.coveragerc'
+      - 'pytest.ini'
+      - '.github/workflows/pipeline-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'snowflake/**'
+      - 'deploy_pipeline.py'
+      - 'requirements.txt'
+      - '.coveragerc'
+      - 'pytest.ini'
+      - '.github/workflows/pipeline-ci.yml'
+
+concurrency:
+  group: pipeline-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 3.13 matches the crawler image and the version deploy_pipeline.py is
+      # run with locally.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      # The crawler's requirements are needed because the tests import the
+      # module under test, and it imports bs4/selenium/yaml at module scope.
+      # snowflake-connector-python comes from the pipeline's own requirements
+      # file for the same reason.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r snowflake/requirements.txt
+          pip install pytest pytest-cov
+
+      # The gate is `fail_under = 90` in .coveragerc, so this fails identically
+      # on a laptop. Scope is the allowlist in that file, and the reasoning for
+      # it is written there rather than repeated here.
+      - name: Unit tests with coverage
+        run: pytest --cov --cov-report=term-missing --cov-report=xml --cov-report=json
+
+      # The two I/O-dominated modules are not part of the gate. Printing their
+      # real figure keeps that an acknowledged trade rather than a hidden one.
+      - name: Report coverage of the modules that are not gated
+        if: always()
+        continue-on-error: true
+        run: |
+          # A throwaway config, because .coveragerc restricts collection to the
+          # gated allowlist and sets fail_under. This run is informational.
+          printf '[run]\nbranch = True\n' > /tmp/ungated.coveragerc
+          pytest -q -p no:cacheprovider --cov-config=/tmp/ungated.coveragerc \
+            --cov=deploy_pipeline --cov=src/nocturne_crawler \
+            --cov-report=term --cov-fail-under=0 | tail -n 12
+
+      - name: Publish coverage summary
+        if: always()
+        run: |
+          if [ ! -f coverage.json ]; then
+            echo "No coverage summary produced." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          report = json.load(open("coverage.json"))
+          totals = report["totals"]
+          print("## Pipeline unit test coverage")
+          print()
+          print("| File | Coverage | Missing |")
+          print("| --- | --- | --- |")
+          for name, data in sorted(report["files"].items()):
+              summary = data["summary"]
+              print(f"| `{name}` | {summary['percent_covered']:.1f}% | {summary['missing_lines']} |")
+          print(f"| **Total** | **{totals['percent_covered']:.1f}%** | {totals['missing_lines']} |")
+          print()
+          print("Gate: 90%. Scope is the allowlist in `.coveragerc`; "
+                "`deploy_pipeline.py` and `scraper.py` are tested but not gated, "
+                "because both are dominated by Snowflake and Selenium I/O.")
+          PY
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-coverage
+          path: |
+            coverage.xml
+            coverage.json
+          retention-days: 7

@@ -2,13 +2,16 @@
   "name": "nocturne-dashboard",
   "version": "0.1.0",
   "private": true,
-  "description": "Nocturne Console — dark-web breach intelligence dashboard",
+  "description": "Nocturne Console \u2014 dark-web breach intelligence dashboard",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "test:click": "node scripts/clicktest.cjs",
     "shot": "node scripts/shot.cjs"
   },
@@ -34,7 +37,9 @@
     "@types/node": "^22.10.5",
     "@types/react": "^19.0.4",
     "@types/react-dom": "^19.0.2",
+    "@vitest/coverage-v8": "^2.1.9",
     "puppeteer": "^25.4.0",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.9"
   }
 }

@@ -103,8 +103,45 @@ defaults:
     working-directory: nocturne_dashboard
 
 jobs:
+  # Runs before anything is deployed. It duplicates Console CI on purpose:
+  # this workflow is manual, so the commit at the button press is not
+  # necessarily the commit CI last saw, and a deploy should never be the first
+  # thing to discover that main does not compile. It needs no secrets, so it
+  # also fails fast — about ninety seconds — before the environment gate and
+  # the Google credentials come into play.
+  verify:
+    name: Typecheck, test and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: nocturne_dashboard/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Coverage thresholds are enforced here too, so a deploy cannot ship
+      # code that dropped below the gate CI holds pull requests to.
+      - name: Unit tests with coverage
+        run: npm run test:coverage
+
+      - name: Build
+        run: npm run build
+
   deploy:
     name: Cloud Run and Firebase Hosting
+    needs: verify
     runs-on: ubuntu-latest
     # Gate pushes behind a GitHub Environment so required reviewers and
     # environment-scoped secrets are available if you want them later.
