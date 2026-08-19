@@ -43,7 +43,7 @@ export function AssistantMessageList({
             textAlign: "center",
           }}
         >
-          Hi, I'm Noctua
+          Hi, I'm Nox
         </Typography>
         <Typography
           sx={{
