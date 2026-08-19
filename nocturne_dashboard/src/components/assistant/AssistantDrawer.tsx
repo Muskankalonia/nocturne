@@ -58,7 +58,7 @@ export function AssistantDrawer({ open, onClose }: AssistantDrawerProps) {
             <Box
               component="img"
               src="/nocturne-mark.png"
-              alt="Noctua"
+              alt="Nox"
               width={20}
               height={20}
               sx={{ display: "block", flexShrink: 0, borderRadius: 1 }}
@@ -72,7 +72,7 @@ export function AssistantDrawer({ open, onClose }: AssistantDrawerProps) {
                 flex: 1,
               }}
             >
-              Noctua
+              Nox
             </Typography>
             {messages.length > 0 && (
               <IconButton
@@ -176,7 +176,7 @@ export function UmbraFab({ onClick, visible }: UmbraFabProps) {
   if (!visible) return null;
 
   return (
-    <Tooltip title="Noctua" placement="left">
+    <Tooltip title="Nox" placement="left">
       <Box
         component="button"
         type="button"
@@ -214,7 +214,7 @@ export function UmbraFab({ onClick, visible }: UmbraFabProps) {
         <Box
           component="img"
           src="/nocturne-mark.png"
-          alt="Noctua"
+          alt="Nox"
           width={28}
           height={28}
           sx={{ display: "block", borderRadius: "50%", pointerEvents: "none" }}
