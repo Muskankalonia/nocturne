@@ -3,7 +3,6 @@
 import { useState, useRef } from "react";
 import { Box, Drawer, IconButton, Stack, Tooltip, Typography, alpha } from "@mui/material";
 import { X, Trash2 } from "lucide-react";
-import Image from "next/image";
 import { colors, fonts, layout } from "@/theme/tokens";
 import { useAssistant } from "./useAssistant";
 import { AssistantMessageList } from "./AssistantMessageList";
@@ -56,12 +55,13 @@ export function AssistantDrawer({ open, onClose }: AssistantDrawerProps) {
               flexShrink: 0,
             }}
           >
-            <Image
+            <Box
+              component="img"
               src="/nocturne-mark.png"
               alt="Noctua"
               width={20}
               height={20}
-              style={{ borderRadius: 4 }}
+              sx={{ display: "block", flexShrink: 0, borderRadius: 1 }}
             />
             <Typography
               sx={{
@@ -211,12 +211,13 @@ export function UmbraFab({ onClick, visible }: UmbraFabProps) {
           },
         }}
       >
-        <Image
+        <Box
+          component="img"
           src="/nocturne-mark.png"
           alt="Noctua"
           width={28}
           height={28}
-          style={{ borderRadius: "50%", pointerEvents: "none" }}
+          sx={{ display: "block", borderRadius: "50%", pointerEvents: "none" }}
         />
       </Box>
     </Tooltip>
