@@ -5,7 +5,7 @@ import { applicationDefault } from "firebase-admin/app";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
-import { manualUploadRejection } from "@/lib/manual-upload";
+import { isImageUpload, manualUploadRejection } from "@/lib/manual-upload";
 import { organizations, users } from "@/mocks/organizations";
 import { copyManualUploadObject, nocturneBackend } from "@/server/nocturne-backend";
 import { invalidateQueryCache } from "@/server/query-cache";
@@ -222,7 +222,7 @@ export async function POST(request: Request) {
     formData = await request.clone().formData();
   } catch {
     return NextResponse.json(
-      { error: "Submit a multipart form with a .txt file." },
+      { error: "Submit a multipart form with a .txt or image file." },
       { status: 400, headers: RESPONSE_HEADERS },
     );
   }
@@ -233,7 +233,7 @@ export async function POST(request: Request) {
   const file = formData.get("file");
   if (!(file instanceof File)) {
     return NextResponse.json(
-      { error: "A .txt file is required." },
+      { error: "A file is required (.txt or image)." },
       { status: 400, headers: RESPONSE_HEADERS },
     );
   }
@@ -247,8 +247,21 @@ export async function POST(request: Request) {
     );
   }
 
-  const rawText = await file.text();
-  const title = safeTitle(formData.get("title"), file.name.replace(/\.txt$/i, ""));
+  const isImage = isImageUpload(file);
+  let rawText: string;
+  let imageBase64: string | null = null;
+  let contentType: string | null = null;
+
+  if (isImage) {
+    const buffer = Buffer.from(await file.arrayBuffer());
+    imageBase64 = buffer.toString("base64");
+    contentType = file.type || `image/${file.name.split(".").pop()!.toLowerCase()}`;
+    rawText = "[image — pending vision extraction]";
+  } else {
+    rawText = await file.text();
+  }
+
+  const title = safeTitle(formData.get("title"), file.name.replace(/\.[^.]+$/i, ""));
   const contentSha256 = sha256(rawText);
 
   try {
@@ -282,23 +295,25 @@ export async function POST(request: Request) {
     const docId = sha256([auth.orgId, MANUAL_SOURCE, url, fetchedAt].join("\0"));
     const dedupeKey = sha256([auth.orgId, MANUAL_SOURCE, contentSha256].join("\0"));
     const runId = `manual_${uploadId}`;
-    const record = {
+    const record: Record<string, unknown> = {
       schema_version: 2,
       org_id: auth.orgId,
       doc_id: docId,
       dedupe_key: dedupeKey,
       run_id: runId,
       source: MANUAL_SOURCE,
-      query: "manual paste dump",
+      query: isImage ? "manual image upload" : "manual paste dump",
       url,
       title,
       fetched_at: fetchedAt,
       depth: 0,
       keywords_matched: [],
       links_found: 0,
-      content_length: Buffer.byteLength(rawText, "utf8"),
+      content_length: isImage ? imageBase64!.length : Buffer.byteLength(rawText, "utf8"),
       content_sha256: contentSha256,
       raw_text: rawText,
+      image_base64: imageBase64,
+      content_type: contentType,
     };
     const gzippedJsonl = gzipSync(`${JSON.stringify(record)}\n`);
     const objectPath =
@@ -328,7 +343,9 @@ export async function POST(request: Request) {
       objectPath,
       objectUri,
       statusUrl: `/api/manual-uploads/${uploadId}`,
-      message: "Paste dump uploaded and one-shot ingestion completed.",
+      message: isImage
+        ? "Image uploaded and one-shot ingestion completed. Vision extraction will run in Snowflake."
+        : "Paste dump uploaded and one-shot ingestion completed.",
     };
     return NextResponse.json(response, { status: 202, headers: RESPONSE_HEADERS });
   } catch (error) {

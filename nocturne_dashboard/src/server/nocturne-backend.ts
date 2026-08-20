@@ -4439,6 +4439,7 @@ export async function copyManualUploadObject(objectPath: string): Promise<{
        ORG_ID, DOC_ID, DEDUPE_KEY, RUN_ID, SOURCE, QUERY, URL, TITLE,
        FETCHED_AT, DEPTH, KEYWORDS_MATCHED, LINKS_FOUND,
        CONTENT_LENGTH, CONTENT_SHA256, RAW_TEXT, SCHEMA_VERSION,
+       IMAGE_BASE64, CONTENT_TYPE,
        _PATH_ORG_ID, _SOURCE_FILE
      )
      FROM (
@@ -4459,6 +4460,8 @@ export async function copyManualUploadObject(objectPath: string): Promise<{
          $1:content_sha256::STRING,
          $1:raw_text::STRING,
          $1:schema_version::NUMBER,
+         $1:image_base64::STRING,
+         $1:content_type::STRING,
          REGEXP_SUBSTR(
            METADATA$FILENAME,
            'org_id=([a-z0-9]+(_[a-z0-9]+)*)',

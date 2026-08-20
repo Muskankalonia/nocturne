@@ -43,6 +43,7 @@ import {
 import {
   MANUAL_UPLOAD_MAX_LABEL,
   formatBytes,
+  isImageUpload,
   manualUploadRejection,
 } from "@/lib/manual-upload";
 import { colors, fonts, layout as layoutTokens, severityColor } from "@/theme/tokens";
@@ -1324,12 +1325,12 @@ export default function UploadPasteDumpPage() {
                     : null),
                 }}
               >
-                {file ? file.name : "Choose .txt file"}
+                {file ? file.name : "Choose file"}
                 <input
                   ref={fileRef}
                   hidden
                   type="file"
-                  accept=".txt,text/plain"
+                  accept=".txt,.png,.jpg,.jpeg,.webp,text/plain,image/png,image/jpeg,image/webp"
                   onChange={(event) => handleFileChange(event.target.files?.[0] ?? null)}
                 />
               </Button>
@@ -1344,8 +1345,8 @@ export default function UploadPasteDumpPage() {
                 {fileError
                   ? fileError
                   : file
-                    ? `${formatBytes(file.size)} · limit ${MANUAL_UPLOAD_MAX_LABEL}`
-                    : `Plain .txt, up to ${MANUAL_UPLOAD_MAX_LABEL}.`}
+                    ? `${formatBytes(file.size)} · limit ${MANUAL_UPLOAD_MAX_LABEL}${isImageUpload(file) ? " · vision OCR" : ""}`
+                    : `.txt or image (.png, .jpg, .webp), up to ${MANUAL_UPLOAD_MAX_LABEL}.`}
               </Typography>
             </Box>
             {/* The label says why the button is dead rather than leaving the

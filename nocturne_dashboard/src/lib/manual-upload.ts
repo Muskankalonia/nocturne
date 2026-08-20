@@ -12,6 +12,18 @@
 
 export const MANUAL_UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
 
+const ALLOWED_EXTENSIONS = new Set([".txt", ".png", ".jpg", ".jpeg", ".webp"]);
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
+
+function fileExtension(name: string): string {
+  const dot = name.lastIndexOf(".");
+  return dot === -1 ? "" : name.slice(dot).toLowerCase();
+}
+
+export function isImageUpload(file: File): boolean {
+  return IMAGE_EXTENSIONS.has(fileExtension(file.name));
+}
+
 /**
  * Byte counts for people, not for machines: powers of two, at most one decimal,
  * and no trailing ".0". Used in the size-limit copy and in the rejection
@@ -49,8 +61,8 @@ export interface ManualUploadRejection {
 
 /** Null when the file is acceptable, otherwise why it was refused. */
 export function manualUploadRejection(file: File): ManualUploadRejection | null {
-  if (!file.name.toLowerCase().endsWith(".txt")) {
-    return { reason: "Upload a plain .txt paste dump.", status: 400 };
+  if (!ALLOWED_EXTENSIONS.has(fileExtension(file.name))) {
+    return { reason: "Upload a .txt paste dump or an image (.png, .jpg, .jpeg, .webp).", status: 400 };
   }
   if (file.size < 1) {
     return { reason: "That file is empty.", status: 400 };
