@@ -3,7 +3,7 @@
 import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Box, Button, Divider, Stack, Typography, alpha } from "@mui/material";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Network } from "lucide-react";
 import { scopeOrgId, useAuth } from "@/contexts/AuthContext";
 import { Panel } from "@/components/ui/Panel";
 import {
@@ -154,6 +154,15 @@ export default function IncidentDetailPage({
         <Typography sx={{ fontFamily: fonts.mono, fontSize: 11, color: colors.text3 }}>
           {shortHash(incident.incidentKey, 10, 8)}
         </Typography>
+        <Button
+          size="small"
+          variant="outlined"
+          startIcon={<Network size={14} />}
+          onClick={() => router.push(`/graph?incidentKey=${encodeURIComponent(incident.incidentKey)}`)}
+          sx={{ borderColor: colors.edgeHi, color: colors.ion }}
+        >
+          Open graph
+        </Button>
         <Box sx={{ ml: "auto" }}>
           <SeverityChip band={incident.triagePriorityBand} score={incident.triagePriorityScore} />
         </Box>
