@@ -53,3 +53,7 @@ scripts/gen_sql_batches.py
 scripts/gen_remaining_ddls.py
 scripts/gen_import_sql.py
 scripts/transfer_data.py
+scripts/deploy_views.py
+scripts/deploy_remaining_views.py
+scripts/fix_breach_monitor.py
+scripts/fix_manual_upload_view.py
