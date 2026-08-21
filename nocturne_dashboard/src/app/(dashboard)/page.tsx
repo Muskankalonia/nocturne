@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import NextLink from "next/link";
 import { useRouter } from "next/navigation";
-import { Box, Button, Stack, Typography, alpha } from "@mui/material";
+import { Box, Button, IconButton, Stack, Typography, alpha } from "@mui/material";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePosture } from "@/contexts/PostureContext";
 import { PriorityQueueActions } from "@/components/triage/PriorityQueueActions";
@@ -19,6 +20,9 @@ import {
 import { SeverityChip } from "@/components/ui/SeverityChip";
 import { colors, fonts, severityColor , layout as layoutTokens} from "@/theme/tokens";
 import { hostOf } from "@/lib/format";
+
+/** Rows of the priority queue shown at once. */
+const QUEUE_PAGE_SIZE = 5;
 
 export default function CommandCenterPage() {
   const router = useRouter();
@@ -72,6 +76,37 @@ export default function CommandCenterPage() {
     ),
     [scored],
   );
+
+  /**
+   * The queue is ranked, so the top of it is the part that earns its space.
+   * Rendering all of it pushed everything below the fold for a list whose tail
+   * is, by construction, the least urgent thing on the page.
+   */
+  const [queuePage, setQueuePage] = useState(0);
+  const pageCount = Math.max(1, Math.ceil(queue.length / QUEUE_PAGE_SIZE));
+
+  /**
+   * Clamped rather than stored, so a queue that shrinks under the current page
+   * cannot leave an empty table on screen. Marking incidents mitigated is the
+   * ordinary way that happens: work the queue from page three and it gets
+   * shorter as you go. Deriving the page means there is no window in which
+   * state and data disagree.
+   */
+  const safeQueuePage = Math.min(queuePage, pageCount - 1);
+  const pagedQueue = useMemo(
+    () => queue.slice(
+      safeQueuePage * QUEUE_PAGE_SIZE,
+      safeQueuePage * QUEUE_PAGE_SIZE + QUEUE_PAGE_SIZE,
+    ),
+    [queue, safeQueuePage],
+  );
+
+  // A scope change is a different dataset, not a shorter one, so page three of
+  // the old organization means nothing in the new one.
+  const scopeKey = isFleetScope ? "fleet" : activeOrg?.orgId ?? "none";
+  useEffect(() => {
+    setQueuePage(0);
+  }, [scopeKey]);
 
   // Every incident in the visible scope. Kept as a hook above the loading gate
   // below — a `useMemo` after a conditional return breaks the rules of hooks.
@@ -443,7 +478,7 @@ export default function CommandCenterPage() {
                   </Box>
                 </Box>
               )}
-              {queue.map((row) => (
+              {pagedQueue.map((row) => (
                 /* Every row here comes from VW_INCIDENTS, which is the same
                  * view `/api/incidents/[key]` reads, so a detail page exists
                  * for all of them — no `detailAvailable` gate is needed as it
@@ -601,6 +636,55 @@ export default function CommandCenterPage() {
             </Box>
           </Box>
         </Box>
+
+        {/* Only when there is more than one page. A pager under a five-row list
+          * is chrome that describes nothing. */}
+        {pageCount > 1 && (
+          <Stack
+            direction="row"
+            alignItems="center"
+            justifyContent="space-between"
+            sx={{ pt: 1.4, mt: 0.4, borderTop: `1px solid ${colors.edge}` }}
+          >
+            <Typography
+              sx={{ fontFamily: fonts.mono, fontSize: 10.5, color: colors.text3 }}
+            >
+              {safeQueuePage * QUEUE_PAGE_SIZE + 1}–
+              {safeQueuePage * QUEUE_PAGE_SIZE + pagedQueue.length} OF {queue.length}
+            </Typography>
+            <Stack direction="row" alignItems="center" gap={0.5}>
+              <IconButton
+                aria-label="Previous page"
+                size="small"
+                disabled={safeQueuePage === 0}
+                onClick={() => setQueuePage(safeQueuePage - 1)}
+                sx={{ color: colors.text2 }}
+              >
+                <ChevronLeft size={15} />
+              </IconButton>
+              <Typography
+                sx={{
+                  fontFamily: fonts.mono,
+                  fontSize: 10.5,
+                  color: colors.text3,
+                  minWidth: 54,
+                  textAlign: "center",
+                }}
+              >
+                {safeQueuePage + 1} / {pageCount}
+              </Typography>
+              <IconButton
+                aria-label="Next page"
+                size="small"
+                disabled={safeQueuePage >= pageCount - 1}
+                onClick={() => setQueuePage(safeQueuePage + 1)}
+                sx={{ color: colors.text2 }}
+              >
+                <ChevronRight size={15} />
+              </IconButton>
+            </Stack>
+          </Stack>
+        )}
       </Panel>
     </Stack>
   );
