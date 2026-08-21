@@ -28,6 +28,12 @@ if (typeof window !== "undefined") {
 
 const DEFAULT_TTL_MS = 60_000;
 
+/** 6 hours — for data that only changes on pipeline runs. */
+export const PIPELINE_CYCLE_TTL_MS = 6 * 60 * 60_000;
+
+/** 5 minutes — for data that changes on user triage actions. */
+export const TRIAGE_TTL_MS = 5 * 60_000;
+
 function ttlMs(): number {
   // Test the raw string before converting: Number("") is 0, not NaN, so an
   // unset variable would otherwise read as a zero TTL and disable the cache.
@@ -55,8 +61,9 @@ export function scopeKey(scope: DataScope): string {
 export async function cachedQuery<T>(
   key: string,
   load: () => Promise<T>,
+  overrideTtlMs?: number,
 ): Promise<T> {
-  const ttl = ttlMs();
+  const ttl = overrideTtlMs ?? ttlMs();
   if (ttl === 0) return load();
 
   const now = Date.now();
@@ -98,14 +105,20 @@ export function invalidateQueryCache(prefix: string): void {
 /**
  * Clears the reads that show incident state, after a triage action changes it.
  *
- * This cache was built when the console was read-only, where a minute of
- * staleness cost nothing. Now that a person can mitigate or dismiss an incident,
- * a stale read is actively wrong: they act, the grid keeps showing the old
- * state, and the obvious conclusion is that the action failed. Losing the whole
- * prefix rather than one scope's key is deliberate — a tenant's write also
- * changes what the fleet view totals, and both are cheap to rebuild.
+ * When an orgId is provided, only that org's cached entries (plus fleet-level
+ * entries that aggregate across orgs) are cleared. Without an orgId, all
+ * breach-monitor and command-center entries are cleared (legacy behaviour).
  */
-export function invalidateIncidentViews(): void {
-  invalidateQueryCache("breach-monitor:");
-  invalidateQueryCache("command-center:");
+export function invalidateIncidentViews(orgId?: string): void {
+  if (orgId) {
+    // Clear the specific org's cache entries
+    invalidateQueryCache(`breach-monitor:org:${orgId}`);
+    invalidateQueryCache(`command-center:org:${orgId}`);
+    // Fleet entries include this org's data in their aggregates
+    invalidateQueryCache("breach-monitor:fleet");
+    invalidateQueryCache("command-center:fleet");
+  } else {
+    invalidateQueryCache("breach-monitor:");
+    invalidateQueryCache("command-center:");
+  }
 }

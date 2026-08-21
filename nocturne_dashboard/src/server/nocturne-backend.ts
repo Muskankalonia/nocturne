@@ -2,6 +2,7 @@ import snowflake, {
   type Binds,
   type Connection,
   type ConnectionOptions,
+  type Pool,
 } from "snowflake-sdk";
 
 import { organizations as consoleTenants } from "@/mocks/organizations";
@@ -120,6 +121,7 @@ export interface NocturneBackend {
     scope: DataScope,
     access?: BreachMonitorAccess,
     include?: ReadonlySet<string>,
+    pagination?: PaginationParams,
   ): Promise<BreachMonitorResponse>;
   getIncidentDetail(
     scope: DataScope,
@@ -150,6 +152,11 @@ export interface NocturneBackend {
 export interface BreachMonitorAccess {
   /** External-company context is privileged and denied by default. */
   includeExternalContext?: boolean;
+}
+
+export interface PaginationParams {
+  page: number;
+  pageSize: number;
 }
 
 export interface LiveCrawlerIngestHandoff {
@@ -244,6 +251,45 @@ const INCIDENT_COLUMNS = `
     INSIGHT_CALLED_AT,
     'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM'
   ) AS INSIGHT_CALLED_AT,
+  REMEDIATION_STATUS
+`;
+
+/** Lighter column set for the command center list — omits AI text blobs. */
+const INCIDENT_LIST_COLUMNS = `
+  ORG_ID,
+  ORGANIZATION_NAME,
+  ORGANIZATION_DOMAIN,
+  INCIDENT_KEY,
+  CONTENT_SHA256,
+  TOP_TITLE,
+  TOP_URL,
+  SOURCE,
+  L2_ROUTE,
+  ROUTING_REASON,
+  RELATIONSHIP_LABEL,
+  LEAK_TYPE_LABELS,
+  QUANTITY_CLAIMED,
+  IMPACT_SEVERITY_SCORE,
+  IMPACT_SEVERITY_BAND,
+  EVIDENCE_CONFIDENCE_SCORE,
+  EVIDENCE_CONFIDENCE_BAND,
+  TRIAGE_PRIORITY_SCORE,
+  TRIAGE_PRIORITY_BAND,
+  SCORE_VECTOR,
+  SCORE_REASONS,
+  CORROBORATION_COUNT,
+  SIGHTING_COUNT,
+  MIRROR_SIGHTING_COUNT,
+  ACTOR_NODE_KEY,
+  ACTOR_NAME,
+  ACTOR_CREDIBILITY_SCORE,
+  GROUNDING_LEVEL,
+  TO_VARCHAR(FIRST_SEEN, 'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM')
+    AS FIRST_SEEN,
+  TO_VARCHAR(LAST_SEEN, 'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM')
+    AS LAST_SEEN,
+  INSIGHT_AI_STATUS,
+  INSIGHT_HEADLINE,
   REMEDIATION_STATUS
 `;
 
@@ -965,7 +1011,7 @@ const MANUAL_UPLOAD_STATUS_COLUMNS = `
     AS LAST_UPDATED_AT
 `;
 
-let connectionPromise: Promise<Connection> | null = null;
+let pool: Pool<Connection> | null = null;
 
 function requiredEnv(name: string): string {
   const value = process.env[name]?.trim();
@@ -1010,7 +1056,9 @@ function loadConfig(): BackendConfig {
   };
 }
 
-async function createConnection(): Promise<Connection> {
+function getPool(): Pool<Connection> {
+  if (pool) return pool;
+
   const config = loadConfig();
   const options: ConnectionOptions = {
     account: config.account,
@@ -1022,7 +1070,7 @@ async function createConnection(): Promise<Connection> {
     application: "NOCTURNE_DASHBOARD",
     queryTag: config.queryTag,
     timeout: config.queryTimeoutSeconds * 1_000,
-    clientSessionKeepAlive: false,
+    clientSessionKeepAlive: true,
     fetchAsString: ["Number", "Date"],
     ...(config.token
       ? {
@@ -1032,63 +1080,49 @@ async function createConnection(): Promise<Connection> {
       : { password: config.password! }),
   };
 
-  const connection = snowflake.createConnection(options);
-  await connection.connectAsync();
-  return connection;
-}
-
-async function getConnection(): Promise<Connection> {
-  if (connectionPromise) {
-    try {
-      const existing = await connectionPromise;
-      if (existing.isUp() && (await existing.isValidAsync())) return existing;
-    } catch {
-      // Recreate the connection below. Never include credential-bearing config
-      // in the surfaced error or logs.
-    }
-    connectionPromise = null;
-  }
-
-  connectionPromise = createConnection().catch((error: unknown) => {
-    connectionPromise = null;
-    throw error;
+  pool = snowflake.createPool(options, {
+    min: 1,
+    max: 5,
+    evictionRunIntervalMillis: 60_000,
+    idleTimeoutMillis: 300_000,
   });
-  return connectionPromise;
+  return pool;
 }
 
 /**
- * Exported so the triage-action module can share this connection rather than
- * opening a second one. The pool here is a single long-lived connection; a
- * parallel module with its own would double the warehouse sessions for no gain
- * and make the query tag lie about who is asking.
+ * Exported so the triage-action module can share this pool rather than
+ * opening a second one. Acquires a connection from the pool, executes the
+ * query, and returns it to the pool automatically.
  */
 export async function executeQuery(
   sqlText: string,
   binds: Binds = [],
 ): Promise<SnowflakeRow[]> {
   const config = loadConfig();
-  const connection = await getConnection();
+  const connectionPool = getPool();
 
-  return new Promise((resolve, reject) => {
-    connection.execute({
-      sqlText,
-      binds,
-      fetchAsString: ["Number", "Date"],
-      parameters: {
-        STATEMENT_TIMEOUT_IN_SECONDS: config.queryTimeoutSeconds,
-        STRICT_JSON_OUTPUT: true,
-      },
-      complete: (error, statement, rows) => {
-        if (error) {
-          reject(
-            new Error(
-              `Snowflake dashboard query failed (query ${statement?.getQueryId?.() ?? "unavailable"}): ${error.message}`,
-            ),
-          );
-          return;
-        }
-        resolve((rows ?? []) as SnowflakeRow[]);
-      },
+  return connectionPool.use(async (connection) => {
+    return new Promise<SnowflakeRow[]>((resolve, reject) => {
+      connection.execute({
+        sqlText,
+        binds,
+        fetchAsString: ["Number", "Date"],
+        parameters: {
+          STATEMENT_TIMEOUT_IN_SECONDS: config.queryTimeoutSeconds,
+          STRICT_JSON_OUTPUT: true,
+        },
+        complete: (error, statement, rows) => {
+          if (error) {
+            reject(
+              new Error(
+                `Snowflake dashboard query failed (query ${statement?.getQueryId?.() ?? "unavailable"}): ${error.message}`,
+              ),
+            );
+            return;
+          }
+          resolve((rows ?? []) as SnowflakeRow[]);
+        },
+      });
     });
   });
 }
@@ -2252,7 +2286,7 @@ export class SnowflakeNocturneBackend implements NocturneBackend {
         filter.binds,
       ),
       executeQuery(
-        `SELECT ${INCIDENT_COLUMNS}
+        `SELECT ${INCIDENT_LIST_COLUMNS}
          FROM NOCTURNE.DASHBOARD.VW_INCIDENTS${incidentFilter.clause}
          ORDER BY TRIAGE_PRIORITY_SCORE DESC, INCIDENT_KEY`,
         incidentFilter.binds,
@@ -2284,31 +2318,47 @@ export class SnowflakeNocturneBackend implements NocturneBackend {
   async getBreachMonitor(
     scope: DataScope,
     access: BreachMonitorAccess = {},
+    include?: ReadonlySet<string>,
+    pagination?: PaginationParams,
   ): Promise<BreachMonitorResponse> {
     const filter = breachMonitorFilter(
       scope,
       access.includeExternalContext === true,
     );
-    const resultRows = await executeQuery(
-      `SELECT ${BREACH_MONITOR_COLUMNS}
-       FROM NOCTURNE.DASHBOARD.VW_BREACH_MONITOR${filter.clause}
-       ORDER BY
-         CASE MONITOR_STATUS
-           WHEN 'confirmed_yours' THEN 1
-           WHEN 'needs_review' THEN 2
-           ELSE 3
-         END,
-         TRIAGE_PRIORITY_SCORE DESC NULLS LAST,
-         DISCOVERED_AT DESC,
-         MONITOR_KEY`,
-      filter.binds,
-    );
+
+    const paginationClause = pagination
+      ? ` LIMIT ${pagination.pageSize} OFFSET ${(pagination.page - 1) * pagination.pageSize}`
+      : "";
+
+    const [resultRows, countRows] = await Promise.all([
+      executeQuery(
+        `SELECT ${BREACH_MONITOR_COLUMNS}
+         FROM NOCTURNE.DASHBOARD.VW_BREACH_MONITOR${filter.clause}
+         ORDER BY
+           CASE MONITOR_STATUS
+             WHEN 'confirmed_yours' THEN 1
+             WHEN 'needs_review' THEN 2
+             ELSE 3
+           END,
+           TRIAGE_PRIORITY_SCORE DESC NULLS LAST,
+           DISCOVERED_AT DESC,
+           MONITOR_KEY${paginationClause}`,
+        filter.binds,
+      ),
+      executeQuery(
+        `SELECT COUNT(*) AS CNT
+         FROM NOCTURNE.DASHBOARD.VW_BREACH_MONITOR${filter.clause}`,
+        filter.binds,
+      ),
+    ]);
     const rows = resultRows.map(mapBreachMonitorRecord);
+    const totalCount = numberValue((countRows[0] as Record<string, unknown>)?.CNT ?? resultRows.length);
 
     return {
       scope,
       summary: summarizeBreachMonitor(rows),
       rows,
+      totalCount,
       lastUpdatedAt: latestTimestamp(rows.map((row) => row.discoveredAt)),
       fetchedAt: new Date().toISOString(),
     };

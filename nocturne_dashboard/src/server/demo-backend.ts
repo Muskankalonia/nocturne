@@ -302,6 +302,7 @@ export function getDemoBreachMonitor(): BreachMonitorResponse {
       dismissed: rows.filter((r) => r.monitorStatus === "dismissed").length,
     },
     rows,
+    totalCount: rows.length,
     lastUpdatedAt: now(),
     fetchedAt: now(),
   });

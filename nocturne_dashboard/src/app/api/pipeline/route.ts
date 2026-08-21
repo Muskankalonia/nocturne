@@ -15,7 +15,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const RESPONSE_HEADERS = {
-  "Cache-Control": "no-store",
+  "Cache-Control": "private, no-cache",
   Vary: "Cookie",
 };
 const ORG_ID_PATTERN = /^[a-z0-9]+(?:_[a-z0-9]+)*$/;

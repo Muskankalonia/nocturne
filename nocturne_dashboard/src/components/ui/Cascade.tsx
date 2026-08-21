@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import { Box, Stack, Typography, alpha } from "@mui/material";
 import { colors, fonts } from "@/theme/tokens";
 import { LayerTag } from "./Panel";
@@ -12,7 +13,7 @@ const costLabel = ["$0", "$", "$$", "$$$"] as const;
  * three stages cost money. This is the product's argument against the
  * "send every page to an expensive model" baseline, in one chart.
  */
-export function Cascade({
+export const Cascade = memo(function Cascade({
   stages,
   /**
    * Stretch the rows to fill the panel instead of stacking at a fixed rhythm.
@@ -114,6 +115,7 @@ export function Cascade({
       })}
     </Stack>
   );
-}
+});
 
+Cascade.displayName = "Cascade";
 export default Cascade;

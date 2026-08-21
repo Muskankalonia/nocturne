@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { organizations, users } from "@/mocks/organizations";
-import { cachedQuery, scopeKey } from "@/server/query-cache";
+import { cachedQuery, scopeKey, PIPELINE_CYCLE_TTL_MS } from "@/server/query-cache";
 import { nocturneBackend } from "@/server/nocturne-backend";
 import {
   SESSION_COOKIE_NAME,
@@ -16,7 +16,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const RESPONSE_HEADERS = {
-  "Cache-Control": "no-store",
+  "Cache-Control": "private, max-age=300, stale-while-revalidate=600",
   Vary: "Cookie",
 };
 const ORG_ID_PATTERN = /^[a-z0-9]+(?:_[a-z0-9]+)*$/;
@@ -108,6 +108,7 @@ export async function GET(request: Request) {
     const graph = await cachedQuery(
       `knowledge-graph:${scopeKey(scope)}:${view}:${incidentKey ?? "-"}`,
       () => nocturneBackend.getKnowledgeGraph(scope, view, incidentKey),
+      PIPELINE_CYCLE_TTL_MS,
     );
     if (!graph) {
       return NextResponse.json(

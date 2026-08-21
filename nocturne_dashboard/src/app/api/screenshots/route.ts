@@ -129,7 +129,7 @@ export async function POST(request: Request) {
       requestedBy: auth.caller.username,
       refresh: body?.refresh === true,
     });
-    invalidateIncidentViews();
+    invalidateIncidentViews(scoped.orgId);
     const screenshot = await getScreenshot(scoped.orgId, monitorKey);
 
     await recordAction({

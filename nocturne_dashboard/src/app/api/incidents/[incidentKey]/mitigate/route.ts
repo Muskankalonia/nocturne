@@ -136,7 +136,7 @@ async function applyMitigation(
       });
     }
 
-    invalidateIncidentViews();
+    invalidateIncidentViews(scoped.orgId);
     const after = await getIncidentActionState(scoped.orgId, incidentKey);
 
     await recordAction({

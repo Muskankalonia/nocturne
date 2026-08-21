@@ -3,14 +3,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import NextLink from "next/link";
 import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import { Box, Button, IconButton, Stack, Typography, alpha } from "@mui/material";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePosture } from "@/contexts/PostureContext";
 import { PriorityQueueActions } from "@/components/triage/PriorityQueueActions";
 import { Panel } from "@/components/ui/Panel";
-import { Cascade } from "@/components/ui/Cascade";
-import { PostureFlow } from "@/components/ui/PostureFlow";
 import {
   BarListSkeleton,
   CanvasSkeleton,
@@ -20,6 +19,16 @@ import {
 import { SeverityChip } from "@/components/ui/SeverityChip";
 import { colors, fonts, severityColor , layout as layoutTokens} from "@/theme/tokens";
 import { hostOf } from "@/lib/format";
+
+const Cascade = dynamic(() => import("@/components/ui/Cascade"), {
+  ssr: false,
+  loading: () => <BarListSkeleton />,
+});
+
+const PostureFlow = dynamic(() => import("@/components/ui/PostureFlow"), {
+  ssr: false,
+  loading: () => <CanvasSkeleton height={478} />,
+});
 
 /** Rows of the priority queue shown at once. */
 const QUEUE_PAGE_SIZE = 5;
@@ -37,6 +46,8 @@ export default function CommandCenterPage() {
     error,
     refresh,
   } = usePosture();
+
+  const handleQueueChanged = useCallback(() => refresh(), [refresh]);
 
   // Manual pipeline kick. Available at every scope a fleet admin can reach,
   // including a single tenant — the run itself is account-wide, so the button
@@ -75,9 +86,12 @@ export default function CommandCenterPage() {
    */
   const canRunLiveScan = !isFleetScope;
 
-  const scored = visibleData?.incidents.filter(
-    (incident) => incident.triagePriorityScore !== null,
-  ) ?? [];
+  const scored = useMemo(
+    () => visibleData?.incidents.filter(
+      (incident) => incident.triagePriorityScore !== null,
+    ) ?? [],
+    [visibleData?.incidents],
+  );
   const cascade = visibleData?.cascade ?? [];
 
   const queue = useMemo(
@@ -637,7 +651,7 @@ export default function CommandCenterPage() {
                         incidentKey={row.incidentKey}
                         orgId={row.orgId}
                         remediationStatus={row.remediationStatus}
-                        onChanged={() => refresh()}
+                        onChanged={handleQueueChanged}
                       />
                     </Box>
                   </Td>

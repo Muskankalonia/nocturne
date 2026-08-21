@@ -52,7 +52,6 @@ export default function ThreatActorsPage() {
 
     try {
       const response = await fetch(url, {
-        cache: "no-store",
         credentials: "same-origin",
         signal,
       });

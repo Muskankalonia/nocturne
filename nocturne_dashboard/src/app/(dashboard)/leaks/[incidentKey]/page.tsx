@@ -79,7 +79,6 @@ export default function IncidentDetailPage({
     setIsLoading(true);
 
     void fetch(`/api/incidents/${encodeURIComponent(incidentKey)}`, {
-      cache: "no-store",
       credentials: "same-origin",
       signal: controller.signal,
     })

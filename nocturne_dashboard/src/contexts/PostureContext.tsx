@@ -6,10 +6,12 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 import { useAuth } from "@/contexts/AuthContext";
+import { createBroadcastPoll } from "@/lib/broadcast-poll";
 import type {
   CommandCenterOrganizationSnapshot,
   CommandCenterResponse,
@@ -158,6 +160,8 @@ export function PostureProvider({ children }: { children: ReactNode }) {
     [session, fleetSelection],
   );
 
+  const pollRef = useRef<ReturnType<typeof createBroadcastPoll<CommandCenterResponse>> | null>(null);
+
   useEffect(() => {
     if (!session) {
       setData(null);
@@ -165,28 +169,51 @@ export function PostureProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const controller = new AbortController();
     setData(null);
     setError(null);
     setIsLoading(true);
-    void load(controller.signal).finally(() => {
-      if (!controller.signal.aborted) setIsLoading(false);
+
+    const params = new URLSearchParams();
+    if (session.user.role === "SUPER_ADMIN" && session.scope.kind === "org") {
+      params.set("orgId", session.scope.orgId);
+    }
+    if (session.scope.kind === "fleet" && fleetSelection) {
+      params.set("orgIds", fleetSelection.join(","));
+    }
+    const url = params.size
+      ? `/api/command-center?${params.toString()}`
+      : "/api/command-center";
+
+    const poll = createBroadcastPoll<CommandCenterResponse>({
+      channelName: `nocturne-posture:${url}`,
+      fetchData: async () => {
+        const response = await fetch(url, {
+          credentials: "same-origin",
+        });
+        const body = await response.json();
+        if (!response.ok || !("totals" in body)) {
+          throw new Error(
+            body?.error ?? "Unable to load live dashboard data.",
+          );
+        }
+        return body as CommandCenterResponse;
+      },
+      onData: (body) => {
+        setData(body);
+        setError(null);
+        setIsLoading(false);
+      },
+      intervalMs: refreshIntervalMs,
     });
 
-    const refreshWhenVisible = () => {
-      if (document.visibilityState === "visible") {
-        void load(controller.signal, true);
-      }
-    };
-    const interval = window.setInterval(refreshWhenVisible, refreshIntervalMs);
-    window.addEventListener("focus", refreshWhenVisible);
+    pollRef.current = poll;
+    poll.start();
 
     return () => {
-      controller.abort();
-      window.clearInterval(interval);
-      window.removeEventListener("focus", refreshWhenVisible);
+      poll.stop();
+      pollRef.current = null;
     };
-  }, [load, session]);
+  }, [session, fleetSelection, refreshIntervalMs]);
 
   // A response that arrived for a scope we have since left must not be
   // rendered — an org user would briefly see fleet aggregates, and an admin
@@ -246,13 +273,16 @@ export function PostureProvider({ children }: { children: ReactNode }) {
       isLoading,
       isRefreshing,
       error,
-      refresh: () => void load(undefined, true),
+      refresh: () => {
+        setIsRefreshing(true);
+        pollRef.current?.requestFetch();
+      },
       openCriticalCount,
       summaryFor,
       fleetSelection,
       setFleetSelection,
     };
-  }, [visibleData, isLoading, isRefreshing, error, load, fleetSelection, setFleetSelection]);
+  }, [visibleData, isLoading, isRefreshing, error, fleetSelection, setFleetSelection]);
 
   return <PostureContext.Provider value={value}>{children}</PostureContext.Provider>;
 }

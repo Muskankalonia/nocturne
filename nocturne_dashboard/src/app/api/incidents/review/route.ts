@@ -124,7 +124,7 @@ export async function POST(request: Request) {
       decidedBy: auth.caller.username,
     });
 
-    invalidateIncidentViews();
+    invalidateIncidentViews(scoped.orgId);
 
     // Push the verdict back to Jira, so the board and the console agree
     // whichever side the analyst happened to be looking at.
@@ -186,7 +186,7 @@ export async function DELETE(request: Request) {
 
   try {
     await clearReviewDecision(scoped.orgId, monitorKey);
-    invalidateIncidentViews();
+    invalidateIncidentViews(scoped.orgId);
     await recordAction({
       orgId: scoped.orgId,
       action: "review_decision",

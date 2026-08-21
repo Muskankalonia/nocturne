@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { organizations, users } from "@/mocks/organizations";
-import { cachedQuery, scopeKey } from "@/server/query-cache";
+import { cachedQuery, scopeKey, TRIAGE_TTL_MS } from "@/server/query-cache";
 import { nocturneBackend } from "@/server/nocturne-backend";
 import {
   SESSION_COOKIE_NAME,
@@ -15,7 +15,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const RESPONSE_HEADERS = {
-  "Cache-Control": "no-store",
+  "Cache-Control": "private, max-age=30, stale-while-revalidate=120",
   Vary: "Cookie",
 };
 const ORG_ID_PATTERN = /^[a-z0-9]+(?:_[a-z0-9]+)*$/;
@@ -99,13 +99,19 @@ export async function GET(request: Request) {
   }
   const selectionKey = include ? [...include].sort().join("+") : "default";
 
+  // Pagination: default 50 rows per page, page 1.
+  const url = new URL(request.url);
+  const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1", 10) || 1);
+  const pageSize = Math.min(100, Math.max(1, parseInt(url.searchParams.get("pageSize") ?? "50", 10) || 50));
+
   try {
     // The external-context flag changes the payload, so it belongs in the key —
     // otherwise a tenant could be served a super-admin's richer result.
     const includeExternalContext = user.role === "SUPER_ADMIN";
     const data = await cachedQuery(
-      `breach-monitor:${scopeKey(scope)}:ext=${includeExternalContext}:sel=${selectionKey}`,
-      () => nocturneBackend.getBreachMonitor(scope, { includeExternalContext }, include),
+      `breach-monitor:${scopeKey(scope)}:ext=${includeExternalContext}:sel=${selectionKey}:p=${page}:ps=${pageSize}`,
+      () => nocturneBackend.getBreachMonitor(scope, { includeExternalContext }, include, { page, pageSize }),
+      TRIAGE_TTL_MS,
     );
     return NextResponse.json(data, { headers: RESPONSE_HEADERS });
   } catch (error) {
