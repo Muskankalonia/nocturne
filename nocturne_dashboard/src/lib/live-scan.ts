@@ -59,6 +59,16 @@ export type LiveScanExecutionState =
 export interface LiveScanExecution {
   /** Short id, e.g. "nocturne-crawler-dfqzb". The path segment we route on. */
   executionId: string;
+  /**
+   * The organization this run swept, read back from the execution's own ORG_ID
+   * override.
+   *
+   * Null for a scheduled fleet sweep, which carries no override and therefore
+   * covers every tenant. That distinction is what tenant scoping is built on:
+   * an organization user may see a run of their own org and must never see a
+   * fleet sweep, whose logs name every other tenant.
+   */
+  orgId: string | null;
   state: LiveScanExecutionState;
   createTime: string | null;
   startTime: string | null;

@@ -26,7 +26,7 @@ const QUEUE_PAGE_SIZE = 5;
 
 export default function CommandCenterPage() {
   const router = useRouter();
-  const { isFleetScope, activeOrg, switchableOrgs, isSuperAdmin } = useAuth();
+  const { isFleetScope, activeOrg, switchableOrgs } = useAuth();
   // The fetch, the scope guard and the auto-refresh live in PostureContext so
   // the sidebar badge and the tenant switcher read the same numbers this page
   // renders, off one query rather than three.
@@ -64,6 +64,16 @@ export default function CommandCenterPage() {
     setRunState({ busy: true, message: "Opening live leak scan…", error: false });
     router.push("/pipeline/live-scan?autostart=1");
   }, [router]);
+
+  /**
+   * Offered at organization scope rather than by role.
+   *
+   * A live scan sweeps the selected organization's own keywords into its own
+   * pipeline, so the analyst who owns the tenant is the person who should be
+   * able to start one; at fleet scope there is no single organization to sweep.
+   * The API re-checks who may scan what, so this only decides what is offered.
+   */
+  const canRunLiveScan = !isFleetScope;
 
   const scored = visibleData?.incidents.filter(
     (incident) => incident.triagePriorityScore !== null,
@@ -246,7 +256,7 @@ export default function CommandCenterPage() {
         lastUpdatedAt={visibleData.lastUpdatedAt}
         isRefreshing={isRefreshing}
         onRefresh={refresh}
-        onRunPipeline={isSuperAdmin ? runPipeline : undefined}
+        onRunPipeline={canRunLiveScan ? runPipeline : undefined}
         runState={runState}
       />
 

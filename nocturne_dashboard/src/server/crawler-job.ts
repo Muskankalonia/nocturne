@@ -164,6 +164,10 @@ function executionIdFromName(name: string | undefined): string | null {
 
 interface RunExecutionResource {
   name?: string;
+  /** Cloud Run echoes the run-time overrides back on the execution. */
+  template?: {
+    containers?: Array<{ env?: Array<{ name?: string; value?: string }> }>;
+  };
   createTime?: string;
   startTime?: string;
   completionTime?: string;
@@ -178,6 +182,25 @@ interface RunExecutionResource {
     message?: string;
     reason?: string;
   }>;
+}
+
+/**
+ * The organization a run targeted, or null for a fleet-wide sweep.
+ *
+ * Recovered from the execution's own container overrides rather than tracked
+ * separately, so it cannot drift from what the crawler was actually told to do.
+ * A scheduled sweep sets no ORG_ID and reads as null.
+ */
+function executionOrgId(resource: RunExecutionResource): string | null {
+  for (const container of resource.template?.containers ?? []) {
+    for (const variable of container.env ?? []) {
+      if (variable.name === "ORG_ID") {
+        const value = variable.value?.trim();
+        return value ? value : null;
+      }
+    }
+  }
+  return null;
 }
 
 function toLiveScanExecution(resource: RunExecutionResource): LiveScanExecution {
@@ -214,6 +237,7 @@ function toLiveScanExecution(resource: RunExecutionResource): LiveScanExecution 
 
   return {
     executionId,
+    orgId: executionOrgId(resource),
     state,
     createTime: resource.createTime ?? null,
     startTime: resource.startTime ?? null,

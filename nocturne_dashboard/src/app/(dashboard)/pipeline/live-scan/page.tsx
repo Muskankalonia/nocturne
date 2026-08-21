@@ -606,7 +606,16 @@ function ExecutionRow({
 export default function LiveScanPage() {
   const { session, activeOrg, isFleetScope, isLoading: isAuthLoading } = useAuth();
   const router = useRouter();
-  const isFleetAdmin = session?.user.role === "SUPER_ADMIN";
+  /**
+   * Signed in at all, which is now the bar for running a scan.
+   *
+   * A live leak scan sweeps one organization's own keywords into that
+   * organization's own pipeline, so the analyst who owns the tenant is exactly
+   * the person who should be able to start one. Which organization a caller may
+   * scan, and whose logs they may read, is enforced by the API per request —
+   * this only decides what the page offers.
+   */
+  const canRunScan = Boolean(session);
 
   const [executions, setExecutions] = useState<LiveScanExecution[]>([]);
   const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null);
@@ -626,14 +635,14 @@ export default function LiveScanPage() {
   const isBootstrapping = isAuthLoading || isLoading;
 
   const liveScanBlockedReason = useMemo(() => {
-    if (!isFleetAdmin) return "Only a fleet administrator can start a live leak scan.";
+    if (!canRunScan) return "Sign in to start a live leak scan.";
     if (isFleetScope) return "Select one real organization before starting a live leak scan.";
     if (!activeOrg) return "Select one organization before starting a live leak scan.";
     if (activeOrg.orgId === DEMO_ORG_ID) {
       return "Demo Organization is sample data. Select Odido or European Commission before starting a live leak scan.";
     }
     return null;
-  }, [activeOrg, isFleetAdmin, isFleetScope]);
+  }, [activeOrg, canRunScan, isFleetScope]);
 
   /**
    * Cursor and dedupe set, held in refs rather than state.
@@ -731,7 +740,7 @@ export default function LiveScanPage() {
   // Initial load. Fleet admins only — everyone else gets the explanatory panel
   // below and no requests are made on their behalf.
   useEffect(() => {
-    if (isAuthLoading || !isFleetAdmin) {
+    if (isAuthLoading || !canRunScan) {
       if (!isAuthLoading) setIsLoading(false);
       return;
     }
@@ -748,7 +757,7 @@ export default function LiveScanPage() {
     return () => {
       cancelled = true;
     };
-  }, [isAuthLoading, isFleetAdmin, loadExecutions]);
+  }, [isAuthLoading, canRunScan, loadExecutions]);
 
   // Selection changed: drop the previous run's buffer before anything for the
   // new one can arrive, so the console never shows two runs interleaved.
@@ -769,7 +778,7 @@ export default function LiveScanPage() {
   // of the execution, because Cloud Logging delivers the last few lines after
   // Cloud Run has already called the run finished.
   useEffect(() => {
-    if (!selectedExecutionId || !isFleetAdmin) return;
+    if (!selectedExecutionId || !canRunScan) return;
     let cancelled = false;
 
     /**
@@ -821,7 +830,7 @@ export default function LiveScanPage() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [isFleetAdmin, pollNonce, pollSelected, selectedExecutionId]);
+  }, [canRunScan, pollNonce, pollSelected, selectedExecutionId]);
 
   const startScan = useCallback(async () => {
     if (liveScanBlockedReason || !activeOrg) {
@@ -880,12 +889,12 @@ export default function LiveScanPage() {
    */
   const autostartRef = useRef(false);
   useEffect(() => {
-    if (autostartRef.current || isBootstrapping || !isFleetAdmin || liveScanBlockedReason) return;
+    if (autostartRef.current || isBootstrapping || !canRunScan || liveScanBlockedReason) return;
     if (new URLSearchParams(window.location.search).get("autostart") !== "1") return;
     autostartRef.current = true;
     router.replace("/pipeline/live-scan", { scroll: false });
     void startScan();
-  }, [isBootstrapping, isFleetAdmin, liveScanBlockedReason, router, startScan]);
+  }, [isBootstrapping, canRunScan, liveScanBlockedReason, router, startScan]);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -922,7 +931,7 @@ export default function LiveScanPage() {
         size="small"
         variant="outlined"
         startIcon={<RefreshCw size={13} />}
-        disabled={isBootstrapping || !isFleetAdmin}
+        disabled={isBootstrapping || !canRunScan}
         onClick={() =>
           void refresh().catch((refreshError: unknown) =>
             setError(refreshError instanceof Error ? refreshError.message : "Refresh failed."),
@@ -937,7 +946,7 @@ export default function LiveScanPage() {
         startIcon={
           isStarting ? <Loader2 size={14} className="spin" /> : <Terminal size={14} />
         }
-        disabled={isBootstrapping || isStarting || !isFleetAdmin || Boolean(liveScanBlockedReason)}
+        disabled={isBootstrapping || isStarting || !canRunScan || Boolean(liveScanBlockedReason)}
         title={liveScanBlockedReason ?? undefined}
         onClick={() => void startScan()}
       >
@@ -946,7 +955,7 @@ export default function LiveScanPage() {
     </Stack>
   );
 
-  if (!isAuthLoading && !isFleetAdmin) {
+  if (!isAuthLoading && !canRunScan) {
     return (
       <Stack gap={2}>
         <PageHeader
@@ -988,7 +997,7 @@ export default function LiveScanPage() {
           {notice}
         </Alert>
       )}
-      {liveScanBlockedReason && isFleetAdmin && !isBootstrapping && (
+      {liveScanBlockedReason && canRunScan && !isBootstrapping && (
         <Alert severity="warning" variant="outlined">
           {liveScanBlockedReason}
         </Alert>

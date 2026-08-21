@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 
 import type { LiveScanListResponse, LiveScanStartResponse } from "@/lib/live-scan";
 import { organizations, users } from "@/mocks/organizations";
+import type { User } from "@/types";
 import {
   CrawlerApiError,
   CrawlerConfigError,
@@ -45,8 +46,18 @@ function unauthorized() {
  * ORG_ID/QUERY/KEYWORDS into the Cloud Run Job so the crawler never fans out
  * across tenants during an on-demand demo.
  */
-async function requireFleetAdmin(): Promise<
-  { ok: true } | { ok: false; response: NextResponse }
+/**
+ * Authenticates the caller and reports who they are.
+ *
+ * A live leak scan used to be fleet-administrator only. That was the wrong
+ * boundary: the scan sweeps one organization's own keywords and writes into
+ * that organization's own pipeline, so the person with the strongest reason to
+ * run it is the analyst who owns the tenant. What actually needs guarding is
+ * *which* organization a caller may scan and whose logs they may read, and that
+ * is enforced per request below rather than by withholding the feature.
+ */
+async function authenticateCaller(): Promise<
+  { ok: true; user: User } | { ok: false; response: NextResponse }
 > {
   const cookieStore = await cookies();
   let verified;
@@ -67,16 +78,7 @@ async function requireFleetAdmin(): Promise<
   if (!user || user.role !== verified.role || user.orgId !== verified.orgId) {
     return { ok: false, response: unauthorized() };
   }
-  if (user.role !== "SUPER_ADMIN") {
-    return {
-      ok: false,
-      response: NextResponse.json(
-        { error: "Only a fleet administrator can start a live leak scan." },
-        { status: 403, headers: RESPONSE_HEADERS },
-      ),
-    };
-  }
-  return { ok: true };
+  return { ok: true, user };
 }
 
 function uniqueList(values: Array<string | null | undefined>): string[] {
@@ -173,7 +175,7 @@ function failure(error: unknown, fallback: string) {
 }
 
 export async function POST(request: Request) {
-  const auth = await requireFleetAdmin();
+  const auth = await authenticateCaller();
   if (!auth.ok) return auth.response;
 
   let payload: { orgId?: unknown } = {};
@@ -183,7 +185,23 @@ export async function POST(request: Request) {
     payload = {};
   }
 
-  const orgId = typeof payload.orgId === "string" ? payload.orgId.trim() : "";
+  const requestedOrgId = typeof payload.orgId === "string" ? payload.orgId.trim() : "";
+
+  // Tenant isolation for the start action.
+  //
+  // A super admin has no organization of their own, so they must name the one
+  // they are scanning. An organization user's is fixed by their session and the
+  // body is checked against it rather than trusted — otherwise opening this
+  // feature would let any tenant start a crawl, and spend a warehouse, against
+  // another tenant's keywords.
+  const orgId = auth.user.role === "SUPER_ADMIN" ? requestedOrgId : auth.user.orgId ?? "";
+  if (auth.user.role !== "SUPER_ADMIN" && requestedOrgId && requestedOrgId !== orgId) {
+    return NextResponse.json(
+      { error: "You can only scan your own organization." },
+      { status: 403, headers: RESPONSE_HEADERS },
+    );
+  }
+
   const crawlerOptions = crawlerOptionsForOrg(orgId);
   if (!crawlerOptions.ok) {
     return NextResponse.json(
@@ -233,12 +251,21 @@ export async function POST(request: Request) {
 }
 
 export async function GET() {
-  const auth = await requireFleetAdmin();
+  const auth = await authenticateCaller();
   if (!auth.ok) return auth.response;
 
   try {
+    const all = await listCrawlerExecutions(8);
+    // An organization user sees only runs of their own organization. Scheduled
+    // fleet sweeps carry no ORG_ID and are withheld entirely: they cover every
+    // tenant, so their very existence and timing is fleet information.
+    const executions =
+      auth.user.role === "SUPER_ADMIN"
+        ? all
+        : all.filter((execution) => execution.orgId === auth.user.orgId);
+
     const response: LiveScanListResponse = {
-      executions: await listCrawlerExecutions(8),
+      executions,
       fetchedAt: new Date().toISOString(),
     };
     return NextResponse.json(response, { headers: RESPONSE_HEADERS });

@@ -87,16 +87,6 @@ export async function GET(request: Request, context: LiveScanStatusRouteContext)
   if (!user || user.role !== verified.role || user.orgId !== verified.orgId) {
     return unauthorized();
   }
-  // Raw crawler stdout names every organization in the sweep and every onion
-  // host it touched, so it is fleet-scoped information regardless of which
-  // tenant the reader happens to be looking at.
-  if (user.role !== "SUPER_ADMIN") {
-    return NextResponse.json(
-      { error: "Only a fleet administrator can read live scan logs." },
-      { status: 403, headers: RESPONSE_HEADERS },
-    );
-  }
-
   const { executionId } = await context.params;
   if (!EXECUTION_ID_PATTERN.test(executionId)) {
     return NextResponse.json(
@@ -112,10 +102,29 @@ export async function GET(request: Request, context: LiveScanStatusRouteContext)
     // Status and logs together: two round trips from the browser would let the
     // rail and the console disagree by one poll interval, which shows up as a
     // stage lighting up a beat before the line that explains it.
-    const [execution, logs] = await Promise.all([
-      getCrawlerExecution(executionId),
-      fetchCrawlerLogs(executionId, { since }),
-    ]);
+    // Raw crawler stdout names every organization in the sweep and every onion
+    // host it touched. A run of one organization only ever names that one, so
+    // its owner may read it; a scheduled fleet sweep names them all and stays
+    // fleet-only.
+    //
+    // Checked against the execution's own ORG_ID override rather than anything
+    // the caller sent, and after the execution is fetched, so a guessed
+    // execution id cannot be used to read another tenant's run.
+    const execution = await getCrawlerExecution(executionId);
+    if (user.role !== "SUPER_ADMIN" && execution.orgId !== user.orgId) {
+      return NextResponse.json(
+        {
+          error: execution.orgId
+            ? "That scan belongs to another organization."
+            : "Fleet-wide scan logs are restricted to fleet administrators.",
+        },
+        { status: 403, headers: RESPONSE_HEADERS },
+      );
+    }
+
+    // The execution is already in hand from the ownership check above; only the
+    // logs are still outstanding.
+    const logs = await fetchCrawlerLogs(executionId, { since });
 
     let snowflakeHandoff: Awaited<ReturnType<typeof copyLiveCrawlerRunToRaw>> | null = null;
     const handoffLogs: LiveScanStatusResponse["handoffLogs"] = [];
