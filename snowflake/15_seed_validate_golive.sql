@@ -64,6 +64,7 @@ COPY INTO NOCTURNE.RAW.CRAWL_PAGES (
   ORG_ID, DOC_ID, DEDUPE_KEY, RUN_ID, SOURCE, QUERY, URL, TITLE,
   FETCHED_AT, DEPTH, KEYWORDS_MATCHED, LINKS_FOUND,
   CONTENT_LENGTH, CONTENT_SHA256, RAW_TEXT, SCHEMA_VERSION,
+  IMAGE_BASE64, CONTENT_TYPE,
   _PATH_ORG_ID, _SOURCE_FILE
 )
 FROM (
@@ -84,6 +85,8 @@ FROM (
     $1:content_sha256::STRING,
     $1:raw_text::STRING,
     $1:schema_version::NUMBER,
+    $1:image_base64::STRING,
+    $1:content_type::STRING,
     REGEXP_SUBSTR(
       METADATA$FILENAME,
       'org_id=([a-z0-9]+(_[a-z0-9]+)*)',
@@ -97,7 +100,7 @@ FROM (
 )
 FILE_FORMAT = (FORMAT_NAME = 'NOCTURNE.RAW.JSONL_GZ_FORMAT')
 PATTERN = '.*org_id=[a-z0-9]+(_[a-z0-9]+)*/.*part-[0-9]+[.]jsonl[.]gz'
-ON_ERROR = 'ABORT_STATEMENT'
+ON_ERROR = 'CONTINUE'
 -- TODO(production): Grant storage.objects.delete to the Snowflake GCS identity,
 -- validate deletion in a non-production prefix, then enable this option.
 -- PURGE = TRUE
