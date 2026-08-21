@@ -42,8 +42,10 @@ const MAX_BODY_BYTES = 64 * 1024;
  *     what the payload asks for.
  *
  * Configure in Jira: Settings → System → Webhooks, events `jira:issue_updated`,
- * URL `<console>/api/integrations/jira/webhook?token=…` or with the secret set
- * as an `X-Hub-Signature-256` header.
+ * URL `<console>/api/integrations/jira/webhook`, and paste JIRA_WEBHOOK_SECRET
+ * into the webhook's own Secret field — Jira then signs each request and this
+ * route verifies it. `?token=<secret>` is accepted as a fallback for tooling
+ * that cannot sign.
  */
 
 function constantTimeEquals(a: string, b: string): boolean {
@@ -62,10 +64,25 @@ function isAuthorized(request: Request, rawBody: string): boolean {
     return false;
   }
 
-  const signature = request.headers.get("x-hub-signature-256");
+  // Two header names, because the two systems that send this disagree.
+  //
+  // GitHub popularised `X-Hub-Signature-256`, and that is what this route
+  // originally accepted. Jira Cloud sends `X-Hub-Signature` — no suffix — with
+  // a `sha256=` prefixed value. Reading only the first name meant a webhook
+  // configured with Jira's own Secret field authenticated as "no signature
+  // present", fell through to the bearer/query check, found nothing, and
+  // returned 401. Jira disables a webhook that keeps failing, so the symptom is
+  // an integration that quietly stops rather than one that visibly errors.
+  const signature =
+    request.headers.get("x-hub-signature-256")
+    ?? request.headers.get("x-hub-signature");
   if (signature) {
-    const expected = `sha256=${createHmac("sha256", secret).update(rawBody, "utf8").digest("hex")}`;
-    return constantTimeEquals(signature, expected);
+    const digest = createHmac("sha256", secret).update(rawBody, "utf8").digest("hex");
+    // Compared without the prefix, so a sender that omits `sha256=` still
+    // verifies. The prefix carries no security value — it names the algorithm,
+    // which is fixed here anyway.
+    const provided = signature.startsWith("sha256=") ? signature.slice(7) : signature;
+    return constantTimeEquals(provided.toLowerCase(), digest);
   }
 
   // Fallback for Jira Cloud automations that cannot sign: the same secret as a
