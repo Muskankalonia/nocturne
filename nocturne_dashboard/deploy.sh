@@ -170,11 +170,28 @@ bold "[5/6] deploying Firebase Hosting"
 
 gcloud services enable firebase.googleapis.com firebasehosting.googleapis.com \
   --project "$PROJECT_ID" >/dev/null 2>&1 || true
-firebase hosting:sites:create "$SITE" --project "$PROJECT_ID" >/dev/null 2>&1 \
-  && echo "  claimed ${SITE}.web.app" \
-  || echo "  site ${SITE} already exists"
+# Ask whether the site exists rather than creating it and treating failure as
+# "already there".
+#
+# `hosting:sites:create` does not simply exit non-zero on a duplicate: it gets a
+# 409 and then *prompts* for a different site id. With stdout and stderr sent to
+# /dev/null and stdin still attached to the terminal, that prompt is invisible
+# and the deploy hangs forever on an unanswerable question. --non-interactive
+# and </dev/null are both here so neither this command nor any it delegates to
+# can block on input again.
+if firebase hosting:sites:get "$SITE" --project "$PROJECT_ID" \
+     --non-interactive </dev/null >/dev/null 2>&1; then
+  echo "  site ${SITE} already exists"
+elif firebase hosting:sites:create "$SITE" --project "$PROJECT_ID" \
+       --non-interactive </dev/null >/dev/null 2>&1; then
+  echo "  claimed ${SITE}.web.app"
+else
+  # Not fatal: the deploy below fails clearly if the site really is missing,
+  # and that error is more informative than anything guessed here.
+  warn "  could not confirm site ${SITE}; continuing to the hosting deploy"
+fi
 
-firebase deploy --only hosting --project "$PROJECT_ID"
+firebase deploy --only hosting --project "$PROJECT_ID" --non-interactive </dev/null
 
 # --- 6. verify --------------------------------------------------------------
 bold "[6/6] verifying"
