@@ -4,7 +4,6 @@ import { useMemo } from "react";
 import { Box, Button, Stack, Typography, alpha } from "@mui/material";
 import { CalendarClock, FileDown, FileSpreadsheet, Mail } from "lucide-react";
 
-import { ExportEvidenceButton } from "@/components/triage/ExportEvidenceButton";
 import { Panel } from "@/components/ui/Panel";
 import { PageHeader } from "@/components/ui/Primitives";
 import { useAuth } from "@/contexts/AuthContext";
@@ -35,10 +34,12 @@ export default function ReportsPage() {
 
   return (
     <Stack gap={2}>
+      {/* No export control in the header: the panels below already offer the
+        * same exports with a window to choose, and a second button that picks
+        * the window for you is a different answer to the same question. */}
       <PageHeader
         title="Reports"
         subtitle="Evidence exports and the weekly summary, generated from Snowflake at the moment you ask for them."
-        right={<ExportEvidenceButton orgId={orgId} />}
       />
 
       <Box

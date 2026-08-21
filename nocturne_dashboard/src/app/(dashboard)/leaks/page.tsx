@@ -17,7 +17,6 @@ import {
 import { Download, Eye, RefreshCw, RotateCcw, X } from "lucide-react";
 import type { AgGridReact } from "ag-grid-react";
 import type { ColDef, ICellRendererParams, RowClassParams } from "ag-grid-community";
-import { ExportEvidenceButton } from "@/components/triage/ExportEvidenceButton";
 import { withdrawReviewDecision } from "@/lib/triage-client";
 import { ReviewCapturePanel } from "@/components/triage/ReviewCapturePanel";
 import { useAuth } from "@/contexts/AuthContext";
@@ -710,10 +709,6 @@ export default function BreachMonitorPage() {
             >
               Export view
             </Button>
-            <ExportEvidenceButton
-              orgId={session?.scope.kind === "org" ? session.scope.orgId : null}
-              label="Evidence report"
-            />
           </Stack>
         }
       />

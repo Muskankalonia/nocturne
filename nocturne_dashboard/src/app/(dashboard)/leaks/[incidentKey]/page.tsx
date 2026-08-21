@@ -2,11 +2,23 @@
 
 import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Box, Button, Divider, Stack, Typography, alpha } from "@mui/material";
-import { ArrowLeft, Network } from "lucide-react";
+import {
+  Box,
+  Button,
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  Divider,
+  IconButton,
+  Stack,
+  Typography,
+  alpha,
+} from "@mui/material";
+import { ArrowLeft, Camera, Eye, Network, X } from "lucide-react";
 import { scopeOrgId, useAuth } from "@/contexts/AuthContext";
 import { IncidentActionBar } from "@/components/triage/IncidentActionBar";
 import { ReviewCapturePanel } from "@/components/triage/ReviewCapturePanel";
+import { fetchScreenshot } from "@/lib/triage-client";
 import { Panel } from "@/components/ui/Panel";
 import {
   CanvasSkeleton,
@@ -40,6 +52,19 @@ export default function IncidentDetailPage({
   const [detail, setDetail] = useState<IncidentDetailResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Declared here, above the loading and not-found returns, so the hook order
+  // is the same on every render.
+  const [captureOpen, setCaptureOpen] = useState(false);
+  /**
+   * Whether a capture already exists, so the button can say which action it
+   * performs.
+   *
+   * A single GET, not the dialog's poll loop: the label has to be right before
+   * anyone opens anything, and "View" versus "Capture" is the difference
+   * between looking at evidence and spending a minute of Tor time fetching it.
+   * Null means not yet known, and the button stays neutral until it is.
+   */
+  const [hasCapture, setHasCapture] = useState<boolean | null>(null);
 
   useEffect(() => {
     if (!session) {
@@ -87,6 +112,31 @@ export default function IncidentDetailPage({
 
     return () => controller.abort();
   }, [incidentKey, session]);
+
+  /**
+   * Reads the capture state once the incident is known, and again whenever the
+   * dialog closes — an analyst who just took a capture should not have to
+   * reload the page to see the button change from Capture to View.
+   *
+   * Failure is swallowed on purpose. This drives a word on a button, not a
+   * decision: an unreachable screenshot service should leave the neutral label
+   * in place, never an error banner over a page whose actual content loaded.
+   */
+  useEffect(() => {
+    const orgId = detail?.incident.orgId;
+    if (!orgId || captureOpen) return;
+    let cancelled = false;
+    void fetchScreenshot(incidentKey, orgId)
+      .then((result) => {
+        if (!cancelled) setHasCapture(result.screenshot?.status === "captured");
+      })
+      .catch(() => {
+        if (!cancelled) setHasCapture(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [captureOpen, detail?.incident.orgId, incidentKey]);
 
   // The API enforces tenancy. Retain a render-time check so a stale response is
   // never shown while the user switches organization scope in the dashboard.
@@ -175,40 +225,68 @@ export default function IncidentDetailPage({
           making them scroll past the whole dossier to find the button is how a
           "read-only list" stays read-only in practice. */}
       <Panel title="Triage & response">
-        <IncidentActionBar
-          incidentKey={incident.incidentKey}
-          orgId={incident.orgId}
-        />
-      </Panel>
+        {/* The evidence control sits opposite the workflow controls rather than
+            under them: it does not change the incident's state, and grouping it
+            with the buttons that do invites it to be read as one of them. */}
+        <Stack
+          direction={{ xs: "column", sm: "row" }}
+          alignItems={{ xs: "stretch", sm: "flex-start" }}
+          gap={1.5}
+        >
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <IncidentActionBar
+              incidentKey={incident.incidentKey}
+              orgId={incident.orgId}
+            />
+          </Box>
 
-      {/* Evidence capture for *any* incident, not only the ones the cascade
-          could not decide.
-          
-          A confirmed incident is the case where seeing the page matters most:
-          it is what an analyst attaches to a regulator notification or a Jira
-          ticket, and a listing can be pulled hours after the alert fires. The
-          capture is keyed by incident key, which VW_BREACH_MONITOR and
-          VW_INCIDENTS agree on, so the same worker and the same storage serve
-          both surfaces. */}
-      {isCapturable(incident.topUrl) ? (
-        <Panel title="Source page capture">
-          <ReviewCapturePanel
-            orgId={incident.orgId}
-            monitorKey={incident.incidentKey}
-            url={incident.topUrl}
-            decision={null}
-            canDecide={false}
-            showVerdictControls={false}
-          />
-        </Panel>
-      ) : (
-        <Panel title="Source page capture">
-          <Typography sx={{ fontSize: 12, color: colors.text3, lineHeight: 1.7 }}>
-            This incident came from a manual paste-dump upload, so there is no
-            live page to capture. The uploaded file is the evidence.
-          </Typography>
-        </Panel>
-      )}
+          {/* Evidence capture for *any* incident, not only the ones the cascade
+              could not decide. A confirmed incident is where seeing the page
+              matters most: it is what gets attached to a regulator notification
+              or a Jira ticket, and a listing can be pulled hours after the
+              alert fires.
+
+              Behind a button rather than inline. A screenshot of a forum page
+              is tall, and rendering it in the flow pushed the narrative, the
+              scores and the evidence quotes below the fold on every visit — for
+              an image most visits never need to look at. The needs-review rows
+              already open their capture in a dialog, so this is also the one
+              interaction an analyst learns once. */}
+          {isCapturable(incident.topUrl) ? (
+            <Box sx={{ flexShrink: 0 }}>
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={hasCapture ? <Eye size={14} /> : <Camera size={14} />}
+                onClick={() => setCaptureOpen(true)}
+                sx={{ borderColor: colors.edgeHi, color: colors.ion, whiteSpace: "nowrap" }}
+              >
+                {/* Null until the lookup lands. "View evidence" would be a lie
+                    on an incident with no capture, and the flicker from a wrong
+                    guess to the truth is worse than a neutral first frame. */}
+                {hasCapture === null
+                  ? "Evidence"
+                  : hasCapture
+                    ? "View evidence"
+                    : "Capture evidence"}
+              </Button>
+            </Box>
+          ) : (
+            <Typography
+              sx={{
+                flexShrink: 0,
+                fontSize: 11.5,
+                color: colors.text3,
+                lineHeight: 1.6,
+                maxWidth: 260,
+              }}
+            >
+              Manual paste-dump upload — no live page to capture. The uploaded
+              file is the evidence.
+            </Typography>
+          )}
+        </Stack>
+      </Panel>
 
       <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", lg: "1.55fr 1fr" } }}>
         {/* narrative */}
@@ -467,6 +545,41 @@ export default function IncidentDetailPage({
           ) : null}
         </Panel>
       </Box>
+
+      {/* Mounted only while open, so the capture panel's poll loop does not run
+        * — and cannot bill a Snowflake query every few seconds — for an analyst
+        * who never opened it. */}
+      <Dialog
+        open={captureOpen}
+        onClose={() => setCaptureOpen(false)}
+        maxWidth="md"
+        fullWidth
+        scroll="paper"
+      >
+        <DialogTitle sx={{ fontSize: 15, pr: 6 }}>
+          Source page capture
+          <IconButton
+            aria-label="Close"
+            onClick={() => setCaptureOpen(false)}
+            sx={{ position: "absolute", right: 8, top: 8 }}
+          >
+            <X size={16} />
+          </IconButton>
+          <Typography sx={{ fontSize: 11.5, color: colors.text3, mt: 0.5 }}>
+            {incident.topTitle}
+          </Typography>
+        </DialogTitle>
+        <DialogContent dividers sx={{ overflowX: "hidden" }}>
+          <ReviewCapturePanel
+            orgId={incident.orgId}
+            monitorKey={incident.incidentKey}
+            url={incident.topUrl}
+            decision={null}
+            canDecide={false}
+            showVerdictControls={false}
+          />
+        </DialogContent>
+      </Dialog>
     </Stack>
   );
 }

@@ -91,6 +91,11 @@ INTERSTITIAL_POLL = int(os.environ.get("INTERSTITIAL_POLL", "15"))
 
 VIEWPORT = {"width": 1280, "height": 1600}
 
+# How often an idle watcher says it is still alive. Long enough that a quiet
+# week is a handful of lines, short enough that "nothing since yesterday" is
+# unambiguously a fault rather than a quiet queue.
+HEARTBEAT_SECONDS = int(os.environ.get("NOCTURNE_CAPTURE_HEARTBEAT_SECONDS", "900"))
+
 # Where captures land. Separate prefix from raw/crawls/ so the Snowflake stage
 # that COPYs crawl pages never sees a PNG.
 OBJECT_PREFIX = "screenshots/needs-review"
@@ -520,6 +525,17 @@ def main() -> None:
     worker_id = f"{socket.gethostname()}/{os.getpid()}"
     conn = connect_snowflake()
 
+    # Say so once at startup. Without this the first evidence that the worker
+    # reached Snowflake at all is its first capture, which may be days away.
+    log.info(
+        "Worker %s ready. Polling every %ss; heartbeat every %d minutes.",
+        worker_id,
+        args.interval,
+        HEARTBEAT_SECONDS // 60,
+    )
+    idle_passes = 0
+    last_heartbeat = time.monotonic()
+
     try:
         while True:
             try:
@@ -541,8 +557,28 @@ def main() -> None:
 
             if processed:
                 log.info("Processed %d capture request(s).", processed)
+                idle_passes = 0
+                last_heartbeat = time.monotonic()
             elif not args.watch:
                 log.info("Nothing queued.")
+            else:
+                # A watcher that only speaks when it works is indistinguishable
+                # from a watcher that has died. Both produce silence, and the
+                # silence lasts exactly as long as nobody happens to request a
+                # capture — which on a quiet week is the whole week.
+                #
+                # Logging every idle pass would bury the lines that matter under
+                # 4,320 nothing-happened entries a day, so this reports on a
+                # fixed wall-clock interval instead of per pass.
+                idle_passes += 1
+                if time.monotonic() - last_heartbeat >= HEARTBEAT_SECONDS:
+                    log.info(
+                        "Idle: queue empty across %d poll(s) in the last %d minutes.",
+                        idle_passes,
+                        HEARTBEAT_SECONDS // 60,
+                    )
+                    idle_passes = 0
+                    last_heartbeat = time.monotonic()
 
             if not args.watch:
                 return

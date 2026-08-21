@@ -39,7 +39,18 @@ RUN playwright install chromium
 
 COPY scripts/capture_screenshots.py ./scripts/capture_screenshots.py
 
-# `tor &` then exec, matching the crawler's entrypoint. No sleep or bootstrap
-# poll is needed here: the worker blocks on the SOCKS port itself and exits with
-# a clear message if Tor never comes up.
-CMD ["bash", "-c", "tor & exec python -u scripts/capture_screenshots.py --watch --interval 20"]
+# Wait for Tor to finish bootstrapping, not merely to open its port.
+#
+# The worker's own guard checks that 127.0.0.1:9050 accepts a connection, and
+# that happens roughly two minutes before Tor has enough directory information
+# to build a circuit — measured on the first deployed run, where the port was
+# ready at 05:33:50 and "Bootstrapped 100%" did not arrive until 05:35:57. A
+# capture claimed inside that window is attempted over a Tor that cannot route
+# it yet, and fails for a reason that has nothing to do with the page.
+#
+# Bounded at 180s: if Tor is still not up by then, start anyway and let the
+# worker's guard produce its own clear error rather than hanging a container
+# forever on a dependency that is never coming.
+#
+# tee keeps Tor's own notices on stdout, so Cloud Run still captures them.
+CMD ["bash", "-c", "tor 2>&1 | tee /tmp/tor.log & waited=0; until grep -q 'Bootstrapped 100%' /tmp/tor.log 2>/dev/null || [ \"$waited\" -ge 180 ]; do sleep 1; waited=$((waited+1)); done; echo \"tor: ready after ${waited}s\"; exec python -u scripts/capture_screenshots.py --watch --interval 20"]
