@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { invalidateIncidentViews } from "@/server/query-cache";
+
 import {
   propagateMitigation,
   propagateUnmitigation,
@@ -14,6 +16,7 @@ import {
   serviceUnavailable,
 } from "@/server/route-auth";
 import {
+  findMonitorRow,
   getIncidentActionState,
   recordAction,
   setIncidentRemediation,
@@ -87,13 +90,21 @@ async function applyMitigation(
 
   try {
     const before = await getIncidentActionState(scoped.orgId, incidentKey);
+
+    // A needs-review page that never reached L4 has no incident, but it is
+    // still something an analyst works and closes out. Remediation is keyed by
+    // monitor key, and for a confirmed incident the two are the same value, so
+    // both kinds of row travel the same path from here.
     if (!before) {
-      // Same response for "no such incident" and "not yours", so incident keys
-      // stay unprobeable across tenants.
-      return NextResponse.json(
-        { error: "Incident not found." },
-        { status: 404, headers: API_RESPONSE_HEADERS },
-      );
+      const row = await findMonitorRow(scoped.orgId, incidentKey);
+      if (!row) {
+        // Same response for "no such row" and "not yours", so keys stay
+        // unprobeable across tenants.
+        return NextResponse.json(
+          { error: "Incident not found." },
+          { status: 404, headers: API_RESPONSE_HEADERS },
+        );
+      }
     }
 
     await setIncidentRemediation({
@@ -109,14 +120,14 @@ async function applyMitigation(
     });
 
     let jira = null;
-    if (mitigated) {
+    if (mitigated && before) {
       jira = await propagateMitigation({
         orgId: scoped.orgId,
         incidentKey,
         actor: auth.caller.username,
         state: before,
       });
-    } else {
+    } else if (before) {
       await propagateUnmitigation({
         orgId: scoped.orgId,
         incidentKey,
@@ -125,6 +136,7 @@ async function applyMitigation(
       });
     }
 
+    invalidateIncidentViews();
     const after = await getIncidentActionState(scoped.orgId, incidentKey);
 
     await recordAction({
@@ -138,11 +150,16 @@ async function applyMitigation(
             jira?.delivered ? ` · closed ${jira.externalId}` : ""
           }`
         : `Reopened by ${auth.caller.username}`,
-      detail: { jiraIssueKey: before.jiraIssueKey, jiraError: jira?.error ?? null },
+      detail: {
+        jiraIssueKey: before?.jiraIssueKey ?? null,
+        jiraError: jira?.error ?? null,
+      },
     });
 
     const response: MitigationResponse = {
       incidentKey,
+      // Null for a page-level row: there is no incident action state to return,
+      // and the caller re-reads the monitor row instead.
       state: after ?? before,
       jira,
     };

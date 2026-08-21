@@ -1,0 +1,45 @@
+# Nocturne page-capture worker.
+#
+# Deliberately a separate image from the crawler's Dockerfile. The crawler uses
+# Debian's `chromium` package driven by Selenium; this worker uses Playwright,
+# which pins its own browser build and refuses to drive an arbitrary system
+# Chromium. Sharing one image would mean shipping two browsers and letting the
+# crawler's apt pin decide whether captures work.
+#
+# Tor runs inside the container rather than beside it. A capture must never be
+# taken over a direct connection — that would put the deployment's egress IP in
+# an adversary's logs — and an in-container proxy makes that failure impossible
+# to reach by misconfiguration rather than merely unlikely: there is no route to
+# the onion service at all without it.
+FROM mcr.microsoft.com/playwright/python:v1.62.0-noble
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        tor \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Two requirements files, because the Snowflake driver lives only in the
+# pipeline's. Installing just the root one produces an image that builds
+# cleanly and dies on first run with ModuleNotFoundError: snowflake.connector.
+COPY requirements.txt ./requirements.txt
+COPY snowflake/requirements.txt ./requirements-snowflake.txt
+RUN pip install --no-cache-dir \
+      --requirement requirements.txt \
+      --requirement requirements-snowflake.txt
+
+# The base image ships the browsers, but the pip install above can resolve a
+# different Playwright than the image was built against. This reconciles them.
+RUN playwright install chromium
+
+COPY scripts/capture_screenshots.py ./scripts/capture_screenshots.py
+
+# `tor &` then exec, matching the crawler's entrypoint. No sleep or bootstrap
+# poll is needed here: the worker blocks on the SOCKS port itself and exits with
+# a clear message if Tor never comes up.
+CMD ["bash", "-c", "tor & exec python -u scripts/capture_screenshots.py --watch --interval 20"]

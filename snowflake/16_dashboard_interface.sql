@@ -661,7 +661,20 @@ CREATE OR REPLACE VIEW NOCTURNE.DASHBOARD.VW_BREACH_MONITOR AS
     SELECT * FROM AUDIT_PAGES
   )
   SELECT
-    MONITOR.* EXCLUDE (MONITOR_STATUS),
+    MONITOR.* EXCLUDE (
+      MONITOR_STATUS,
+      REMEDIATION_STATUS,
+      MITIGATED_AT,
+      MITIGATED_BY
+    ),
+    -- Remediation is joined by MONITOR_KEY rather than taken from the incident
+    -- branch alone, so a page that never became an incident can still be worked
+    -- and closed out. For a confirmed incident the two keys are the same value,
+    -- so this resolves to exactly the row VW_INCIDENTS already carried.
+    COALESCE(REMEDIATION.REMEDIATION_STATUS, MONITOR.REMEDIATION_STATUS)
+      AS REMEDIATION_STATUS,
+    COALESCE(REMEDIATION.MITIGATED_AT, MONITOR.MITIGATED_AT) AS MITIGATED_AT,
+    COALESCE(REMEDIATION.MITIGATED_BY, MONITOR.MITIGATED_BY) AS MITIGATED_BY,
     -- The pipeline's own verdict, retained under its own name. An analyst
     -- override below never rewrites it: the point of this product is that the
     -- machine's reasoning stays inspectable after a human disagrees with it.
@@ -681,6 +694,9 @@ CREATE OR REPLACE VIEW NOCTURNE.DASHBOARD.VW_BREACH_MONITOR AS
     SCREENSHOT.CAPTURED_AT AS SCREENSHOT_CAPTURED_AT,
     SCREENSHOT.CAPTURE_ERROR AS SCREENSHOT_ERROR
   FROM MONITOR_ROWS AS MONITOR
+  LEFT JOIN NOCTURNE.CONFIG.INCIDENT_REMEDIATION AS REMEDIATION
+    ON REMEDIATION.ORG_ID = MONITOR.ORG_ID
+    AND REMEDIATION.INCIDENT_KEY = MONITOR.MONITOR_KEY
   LEFT JOIN NOCTURNE.CONFIG.REVIEW_DECISIONS AS REVIEW
     ON REVIEW.ORG_ID = MONITOR.ORG_ID
     AND REVIEW.MONITOR_KEY = MONITOR.MONITOR_KEY

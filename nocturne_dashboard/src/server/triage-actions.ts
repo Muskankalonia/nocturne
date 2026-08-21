@@ -93,7 +93,10 @@ const ACTION_STATE_COLUMNS = `
   SLACK_STATE,
   SOC_EMAIL_STATE,
   TO_VARCHAR(SOC_EMAIL_SENT_AT, ${TS}) AS SOC_EMAIL_SENT_AT,
-  HAS_BEEN_DISPATCHED
+  HAS_BEEN_DISPATCHED,
+  REVIEW_DECISION,
+  REVIEW_DECIDED_BY,
+  REVIEW_NOTE
 `;
 
 function mapActionState(row: SnowflakeRow): IncidentActionState {
@@ -118,6 +121,9 @@ function mapActionState(row: SnowflakeRow): IncidentActionState {
     socEmailState: text(row.SOC_EMAIL_STATE) as IntegrationState | null,
     socEmailSentAt: text(row.SOC_EMAIL_SENT_AT),
     hasBeenDispatched: bool(row.HAS_BEEN_DISPATCHED),
+    reviewDecision: text(row.REVIEW_DECISION) as IncidentActionState["reviewDecision"],
+    reviewDecidedBy: text(row.REVIEW_DECIDED_BY),
+    reviewNote: text(row.REVIEW_NOTE),
   };
 }
 
@@ -365,21 +371,11 @@ export async function findIncidentByJiraIssue(
 /* ── SOC alert payloads ────────────────────────────────────────────────────── */
 
 /**
- * Builds the alert payload for one incident and every recipient configured for
- * its organization.
- *
- * Unlike the scheduled sweep in `findPendingAlerts`, this ignores severity-band
- * preferences and the ALERT_DELIVERIES anti-join: an analyst who clicks
- * "Dispatch SOC alert" is making an explicit decision to page the team about
- * this specific incident, and silently dropping it because the band is below
- * someone's threshold would make the button lie.
+ * The incident-level columns every outbound alert renders. Shared so the
+ * recipient-joined query and the recipient-free one cannot drift: a Slack
+ * message and an email must describe the same incident the same way.
  */
-export async function getIncidentAlertPayloads(
-  orgId: string,
-  incidentKey: string,
-): Promise<PendingAlert[]> {
-  const rows = await executeQuery(
-    `SELECT
+const INCIDENT_ALERT_COLUMNS = `
        i.INCIDENT_KEY,
        i.ORG_ID,
        i.ORGANIZATION_NAME,
@@ -395,7 +391,56 @@ export async function getIncidentAlertPayloads(
        i.INSIGHT_HEADLINE,
        i.EXECUTIVE_SUMMARY,
        i.RECOMMENDED_ACTIONS,
-       TO_VARCHAR(i.FIRST_SEEN, ${TS}) AS FIRST_SEEN,
+       TO_VARCHAR(i.FIRST_SEEN, ${TS}) AS FIRST_SEEN`;
+
+/** Everything about the incident itself; nothing about who is being told. */
+export type IncidentAlertFacts = Omit<
+  PendingAlert,
+  "username" | "email" | "displayName"
+>;
+
+function mapIncidentAlertFacts(row: SnowflakeRow): IncidentAlertFacts {
+  return {
+    incidentKey: textOr(row.INCIDENT_KEY, ""),
+    orgId: textOr(row.ORG_ID, ""),
+    organizationName: textOr(row.ORGANIZATION_NAME, ""),
+    title: textOr(row.TOP_TITLE, ""),
+    sourceUrl: textOr(row.TOP_URL, ""),
+    severityBand: textOr(row.IMPACT_SEVERITY_BAND, "informational") as SeverityBand,
+    severityScore: num(row.IMPACT_SEVERITY_SCORE),
+    firstSeen: text(row.FIRST_SEEN),
+    leakTypes: list(row.LEAK_TYPE_LABELS) as LeakType[],
+    quantityClaimed: num(row.QUANTITY_CLAIMED),
+    evidenceConfidenceScore: num(row.EVIDENCE_CONFIDENCE_SCORE),
+    triagePriorityScore: num(row.TRIAGE_PRIORITY_SCORE),
+    actorName: text(row.ACTOR_NAME),
+    insightHeadline: text(row.INSIGHT_HEADLINE),
+    executiveSummary: text(row.EXECUTIVE_SUMMARY),
+    recommendedActions: list(row.RECOMMENDED_ACTIONS),
+  };
+}
+
+/**
+ * Builds the alert payload for one incident and every recipient configured for
+ * its organization.
+ *
+ * Unlike the scheduled sweep in `findPendingAlerts`, this ignores severity-band
+ * preferences and the ALERT_DELIVERIES anti-join: an analyst who clicks
+ * "Dispatch SOC alert" is making an explicit decision to page the team about
+ * this specific incident, and silently dropping it because the band is below
+ * someone's threshold would make the button lie.
+ *
+ * Returns an empty array when no profile carries an email — which is a
+ * statement about the mailing list, not about the incident. Callers that
+ * describe the incident somewhere other than an inbox want
+ * `getIncidentAlertFacts` instead.
+ */
+export async function getIncidentAlertPayloads(
+  orgId: string,
+  incidentKey: string,
+): Promise<PendingAlert[]> {
+  const rows = await executeQuery(
+    `SELECT ${INCIDENT_ALERT_COLUMNS},
        p.USERNAME,
        p.EMAIL,
        COALESCE(p.DISPLAY_NAME, p.USERNAME) AS DISPLAY_NAME
@@ -408,26 +453,35 @@ export async function getIncidentAlertPayloads(
   );
 
   return rows.map((row) => ({
-    incidentKey: textOr(row.INCIDENT_KEY, ""),
-    orgId: textOr(row.ORG_ID, ""),
-    organizationName: textOr(row.ORGANIZATION_NAME, ""),
-    title: textOr(row.TOP_TITLE, ""),
-    sourceUrl: textOr(row.TOP_URL, ""),
-    severityBand: textOr(row.IMPACT_SEVERITY_BAND, "informational") as SeverityBand,
-    severityScore: num(row.IMPACT_SEVERITY_SCORE),
-    firstSeen: text(row.FIRST_SEEN),
+    ...mapIncidentAlertFacts(row),
     username: textOr(row.USERNAME, ""),
     email: textOr(row.EMAIL, ""),
     displayName: textOr(row.DISPLAY_NAME, ""),
-    leakTypes: list(row.LEAK_TYPE_LABELS) as LeakType[],
-    quantityClaimed: num(row.QUANTITY_CLAIMED),
-    evidenceConfidenceScore: num(row.EVIDENCE_CONFIDENCE_SCORE),
-    triagePriorityScore: num(row.TRIAGE_PRIORITY_SCORE),
-    actorName: text(row.ACTOR_NAME),
-    insightHeadline: text(row.INSIGHT_HEADLINE),
-    executiveSummary: text(row.EXECUTIVE_SUMMARY),
-    recommendedActions: list(row.RECOMMENDED_ACTIONS),
   }));
+}
+
+/**
+ * The same incident facts with no recipient attached.
+ *
+ * Jira and Slack describe the incident to a channel, not to a mailing list, so
+ * they must not inherit the email path's inner join. They previously did, by
+ * borrowing the first recipient row as a representative — which meant an
+ * organization with no email on file got a ticket and a Slack post built from a
+ * placeholder: no severity score, no confidence, no exposed-data types, no
+ * actor, no summary. The alert looked like the cascade had concluded nothing,
+ * when in fact it had concluded everything and nobody had filled in an address.
+ */
+export async function getIncidentAlertFacts(
+  orgId: string,
+  incidentKey: string,
+): Promise<IncidentAlertFacts | null> {
+  const rows = await executeQuery(
+    `SELECT ${INCIDENT_ALERT_COLUMNS}
+     FROM NOCTURNE.DASHBOARD.VW_INCIDENTS i
+     WHERE i.ORG_ID = ? AND i.INCIDENT_KEY = ?`,
+    [orgId, incidentKey],
+  );
+  return rows.length ? mapIncidentAlertFacts(rows[0]) : null;
 }
 
 /* ── report data ───────────────────────────────────────────────────────────── */
@@ -737,6 +791,98 @@ export async function clearReviewDecision(
  * they liked, which is a server-side request forgery with a bespoke anonymity
  * network attached.
  */
+/**
+ * Where a capture request gets its URL.
+ *
+ * `capturable` is false for a target that exists but has no page a browser
+ * could open. Manual paste-dump uploads are the case that matters: their
+ * incident URL is a `manual-upload://<uuid>` receipt, not a location. Handing
+ * that to the Tor worker produces a failed capture and an error the analyst
+ * cannot act on, so it is refused here with the actual reason.
+ */
+export interface CaptureTarget {
+  url: string;
+  dedupeKey: string | null;
+  title: string;
+  incidentKey: string | null;
+  capturable: boolean;
+  reason: string | null;
+}
+
+/**
+ * Only a page an ordinary browser can open. This is a security boundary as
+ * much as a usability one: the URL reaches a headless browser sitting behind
+ * Tor, and schemes like `file:` or `manual-upload:` have no business being
+ * dereferenced there. The URL always comes from the warehouse rather than the
+ * request, so this guards against bad *stored* data, not a hostile caller.
+ */
+function captureRefusal(url: string): string | null {
+  if (!url) return "That row has no source URL to capture.";
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return "That row's source URL could not be parsed.";
+  }
+  if (parsed.protocol === "manual-upload:") {
+    return (
+      "This incident came from a manual paste-dump upload, so there is no live "
+      + "page to capture. The uploaded file is the evidence."
+    );
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return `Pages served over ${parsed.protocol} cannot be captured.`;
+  }
+  return null;
+}
+
+/**
+ * Resolves a capture target from either half of the console's vocabulary.
+ *
+ * VW_BREACH_MONITOR is tried first because it is the richer row and covers
+ * every page the cascade saw, decided or not. An incident raised from a source
+ * the monitor view no longer carries still has its URL in VW_INCIDENTS, and
+ * captures were previously unreachable for those rows purely because the
+ * lookup stopped at the first view — which is why the capture button only ever
+ * appeared on "Needs Review".
+ */
+export async function findCaptureTarget(
+  orgId: string,
+  key: string,
+): Promise<CaptureTarget | null> {
+  const monitor = await findMonitorRow(orgId, key);
+  if (monitor) {
+    return {
+      url: monitor.url,
+      dedupeKey: monitor.dedupeKey,
+      title: monitor.title,
+      incidentKey: monitor.incidentKey,
+      capturable: captureRefusal(monitor.url) === null,
+      reason: captureRefusal(monitor.url),
+    };
+  }
+
+  const rows = await executeQuery(
+    `SELECT TOP_URL, TOP_TITLE, INCIDENT_KEY
+     FROM NOCTURNE.DASHBOARD.VW_INCIDENTS
+     WHERE ORG_ID = ? AND INCIDENT_KEY = ?`,
+    [orgId, key],
+  );
+  if (!rows.length) return null;
+
+  const url = textOr(rows[0]!.TOP_URL, "");
+  return {
+    url,
+    // VW_INCIDENTS carries no dedupe key; the capture is keyed by the incident
+    // key alone, which is unique per organization.
+    dedupeKey: null,
+    title: textOr(rows[0]!.TOP_TITLE, ""),
+    incidentKey: textOr(rows[0]!.INCIDENT_KEY, key),
+    capturable: captureRefusal(url) === null,
+    reason: captureRefusal(url),
+  };
+}
+
 export async function findMonitorRow(
   orgId: string,
   monitorKey: string,

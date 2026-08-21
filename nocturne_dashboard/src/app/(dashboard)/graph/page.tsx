@@ -18,6 +18,7 @@ import { EvidenceQuote } from "@/components/ui/EvidenceQuote";
 import { DataGapNote, PageHeader, Tag } from "@/components/ui/Primitives";
 import { DiscoveryScrubber } from "@/components/graph/DiscoveryScrubber";
 import { CanvasSkeleton } from "@/components/ui/Skeletons";
+import { GraphSummaryPanel } from "@/components/graph/GraphSummaryPanel";
 import type { GraphLayout } from "@/components/graph/KnowledgeGraph";
 import {
   revealedEdgeCount,
@@ -431,6 +432,14 @@ export default function GraphPage() {
           >
             {!node && !edge && (
               <Stack gap={1.5}>
+                {data.scope.kind === "org" && (
+                  <GraphSummaryPanel
+                    orgId={data.scope.orgId}
+                    view={view}
+                    incidentKey={data.rootIncident?.incidentKey ?? null}
+                    graphSignature={`${view}:${data.rootIncident?.incidentKey ?? "-"}:${payload.nodes.length}:${payload.edges.length}`}
+                  />
+                )}
                 <Typography variant="overline">Inspector</Typography>
                 <Typography sx={{ fontSize: 12, color: colors.text3, lineHeight: 1.7 }}>
                   Click a node to see how it resolved, or an edge to read the verbatim quote that

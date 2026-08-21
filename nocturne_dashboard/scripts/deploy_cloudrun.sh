@@ -105,10 +105,31 @@ echo "==> syncing secrets to Secret Manager"
 put_secret nocturne-snowflake-token   "$(require_env SNOWFLAKE_TOKEN)"
 put_secret nocturne-session-secret    "$(require_env NOCTURNE_SESSION_SECRET)"
 
+# The key that encrypts stored Jira and Slack credentials.
+#
+# require_env, not read_env, and this is the important part: the ciphertext
+# lives in NOCTURNE.CONFIG.INTEGRATION_SETTINGS, which local and production
+# share. Deploying with a different key — or none — does not disable the
+# integrations page, it makes it fail to decrypt credentials that are already
+# saved, which reads as corruption rather than as a missing setting.
+put_secret nocturne-secret-key "$(require_env NOCTURNE_SECRET_KEY)"
+
+# Shared secret for the inbound Jira close-sync webhook. Optional: a deployment
+# with no Jira automation does not need it, and the route rejects every request
+# when it is unset, which is the correct closed default.
+JIRA_WEBHOOK_SECRET_VALUE="$(read_env JIRA_WEBHOOK_SECRET)"
+if [[ -n "$JIRA_WEBHOOK_SECRET_VALUE" ]]; then
+  put_secret nocturne-jira-webhook-secret "$JIRA_WEBHOOK_SECRET_VALUE"
+else
+  warn_missing_jira=1
+fi
+
 # Grant the runtime service account read access. Idempotent.
 PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
 RUNTIME_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
-for secret in nocturne-snowflake-token nocturne-session-secret; do
+SECRET_NAMES=(nocturne-snowflake-token nocturne-session-secret nocturne-secret-key)
+[[ -n "${JIRA_WEBHOOK_SECRET_VALUE:-}" ]] && SECRET_NAMES+=(nocturne-jira-webhook-secret)
+for secret in "${SECRET_NAMES[@]}"; do
   gcloud secrets add-iam-policy-binding "$secret" \
     --member="serviceAccount:${RUNTIME_SA}" \
     --role=roles/secretmanager.secretAccessor \
@@ -151,6 +172,32 @@ ENV_VARS+="@NOCTURNE_CRAWLER_REGION=$(read_env NOCTURNE_CRAWLER_REGION)"
 ENV_VARS+="@NOCTURNE_CRAWLER_PROJECT=$(read_env NOCTURNE_CRAWLER_PROJECT)"
 ENV_VARS="^@^${ENV_VARS}"
 
+# --set-secrets, like --set-env-vars, replaces the whole list rather than
+# merging, so every secret the container needs has to be named on every deploy.
+RUN_SECRETS="SNOWFLAKE_TOKEN=nocturne-snowflake-token:latest"
+RUN_SECRETS+=",NOCTURNE_SESSION_SECRET=nocturne-session-secret:latest"
+RUN_SECRETS+=",NOCTURNE_ALERT_DISPATCH_TOKEN=NOCTURNE_ALERT_DISPATCH_TOKEN:latest"
+RUN_SECRETS+=",NOCTURNE_SECRET_KEY=nocturne-secret-key:latest"
+[[ -n "${JIRA_WEBHOOK_SECRET_VALUE:-}" ]] \
+  && RUN_SECRETS+=",JIRA_WEBHOOK_SECRET=nocturne-jira-webhook-secret:latest"
+
+if [[ -n "${warn_missing_jira:-}" ]]; then
+  echo "    note: JIRA_WEBHOOK_SECRET is not in $ENV_FILE — the Jira close-sync"
+  echo "          webhook will reject every request until it is set."
+fi
+
+# Cloud Run throttles CPU to near zero between requests by default. Two things
+# here run *after* their response has been sent: the manual upload's COPY, and
+# the pipeline advance the upload status poll kicks off. Under throttling both
+# stall until the next request happens to wake the instance, so a paste dump
+# appears to hang at "raw ingest" with nothing in the logs to explain it.
+#
+# CPU_THROTTLING_FLAG=--cpu-throttling turns this off again, which is only
+# correct on a deployment that has no manual uploads. It bills for the
+# instance's whole lifetime rather than only during requests.
+CPU_THROTTLING_FLAG="${CPU_THROTTLING_FLAG:---no-cpu-throttling}"
+echo "    cpu: ${CPU_THROTTLING_FLAG#--}"
+
 echo "==> building and deploying (Cloud Build compiles remotely; no local Docker needed)"
 echo "    perimeter ips=${ALLOWED_IPS:-<any>} hosts=${ALLOWED_HOSTS:-<any>}"
 
@@ -169,8 +216,9 @@ gcloud run deploy "$SERVICE" \
   --min-instances "$MIN_INSTANCES" \
   --max-instances 3 \
   --timeout 60 \
+  ${CPU_THROTTLING_FLAG} \
   --set-env-vars "$ENV_VARS" \
-  --set-secrets "SNOWFLAKE_TOKEN=nocturne-snowflake-token:latest,NOCTURNE_SESSION_SECRET=nocturne-session-secret:latest,NOCTURNE_ALERT_DISPATCH_TOKEN=NOCTURNE_ALERT_DISPATCH_TOKEN:latest"
+  --set-secrets "$RUN_SECRETS"
 
 URL="$(gcloud run services describe "$SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
 echo

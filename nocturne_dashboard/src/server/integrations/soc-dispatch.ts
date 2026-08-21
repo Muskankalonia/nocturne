@@ -4,15 +4,15 @@ import {
   closeJiraIssue,
   commentOnJiraIssue,
   createJiraIssue,
-  isJiraConfigured,
 } from "@/server/integrations/jira";
+import { postSlackAlert, postSlackFollowUp } from "@/server/integrations/slack";
 import {
-  isSlackConfigured,
-  postSlackAlert,
-  postSlackFollowUp,
-} from "@/server/integrations/slack";
+  resolveJiraConfig,
+  resolveSlackConfig,
+} from "@/server/integration-settings";
 import {
   getIncidentActionState,
+  getIncidentAlertFacts,
   getIncidentAlertPayloads,
   recordIntegration,
 } from "@/server/triage-actions";
@@ -39,9 +39,8 @@ if (typeof window !== "undefined") {
  * caller is told exactly which ones landed.
  */
 
-export function consoleIncidentUrl(incidentKey: string): string {
-  const base = process.env.NOCTURNE_CONSOLE_URL?.trim().replace(/\/$/, "") ?? "";
-  return `${base}/leaks/${encodeURIComponent(incidentKey)}`;
+export function consoleIncidentUrl(baseUrl: string, incidentKey: string): string {
+  return `${baseUrl.replace(/\/$/, "")}/leaks/${encodeURIComponent(incidentKey)}`;
 }
 
 function notConfigured(channel: IntegrationDispatchResult["channel"]): IntegrationDispatchResult {
@@ -108,16 +107,20 @@ async function dispatchEmail(
 }
 
 async function dispatchJira(
+  orgId: string,
+  baseUrl: string,
   alert: PendingAlert,
   existing: IncidentActionState | null,
 ): Promise<IntegrationDispatchResult> {
-  if (!isJiraConfigured()) return notConfigured("jira");
+  const config = await resolveJiraConfig(orgId);
+  if (!config) return notConfigured("jira");
 
   // An incident already has at most one ticket. Re-dispatching adds a comment
   // to it rather than opening a duplicate that a SOC would then have to
   // reconcile by hand.
   if (existing?.jiraIssueKey) {
     await commentOnJiraIssue(
+      config,
       existing.jiraIssueKey,
       "Nocturne: SOC alert re-dispatched for this incident from the console.",
     );
@@ -132,7 +135,11 @@ async function dispatchJira(
   }
 
   try {
-    const issue = await createJiraIssue(alert, consoleIncidentUrl(alert.incidentKey));
+    const issue = await createJiraIssue(
+      config,
+      alert,
+      consoleIncidentUrl(baseUrl, alert.incidentKey),
+    );
     return {
       channel: "jira",
       configured: true,
@@ -153,10 +160,19 @@ async function dispatchJira(
   }
 }
 
-async function dispatchSlack(alert: PendingAlert): Promise<IntegrationDispatchResult> {
-  if (!isSlackConfigured()) return notConfigured("slack");
+async function dispatchSlack(
+  orgId: string,
+  baseUrl: string,
+  alert: PendingAlert,
+): Promise<IntegrationDispatchResult> {
+  const config = await resolveSlackConfig(orgId);
+  if (!config) return notConfigured("slack");
   try {
-    const posted = await postSlackAlert(alert, consoleIncidentUrl(alert.incidentKey));
+    const posted = await postSlackAlert(
+      config,
+      alert,
+      consoleIncidentUrl(baseUrl, alert.incidentKey),
+    );
     return {
       channel: "slack",
       configured: true,
@@ -192,40 +208,38 @@ export async function dispatchSocAlert(input: {
   orgId: string;
   incidentKey: string;
   actor: string;
+  /** Absolute origin for links that leave the console. */
+  consoleBaseUrl: string;
 }): Promise<SocDispatchResponse> {
   const alerts = await getIncidentAlertPayloads(input.orgId, input.incidentKey);
   const existing = await getIncidentActionState(input.orgId, input.incidentKey);
 
   // Every channel but email renders one message about the incident, so any
   // recipient row supplies the incident facts. Email is the one that needs all
-  // of them. When there are no profiles at all, fall back to a synthetic
-  // payload built from the action state so Jira and Slack still fire — a SOC
-  // with no console profiles is a normal state during onboarding.
+  // of them.
+  //
+  // When no profile carries an email there are no recipient rows, but the
+  // incident is still fully described in the warehouse — so the facts are
+  // fetched on their own rather than synthesised. Building a placeholder here
+  // is what produced Jira tickets and Slack posts with a severity band and
+  // nothing else: no score, no confidence, no exposed-data types, no actor, no
+  // summary. A SOC with no console profiles is a normal state during
+  // onboarding, and it is exactly when a complete alert matters most.
   const representative: PendingAlert | null =
     alerts[0]
-    ?? (existing
-      ? {
-          incidentKey: existing.incidentKey,
-          orgId: existing.orgId,
-          organizationName: existing.organizationName,
-          title: existing.title,
-          sourceUrl: "",
-          severityBand: existing.impactSeverityBand ?? "informational",
-          severityScore: null,
-          firstSeen: null,
-          username: input.actor,
-          email: "",
-          displayName: input.actor,
-          leakTypes: [],
-          quantityClaimed: null,
-          evidenceConfidenceScore: null,
-          triagePriorityScore: null,
-          actorName: null,
-          insightHeadline: null,
-          executiveSummary: null,
-          recommendedActions: [],
-        }
-      : null);
+    ?? (await getIncidentAlertFacts(input.orgId, input.incidentKey).then((facts) =>
+      facts
+        ? {
+            ...facts,
+            // No addressee: the actor stands in so the payload type is honest
+            // about who triggered this, and the email channel has already been
+            // told there is nobody to write to.
+            username: input.actor,
+            email: "",
+            displayName: input.actor,
+          }
+        : null,
+    ));
 
   if (!representative) {
     throw new NoRecipientsError("That incident is not available for this organization.");
@@ -233,8 +247,8 @@ export async function dispatchSocAlert(input: {
 
   const [email, jira, slack] = await Promise.all([
     dispatchEmail(alerts),
-    dispatchJira(representative, existing),
-    dispatchSlack(representative),
+    dispatchJira(input.orgId, input.consoleBaseUrl, representative, existing),
+    dispatchSlack(input.orgId, input.consoleBaseUrl, representative),
   ]);
   const results = [email, jira, slack];
 
@@ -291,14 +305,22 @@ export async function propagateMitigation(input: {
   const { state } = input;
 
   if (state.slackState !== null) {
-    void postSlackFollowUp(
-      `:white_check_mark: *Mitigated* — ${state.organizationName}: ${state.title}\nMarked by ${input.actor} in Nocturne.`,
-      state.slackMessageTs,
-    ).catch(() => undefined);
+    void resolveSlackConfig(input.orgId)
+      .then((config) =>
+        config
+          ? postSlackFollowUp(
+              config,
+              `:white_check_mark: *Mitigated* — ${state.organizationName}: ${state.title}\nMarked by ${input.actor} in Nocturne.`,
+              state.slackMessageTs,
+            )
+          : undefined,
+      )
+      .catch(() => undefined);
   }
 
   if (!state.jiraIssueKey) return null;
-  if (!isJiraConfigured()) {
+  const config = await resolveJiraConfig(input.orgId);
+  if (!config) {
     return {
       channel: "jira",
       configured: false,
@@ -310,7 +332,7 @@ export async function propagateMitigation(input: {
   }
 
   try {
-    await closeJiraIssue(state.jiraIssueKey);
+    await closeJiraIssue(config, state.jiraIssueKey);
     await recordIntegration({
       orgId: input.orgId,
       incidentKey: input.incidentKey,
@@ -353,8 +375,12 @@ export async function propagateUnmitigation(input: {
   actor: string;
   state: IncidentActionState;
 }): Promise<void> {
-  if (input.state.jiraIssueKey && isJiraConfigured()) {
+  const jira = input.state.jiraIssueKey
+    ? await resolveJiraConfig(input.orgId)
+    : null;
+  if (input.state.jiraIssueKey && jira) {
     await commentOnJiraIssue(
+      jira,
       input.state.jiraIssueKey,
       `Nocturne: ${input.actor} reopened this incident in the console. It is no longer marked mitigated.`,
     );
@@ -371,9 +397,16 @@ export async function propagateUnmitigation(input: {
   }
 
   if (input.state.slackState !== null) {
-    void postSlackFollowUp(
-      `:warning: *Reopened* — ${input.state.organizationName}: ${input.state.title}\nUnmarked by ${input.actor} in Nocturne.`,
-      input.state.slackMessageTs,
-    ).catch(() => undefined);
+    void resolveSlackConfig(input.orgId)
+      .then((config) =>
+        config
+          ? postSlackFollowUp(
+              config,
+              `:warning: *Reopened* — ${input.state.organizationName}: ${input.state.title}\nUnmarked by ${input.actor} in Nocturne.`,
+              input.state.slackMessageTs,
+            )
+          : undefined,
+      )
+      .catch(() => undefined);
   }
 }

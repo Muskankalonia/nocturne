@@ -107,8 +107,11 @@ export const navigation: NavItem[] = [
     id: "settings",
     label: "Settings",
     icon: "Settings",
-    href: "/settings",
     section: "ops",
+    children: [
+      { label: "Monitored Assets", href: "/settings" },
+      { label: "Integrations", href: "/settings/integrations" },
+    ],
   },
 ];
 

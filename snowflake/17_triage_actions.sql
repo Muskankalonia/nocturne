@@ -49,6 +49,13 @@ CREATE OR REPLACE VIEW NOCTURNE.DASHBOARD.VW_INCIDENT_ACTION_STATE AS
     SLACK.CREATED_AT AS SLACK_CREATED_AT,
     EMAIL.STATE AS SOC_EMAIL_STATE,
     EMAIL.CREATED_AT AS SOC_EMAIL_SENT_AT,
+    -- An analyst's verdict on the incident itself. Keyed by MONITOR_KEY, which
+    -- for a confirmed incident is its INCIDENT_KEY — so the same table that
+    -- rules on an unresolved page also rules on a raised incident, and the
+    -- console does not need two vocabularies for one decision.
+    REVIEW.DECISION AS REVIEW_DECISION,
+    REVIEW.DECIDED_BY AS REVIEW_DECIDED_BY,
+    REVIEW.NOTE AS REVIEW_NOTE,
     -- A dispatch is "done" only when every configured channel succeeded. The
     -- console uses this to keep offering the button after a partial failure.
     COALESCE(JIRA.CREATED_AT, SLACK.CREATED_AT, EMAIL.CREATED_AT) IS NOT NULL
@@ -65,7 +72,10 @@ CREATE OR REPLACE VIEW NOCTURNE.DASHBOARD.VW_INCIDENT_ACTION_STATE AS
   LEFT JOIN NOCTURNE.CONFIG.INCIDENT_INTEGRATIONS AS EMAIL
     ON EMAIL.ORG_ID = INCIDENT.ORG_ID
     AND EMAIL.INCIDENT_KEY = INCIDENT.INCIDENT_KEY
-    AND EMAIL.CHANNEL = 'email';
+    AND EMAIL.CHANNEL = 'email'
+  LEFT JOIN NOCTURNE.CONFIG.REVIEW_DECISIONS AS REVIEW
+    ON REVIEW.ORG_ID = INCIDENT.ORG_ID
+    AND REVIEW.MONITOR_KEY = INCIDENT.INCIDENT_KEY;
 
 -- The action trail, most recent first, with the organization name attached so
 -- the fleet view does not have to join it back on. DETAIL is deliberately not

@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { invalidateIncidentViews } from "@/server/query-cache";
+
 import {
   API_RESPONSE_HEADERS,
   MONITOR_KEY_PATTERN,
@@ -10,7 +12,7 @@ import {
   serviceUnavailable,
 } from "@/server/route-auth";
 import {
-  findMonitorRow,
+  findCaptureTarget,
   getScreenshot,
   recordAction,
   requestScreenshot,
@@ -106,15 +108,17 @@ export async function POST(request: Request) {
   if (!scoped.ok) return scoped.response;
 
   try {
-    const row = await findMonitorRow(scoped.orgId, monitorKey);
+    // Resolves against the monitor view first and the incident view second, so
+    // a confirmed incident is as capturable as a needs-review page.
+    const row = await findCaptureTarget(scoped.orgId, monitorKey);
     if (!row) {
       return NextResponse.json(
-        { error: "That monitor row was not found." },
+        { error: "That row was not found." },
         { status: 404, headers: API_RESPONSE_HEADERS },
       );
     }
-    if (!row.url) {
-      return badRequest("That row has no source URL to capture.");
+    if (!row.capturable) {
+      return badRequest(row.reason ?? "That row has no source URL to capture.");
     }
 
     await requestScreenshot({
@@ -125,6 +129,7 @@ export async function POST(request: Request) {
       requestedBy: auth.caller.username,
       refresh: body?.refresh === true,
     });
+    invalidateIncidentViews();
     const screenshot = await getScreenshot(scoped.orgId, monitorKey);
 
     await recordAction({

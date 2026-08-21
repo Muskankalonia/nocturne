@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { invalidateIncidentViews } from "@/server/query-cache";
+
 import {
   API_RESPONSE_HEADERS,
   MONITOR_KEY_PATTERN,
@@ -34,9 +36,13 @@ const MAX_NOTE_LENGTH = 500;
  * one. A product whose entire claim is that its reasoning is inspectable cannot
  * quietly overwrite that reasoning when a human disagrees with it.
  *
- * Ruling is restricted to super admins. An ORG_USER can request a capture and
- * read it; deciding that a page naming their organization is not a breach
- * removes it from the queue for everyone, which is an admin's call.
+ * Any signed-in user may rule on a row in their own organization. This was
+ * briefly restricted to super admins, which was inconsistent: marking an
+ * incident mitigated removes it from the same queues and was never restricted,
+ * and an analyst who can dispatch a SOC alert about their own data can
+ * certainly say it is not theirs. Tenant isolation is the real boundary, and it
+ * is enforced below by resolveWriteScope plus the findMonitorRow lookup —
+ * neither of which trusts the caller's orgId.
  */
 
 function isDecision(value: unknown): value is ReviewDecision {
@@ -46,13 +52,6 @@ function isDecision(value: unknown): value is ReviewDecision {
 export async function POST(request: Request) {
   const auth = await authenticateRequest();
   if (!auth.ok) return auth.response;
-
-  if (auth.caller.user.role !== "SUPER_ADMIN") {
-    return NextResponse.json(
-      { error: "Only an administrator can rule on a review row." },
-      { status: 403, headers: API_RESPONSE_HEADERS },
-    );
-  }
 
   const body = (await readJsonBody(request)) as {
     orgId?: string;
@@ -94,6 +93,8 @@ export async function POST(request: Request) {
       decidedBy: auth.caller.username,
     });
 
+    invalidateIncidentViews();
+
     await recordAction({
       orgId: scoped.orgId,
       incidentKey: row.incidentKey,
@@ -129,13 +130,6 @@ export async function DELETE(request: Request) {
   const auth = await authenticateRequest();
   if (!auth.ok) return auth.response;
 
-  if (auth.caller.user.role !== "SUPER_ADMIN") {
-    return NextResponse.json(
-      { error: "Only an administrator can withdraw a review decision." },
-      { status: 403, headers: API_RESPONSE_HEADERS },
-    );
-  }
-
   const params = new URL(request.url).searchParams;
   const monitorKey = params.get("monitorKey");
   if (!monitorKey || !MONITOR_KEY_PATTERN.test(monitorKey)) {
@@ -147,6 +141,7 @@ export async function DELETE(request: Request) {
 
   try {
     await clearReviewDecision(scoped.orgId, monitorKey);
+    invalidateIncidentViews();
     await recordAction({
       orgId: scoped.orgId,
       action: "review_decision",

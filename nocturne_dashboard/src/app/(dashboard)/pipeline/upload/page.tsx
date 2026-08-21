@@ -6,6 +6,7 @@ import {
   Alert,
   Box,
   Button,
+  IconButton,
   LinearProgress,
   Skeleton,
   Stack,
@@ -21,6 +22,7 @@ import {
   Network,
   RefreshCw,
   UploadCloud,
+  X,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { Panel } from "@/components/ui/Panel";
@@ -41,11 +43,39 @@ import {
   routeTone,
 } from "@/lib/format";
 import {
+  ACCEPTED_EXTENSIONS,
+  MANUAL_UPLOAD_MAX_BINARY_LABEL,
   MANUAL_UPLOAD_MAX_LABEL,
   formatBytes,
   manualUploadRejection,
+  maxBytesFor,
+  titleFromFileName,
+  uploadKindFor,
 } from "@/lib/manual-upload";
 import { colors, fonts, layout as layoutTokens, severityColor } from "@/theme/tokens";
+
+/**
+ * How this file will be read, said plainly before it is sent.
+ *
+ * A PDF or a screenshot is transcribed by a model rather than decoded, and an
+ * analyst is entitled to know that before uploading breach material: the
+ * extraction can be imperfect, and it is a different trust statement from
+ * reading a .txt file byte for byte.
+ */
+function describeKind(fileName: string): string {
+  switch (uploadKindFor(fileName)) {
+    case "text":
+      return "read as text";
+    case "html":
+      return "markup stripped to text";
+    case "document":
+      return "text extracted from the document";
+    case "image":
+      return "transcribed by a vision model";
+    default:
+      return "unsupported";
+  }
+}
 import type {
   ManualUploadCreateResponse,
   ManualUploadPipelineStage,
@@ -958,6 +988,7 @@ export default function UploadPasteDumpPage() {
     useState<ManualUploadPipelineStage["id"]>("upload");
   const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
@@ -1150,7 +1181,7 @@ export default function UploadPasteDumpPage() {
 
     const form = new FormData();
     form.set("file", file);
-    form.set("title", title.trim() || file.name.replace(/\.txt$/i, ""));
+    form.set("title", title.trim() || titleFromFileName(file.name));
     form.set("orgId", orgId);
 
     try {
@@ -1293,11 +1324,10 @@ export default function UploadPasteDumpPage() {
       )}
 
       <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", xl: "0.9fr 1.1fr" }, gap: 2 }}>
-        <Panel title="Upload raw paste" meta="TXT · ONE-SHOT">
+        <Panel title="Upload raw paste">
           <Stack gap={1.5}>
             <Typography sx={{ color: colors.text2, fontSize: 12.3, lineHeight: 1.65 }}>
-              Upload a plain text paste dump. The console stores it as a single schema-v2
-              JSONL.gz page with <Mono>source=manual_upload</Mono>, then submits one ingest
+              Upload a plain text paste dump. The console stores it and submits one ingest
               task. The downstream AI stages run only if the page becomes eligible.
             </Typography>
             <TextField
@@ -1308,66 +1338,172 @@ export default function UploadPasteDumpPage() {
               placeholder="Example: suspicious marketplace paste"
               fullWidth
             />
-            <Box>
-              <Button
+            {/* The input lives outside both branches and is addressed by id, so
+              * the "Change" control can reopen the picker without being nested
+              * inside a <label> that would also fire it. */}
+            <input
+              ref={fileRef}
+              id="manual-upload-file"
+              hidden
+              type="file"
+              accept={ACCEPTED_EXTENSIONS.join(",")}
+              onChange={(event) => handleFileChange(event.target.files?.[0] ?? null)}
+            />
+
+            {file ? (
+              // Once a file is chosen the target has done its job, so it
+              // collapses to a summary row. Keeping a large empty drop area
+              // above a selected file just pushes the submit button off the
+              // fold for no gain.
+              <Stack
+                direction="row"
+                alignItems="center"
+                gap={1.2}
+                sx={{
+                  px: 1.5,
+                  py: 1.1,
+                  border: `1px solid ${colors.edgeHi}`,
+                  borderRadius: `${layoutTokens.radiusSm}px`,
+                  backgroundColor: alpha(colors.ion, 0.04),
+                }}
+              >
+                <FileText size={16} color={colors.ion} />
+                {/* minWidth:0 is what lets the filename ellipsize instead of
+                  * forcing the row wider than the panel. */}
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography noWrap sx={{ fontSize: 12.5, color: colors.text1 }}>
+                    {file.name}
+                  </Typography>
+                  <Typography sx={{ fontSize: 11, color: colors.text3 }}>
+                    {formatBytes(file.size)} · {describeKind(file.name)}
+                  </Typography>
+                </Box>
+                <Stack direction="row" alignItems="center" gap={0.3} sx={{ ml: "auto" }}>
+                  <Button
+                    size="small"
+                    onClick={() => fileRef.current?.click()}
+                    sx={{ fontSize: 11, color: colors.text2, minWidth: 0, px: 1 }}
+                  >
+                    Change
+                  </Button>
+                  <IconButton
+                    aria-label="Remove selected file"
+                    size="small"
+                    onClick={() => handleFileChange(null)}
+                    sx={{ color: colors.text3 }}
+                  >
+                    <X size={14} />
+                  </IconButton>
+                </Stack>
+              </Stack>
+            ) : (
+              // A dashed drop target rather than a stretched button. Both span
+              // the panel, but only one of them reads as intentional at that
+              // width — a button the width of the panel looks like a layout
+              // bug, while a drop zone that narrow would look like one instead.
+              <Box
                 component="label"
-                variant="outlined"
-                fullWidth
-                startIcon={<FileText size={16} />}
+                htmlFor="manual-upload-file"
+                onDragOver={(event: React.DragEvent) => {
+                  event.preventDefault();
+                  setIsDragging(true);
+                }}
+                onDragLeave={(event: React.DragEvent) => {
+                  // dragleave also fires when the pointer crosses onto a child
+                  // element, which would flicker the highlight off and on while
+                  // the file is still over the zone. Only a leave that actually
+                  // exits the zone counts.
+                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                    setIsDragging(false);
+                  }
+                }}
+                onDrop={(event: React.DragEvent) => {
+                  event.preventDefault();
+                  setIsDragging(false);
+                  handleFileChange(event.dataTransfer.files?.[0] ?? null);
+                }}
                 sx={{
-                  justifyContent: "flex-start",
-                  ...(fileError
-                    ? {
-                        borderColor: alpha(severityColor.critical, 0.6),
-                        color: severityColor.critical,
-                      }
-                    : null),
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  gap: 0.6,
+                  px: 2,
+                  py: 3,
+                  textAlign: "center",
+                  cursor: "pointer",
+                  borderRadius: `${layoutTokens.radiusSm}px`,
+                  border: `1px dashed ${
+                    fileError
+                      ? alpha(severityColor.critical, 0.6)
+                      : isDragging
+                        ? colors.ion
+                        : colors.edgeHi
+                  }`,
+                  backgroundColor: isDragging ? alpha(colors.ion, 0.07) : "transparent",
+                  transition: "background-color 120ms ease, border-color 120ms ease",
+                  "&:hover": { backgroundColor: alpha(colors.ion, 0.04) },
                 }}
               >
-                {file ? file.name : "Choose .txt file"}
-                <input
-                  ref={fileRef}
-                  hidden
-                  type="file"
-                  accept=".txt,text/plain"
-                  onChange={(event) => handleFileChange(event.target.files?.[0] ?? null)}
+                <UploadCloud
+                  size={20}
+                  color={isDragging ? colors.ion : colors.text3}
                 />
-              </Button>
-              <Typography
-                sx={{
-                  mt: 0.7,
-                  fontSize: 11,
-                  lineHeight: 1.5,
-                  color: fileError ? severityColor.critical : colors.text3,
-                }}
-              >
-                {fileError
-                  ? fileError
-                  : file
-                    ? `${formatBytes(file.size)} · limit ${MANUAL_UPLOAD_MAX_LABEL}`
-                    : `Plain .txt, up to ${MANUAL_UPLOAD_MAX_LABEL}.`}
-              </Typography>
-            </Box>
+                <Typography sx={{ fontSize: 12.5, color: colors.text2 }}>
+                  {isDragging ? "Drop to attach" : "Drop a file here, or click to browse"}
+                </Typography>
+                <Typography sx={{ fontSize: 11, color: colors.text3, lineHeight: 1.5 }}>
+                  Text, HTML, PDF, Word, PowerPoint or an image
+                </Typography>
+              </Box>
+            )}
+
+            {/* Kept outside both branches so a rejection stays on screen after
+              * the picker clears the control. */}
+            <Typography
+              sx={{
+                mt: -0.6,
+                fontSize: 11,
+                lineHeight: 1.5,
+                color: fileError ? severityColor.critical : colors.text3,
+              }}
+            >
+              {fileError
+                ? fileError
+                : `Text up to ${MANUAL_UPLOAD_MAX_LABEL}, documents and images up to `
+                  + `${MANUAL_UPLOAD_MAX_BINARY_LABEL}.`}
+            </Typography>
             {/* The label says why the button is dead rather than leaving the
               * analyst to guess. "Loading workspace" and "Uploading" are
               * different states and must not share wording — one of them means
               * their file is in flight. */}
-            <Button
-              variant="contained"
-              startIcon={
-                isUploading || isBootstrapping
-                  ? <Loader2 size={16} className="spin" />
-                  : <UploadCloud size={16} />
-              }
-              disabled={!canUpload}
-              onClick={() => void handleUpload()}
-            >
-              {isBootstrapping
-                ? "Loading workspace…"
-                : isUploading
-                  ? "Uploading & starting scan"
-                  : "Upload & Run Leak Scan"}
-            </Button>
+            {/* Wrapped in a row so the button keeps its natural width. A
+              * <Stack> stretches its children, which is why this and the file
+              * control were both running the full width of the panel. */}
+            <Stack direction="row" alignItems="center" gap={1}>
+              <Button
+                variant="contained"
+                startIcon={
+                  isUploading || isBootstrapping
+                    ? <Loader2 size={16} className="spin" />
+                    : <UploadCloud size={16} />
+                }
+                disabled={!canUpload}
+                onClick={() => void handleUpload()}
+              >
+                {isBootstrapping
+                  ? "Loading workspace…"
+                  : isUploading
+                    ? "Uploading & starting scan"
+                    : "Upload & Run Leak Scan"}
+              </Button>
+              {/* The size limit belongs next to the action, not under the drop
+                * zone competing with the rejection message. */}
+              {file && !isUploading && (
+                <Typography sx={{ fontSize: 11, color: colors.text3 }}>
+                  limit {formatBytes(maxBytesFor(uploadKindFor(file.name) ?? "text"))}
+                </Typography>
+              )}
+            </Stack>
             {isUploading && (
               <LinearProgress
                 sx={{
@@ -1378,10 +1514,6 @@ export default function UploadPasteDumpPage() {
                 }}
               />
             )}
-            <Typography sx={{ color: colors.text3, fontSize: 11, lineHeight: 1.55 }}>
-              This does not resume the five-minute crawler/ingest schedule. It only submits
-              one manual ingest run for the selected organization.
-            </Typography>
           </Stack>
         </Panel>
 

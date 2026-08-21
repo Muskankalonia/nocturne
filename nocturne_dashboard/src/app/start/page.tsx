@@ -112,29 +112,6 @@ const EDGES = [
   { edge: "OPERATES_ON", meaning: "Actor has presence on a marketplace" },
 ] as const;
 
-const ARCHITECTURE = [
-  {
-    step: "Collect",
-    body: "Ahmia and Dread discovery, then a breadth-first Tor crawl through headless Chromium. Pages land in GCS as gzipped JSONL.",
-  },
-  {
-    step: "Land",
-    body: "Snowflake ingests every five minutes and deduplicates on (org_id, dedupe_key), so a page recrawled tomorrow costs nothing twice.",
-  },
-  {
-    step: "Cascade",
-    body: "A deterministic indicator UDF, then cached AI_CLASSIFY, then cached AI_COMPLETE extraction with SQL grounding behind it.",
-  },
-  {
-    step: "Score",
-    body: "Multi-label leak typing, an organization-scoped knowledge graph, three-axis severity, and one AI narrative per incident.",
-  },
-  {
-    step: "Serve",
-    body: "Thirteen read-only views feed the Next.js analyst console. Every object in the chain is scoped by ORG_ID.",
-  },
-] as const;
-
 const MAX_CASCADE = Math.max(...CASCADE.map((row) => row.count));
 
 /** Matches the md height of the sticky bar in StartNav. */
@@ -175,33 +152,6 @@ export default function StartPage() {
             }}
           >
             <Box>
-              {/* Aligned to the first line, not the block: this wraps to two
-                * lines on a narrow phone, and centring would drop the dot into
-                * the gap between them. Tracking tightens at xs so it usually
-                * does not wrap at all. */}
-              <Stack direction="row" alignItems="flex-start" gap={1.1} sx={{ mb: 3 }}>
-                <Box
-                  sx={{
-                    width: 6,
-                    height: 6,
-                    mt: "5px",
-                    flexShrink: 0,
-                    borderRadius: "50%",
-                    backgroundColor: colors.verified,
-                    boxShadow: `0 0 10px ${alpha(colors.verified, 0.8)}`,
-                  }}
-                />
-                <Mono
-                  sx={{
-                    color: colors.text2,
-                    fontSize: { xs: 9.5, sm: 10.5 },
-                    letterSpacing: { xs: "0.09em", sm: "0.15em" },
-                  }}
-                >
-                  Built on Snowflake Cortex · claude-sonnet-4-5
-                </Mono>
-              </Stack>
-
               <Typography
                 variant="h1"
                 sx={{
@@ -228,10 +178,9 @@ export default function StartPage() {
                   color: colors.text2,
                 }}
               >
-                Most dark-web monitoring hands you a pile of maybes and leaves the
-                verification to you. Nocturne crawls the same sources, then refuses
-                to call anything a breach until the evidence connects to your
-                organization — and shows you the exact line it used.
+                Most dark-web monitoring hands you a pile of maybes and leaves the verification to you. 
+                Nocturne crawls the same sources, then refuses to call anything a breach until the 
+                evidence connects to your organization and shows you the verbatim line that proves it.
               </Typography>
 
               <HeroActions />
@@ -243,55 +192,7 @@ export default function StartPage() {
               sx={{ display: { xs: "none", lg: "flex" }, minWidth: 0 }}
             >
               <HeroGraphic />
-              <Mono sx={{ color: colors.text3, mt: 3.5, textAlign: "center" }}>
-                One accepted edge decides whether it is yours
-              </Mono>
             </Stack>
-          </Box>
-        </Shell>
-      </Box>
-
-      {/* ── stat band ─────────────────────────────────────────────────────── */}
-      <Box component="section">
-        <Shell sx={{ pt: { xs: 0, md: 2 }, pb: { xs: 7, md: 10 } }}>
-          <Box
-            sx={{
-              borderRadius: `${layout.radius}px`,
-              border: `1px solid ${colors.edge}`,
-              backgroundImage: gradients.panel,
-              backdropFilter: "blur(20px)",
-              boxShadow: shadows.raised,
-              overflow: "hidden",
-            }}
-          >
-            {/* Rules are placed here rather than on the cell so they follow the
-              * reflow: three verticals in a four-across row, and a cross in the
-              * 2×2 the same cells become on a phone. */}
-            <Box
-              sx={{
-                display: "grid",
-                gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(4, 1fr)" },
-                "& > *": {
-                  borderRight: `1px solid ${colors.edge}`,
-                  borderBottom: { xs: `1px solid ${colors.edge}`, md: "none" },
-                },
-                "& > *:nth-of-type(2n)": {
-                  borderRight: { xs: "none", md: `1px solid ${colors.edge}` },
-                },
-                "& > *:nth-of-type(4)": { borderRight: "none" },
-                "& > *:nth-of-type(n+3)": { borderBottom: "none" },
-              }}
-            >
-              <Stat value={REFERENCE.recordsClaimed.toLocaleString()} label="Records claimed" />
-              <Stat value={String(REFERENCE.confirmedLeaks)} label="Confirmed leaks" />
-              <Stat value={String(REFERENCE.incidents)} label="Scored incidents" />
-              <Stat value={String(REFERENCE.dataClasses)} label="Exposed data classes" />
-            </Box>
-            <Box sx={{ px: 2.5, py: 1.4, borderTop: `1px solid ${colors.edge}` }}>
-              <Mono sx={{ color: colors.text3 }}>
-                Recorded reference run of the deployed pipeline — not a live counter
-              </Mono>
-            </Box>
           </Box>
         </Shell>
       </Box>
@@ -302,9 +203,9 @@ export default function StartPage() {
           title="Thirty pages in. Thirteen incidents out."
           body={
             <>
-              Each stage is allowed to throw work away, and the expensive stages sit
+              Each stage filters the web pages and the expensive stages sit
               last on purpose. Deterministic regex runs on everything; the models only
-              ever see what survived. Every AI result is cached against its input, so
+              ever see what survives. Every AI result is cached against its input, so
               recrawling the same page costs nothing.
             </>
           }
@@ -388,7 +289,7 @@ export default function StartPage() {
       </Section>
 
       {/* ── capabilities ──────────────────────────────────────────────────── */}
-      <Section eyebrow="Platform">
+      <Section id="platform" eyebrow="Platform">
         <SectionHead
           title="Built so the answer survives being questioned."
           body="Four decisions that separate a confirmed incident from a search hit."
@@ -639,52 +540,6 @@ export default function StartPage() {
         </Stack>
       </Section>
 
-      {/* ── architecture ──────────────────────────────────────────────────── */}
-      <Section id="architecture" eyebrow="Architecture">
-        <SectionHead
-          title="One boundary, held from the crawler to the console."
-          body="Paths, hashes, cache keys, graph keys and every serving view are scoped by ORG_ID. Multi-tenant is a property of the schema, not a filter applied at the end."
-        />
-
-        <Stack gap={0} sx={{ mt: 5 }}>
-          {ARCHITECTURE.map((item, index) => (
-            <Stack
-              key={item.step}
-              direction={{ xs: "column", sm: "row" }}
-              gap={{ xs: 0.8, sm: 3 }}
-              sx={{
-                py: 2.4,
-                borderTop: index === 0 ? `1px solid ${colors.edge}` : "none",
-                borderBottom: `1px solid ${colors.edge}`,
-              }}
-            >
-              <Stack direction="row" alignItems="center" gap={1.4} sx={{ width: { sm: 190 }, flexShrink: 0 }}>
-                <Mono sx={{ color: colors.text3 }}>{String(index + 1).padStart(2, "0")}</Mono>
-                <Typography variant="h4" sx={{ fontSize: 15 }}>
-                  {item.step}
-                </Typography>
-              </Stack>
-              <Typography sx={{ fontSize: 13.5, lineHeight: 1.7, color: colors.text2 }}>
-                {item.body}
-              </Typography>
-            </Stack>
-          ))}
-        </Stack>
-
-        <Stack
-          direction="row"
-          alignItems="center"
-          gap={1.4}
-          sx={{ mt: 3, color: colors.text3 }}
-        >
-          <Workflow size={14} />
-          <Typography sx={{ fontSize: 12.5 }}>
-            AI stages have no polling schedule. Each waits on its own stream and runs
-            only when there is new material — a waiting task holds no warehouse.
-          </Typography>
-        </Stack>
-      </Section>
-
       {/* ── closing ───────────────────────────────────────────────────────── */}
       <Section>
         <Stack
@@ -732,20 +587,8 @@ export default function StartPage() {
               </Typography>
             </Stack>
             <Mono sx={{ color: colors.text3, ml: { sm: "auto" } }}>
-              Dark-web breach intelligence · Snowflake Cortex
+              Dark-web breach intelligence
             </Mono>
-            <Typography
-              component={NextLink}
-              href="/login"
-              sx={{
-                fontSize: 12.5,
-                color: colors.text2,
-                textDecoration: "none",
-                "&:hover": { color: colors.ion },
-              }}
-            >
-              Sign in
-            </Typography>
           </Stack>
         </Shell>
       </Box>

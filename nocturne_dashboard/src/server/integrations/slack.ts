@@ -1,4 +1,5 @@
 import { severityColor } from "@/theme/tokens";
+import type { ResolvedSlackConfig } from "@/server/integration-settings";
 import type { PendingAlert } from "@/types/dashboard";
 
 if (typeof window !== "undefined") {
@@ -10,26 +11,17 @@ if (typeof window !== "undefined") {
  *
  * Two transports, in preference order:
  *
- *   SLACK_BOT_TOKEN + SLACK_CHANNEL_ID — chat.postMessage. Returns a message
- *     timestamp, which is what lets a later mitigation reply in-thread rather
- *     than posting a second unconnected message into the channel.
- *   SLACK_WEBHOOK_URL — an incoming webhook. Simpler to set up, but Slack
- *     returns no message reference, so follow-ups post standalone.
+ *   bot token + channel — chat.postMessage. Returns a message timestamp, which
+ *     is what lets a later mitigation reply in-thread rather than posting a
+ *     second unconnected message into the channel.
+ *   incoming webhook — simpler to set up, but Slack returns no message
+ *     reference, so follow-ups post standalone.
  *
- * Neither set means Slack is not configured, which is not an error.
+ * Configuration is per-organization and resolved by the caller; see
+ * `resolveSlackConfig` in server/integration-settings.ts.
  */
 
-const REQUEST_TIMEOUT_MS = 10_000;
-
-export type SlackTransport = "bot" | "webhook";
-
-export interface SlackConfig {
-  transport: SlackTransport;
-  botToken?: string;
-  channelId?: string;
-  webhookUrl?: string;
-  workspaceUrl?: string;
-}
+export type SlackConfig = ResolvedSlackConfig;
 
 export interface SlackMessageRef {
   /** Message timestamp for threading. Null on the webhook transport. */
@@ -38,27 +30,47 @@ export interface SlackMessageRef {
   url: string | null;
 }
 
-export function slackConfig(): SlackConfig | null {
-  const botToken = process.env.SLACK_BOT_TOKEN?.trim();
-  const channelId = process.env.SLACK_CHANNEL_ID?.trim();
-  const workspaceUrl = process.env.SLACK_WORKSPACE_URL?.trim().replace(/\/$/, "");
-  if (botToken && channelId) {
-    return { transport: "bot", botToken, channelId, workspaceUrl };
-  }
+const REQUEST_TIMEOUT_MS = 10_000;
 
-  const webhookUrl = process.env.SLACK_WEBHOOK_URL?.trim();
-  if (webhookUrl) {
-    if (!webhookUrl.startsWith("https://hooks.slack.com/")) {
-      console.error("[nocturne-slack] SLACK_WEBHOOK_URL is not a Slack host; disabling.");
-      return null;
-    }
-    return { transport: "webhook", webhookUrl, workspaceUrl };
-  }
-  return null;
-}
 
-export function isSlackConfigured(): boolean {
-  return slackConfig() !== null;
+/**
+ * Turns Slack's error codes into something an analyst can act on.
+ *
+ * Slack's vocabulary describes its own internals, not the user's mistake:
+ * `channel_not_found` is what a *private* channel returns when the app is not a
+ * member, because Slack will not confirm such a channel exists. Reported
+ * verbatim it reads as "you typed the wrong ID", and sends people to re-check a
+ * setting that was correct all along.
+ */
+function describeSlackError(code: string, channelId?: string): string {
+  const channel = channelId ? ` (${channelId})` : "";
+  switch (code) {
+    case "channel_not_found":
+      return (
+        `Slack could not find that channel${channel}. If it is private, the app `
+        + `must be invited before it can post: run /invite @your-app-name in the `
+        + `channel. If it is public, check the ID belongs to this workspace.`
+      );
+    case "not_in_channel":
+      return (
+        `The app is not a member of that channel${channel}. Run /invite `
+        + `@your-app-name in the channel, or add it under Channel settings → `
+        + `Integrations.`
+      );
+    case "is_archived":
+      return `That channel${channel} is archived, so nothing can be posted to it.`;
+    case "invalid_auth":
+    case "token_revoked":
+      return "Slack rejected the bot token. It may have been revoked — generate a new one and save it again.";
+    case "account_inactive":
+      return "The Slack app has been disabled in this workspace.";
+    case "missing_scope":
+      return "The bot token is missing the chat:write scope. Add it in the Slack app's OAuth settings and reinstall.";
+    case "rate_limited":
+      return "Slack is rate limiting this app; the alert was not posted.";
+    default:
+      return `Slack rejected the message: ${code}`;
+  }
 }
 
 async function post(url: string, init: RequestInit): Promise<Response> {
@@ -71,22 +83,69 @@ async function post(url: string, init: RequestInit): Promise<Response> {
   }
 }
 
+/** "82 · critical", or "— · critical" when the cascade scored no number. */
+function scoreWithBand(score: number | null, band: string): string {
+  return `${score ?? "—"} · ${band}`;
+}
+
+/** Grouped thousands, because "21000000" is not a number anyone reads. */
+function records(quantity: number | null): string {
+  return quantity === null ? "not stated" : quantity.toLocaleString("en-US");
+}
+
+/** Date only. The hour a listing was first seen is noise in a channel. */
+function firstSeen(value: string | null): string {
+  if (!value) return "unknown";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime())
+    ? value
+    : parsed.toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        timeZone: "UTC",
+      });
+}
+
+/** Slack rejects a text object over 3000 characters outright. */
+function clamp(value: string, limit: number): string {
+  return value.length <= limit ? value : `${value.slice(0, limit - 1)}…`;
+}
+
 /**
  * Block Kit payload. Like the email and the Jira ticket, this carries the
  * classification and the model's summary and never a verbatim excerpt — a
  * channel is the widest audience of the three.
+ *
+ * The scored fields are the point of the message. An analyst reading this in a
+ * channel is deciding whether to stop what they are doing, and "critical" alone
+ * does not support that decision: the severity score, the evidence confidence,
+ * how much data is claimed, and whether the actor is a known name are what
+ * separate a credible 21M-record breach from an unattributed repost. Anything
+ * the cascade did not conclude says so in words rather than rendering an empty
+ * dash, so a missing value is distinguishable from a value of nothing.
  */
 function blocksFor(alert: PendingAlert, consoleUrl: string) {
   const band = alert.severityBand.toUpperCase();
   const headline = alert.insightHeadline?.trim() || alert.title;
   const fields = [
     `*Organization*\n${alert.organizationName}`,
-    `*Impact severity*\n${alert.severityScore ?? "—"} · ${alert.severityBand}`,
+    `*Actor*\n${alert.actorName ?? "unattributed"}`,
+    `*Impact severity*\n${scoreWithBand(alert.severityScore, alert.severityBand)}`,
     `*Evidence confidence*\n${alert.evidenceConfidenceScore ?? "—"}`,
     `*Triage priority*\n${alert.triagePriorityScore ?? "—"}`,
-    `*Exposed data*\n${alert.leakTypes.length ? alert.leakTypes.join(", ") : "not yet classified"}`,
-    `*Actor*\n${alert.actorName ?? "unattributed"}`,
+    `*Records claimed*\n${records(alert.quantityClaimed)}`,
+    `*Exposed data*\n${
+      alert.leakTypes.length ? alert.leakTypes.join(", ") : "not yet classified"
+    }`,
+    `*First seen*\n${firstSeen(alert.firstSeen)}`,
   ];
+
+  // Up to three. A channel post is a summons to the console, not the runbook.
+  const actions = alert.recommendedActions
+    .map((action) => action.trim())
+    .filter(Boolean)
+    .slice(0, 3);
 
   return [
     {
@@ -95,17 +154,43 @@ function blocksFor(alert: PendingAlert, consoleUrl: string) {
     },
     {
       type: "section",
-      text: { type: "mrkdwn", text: `*${headline}*` },
+      text: { type: "mrkdwn", text: `*${clamp(headline, 2900)}*` },
     },
+    // The listing's own title, when the model wrote its own headline above.
+    // Analysts search channels for the string they saw on the source.
+    ...(headline !== alert.title && alert.title.trim()
+      ? [
+          {
+            type: "context",
+            elements: [
+              { type: "mrkdwn", text: `Listing: ${clamp(alert.title.trim(), 300)}` },
+            ],
+          },
+        ]
+      : []),
     ...(alert.executiveSummary?.trim()
       ? [
           {
             type: "section",
-            text: { type: "mrkdwn", text: alert.executiveSummary.trim().slice(0, 2900) },
+            text: { type: "mrkdwn", text: clamp(alert.executiveSummary.trim(), 2900) },
           },
         ]
       : []),
     { type: "section", fields: fields.map((text) => ({ type: "mrkdwn", text })) },
+    ...(actions.length
+      ? [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: clamp(
+                `*Recommended actions*\n${actions.map((action) => `• ${action}`).join("\n")}`,
+                2900,
+              ),
+            },
+          },
+        ]
+      : []),
     {
       type: "actions",
       elements: [
@@ -130,11 +215,10 @@ function blocksFor(alert: PendingAlert, consoleUrl: string) {
 }
 
 export async function postSlackAlert(
+  config: SlackConfig,
   alert: PendingAlert,
   consoleUrl: string,
 ): Promise<SlackMessageRef> {
-  const config = slackConfig();
-  if (!config) throw new Error("Slack is not configured.");
 
   const band = alert.severityBand.toUpperCase();
   const fallback = `[${band}] ${alert.organizationName}: ${
@@ -176,7 +260,9 @@ export async function postSlackAlert(
     error?: string;
   };
   if (!response.ok || !body.ok) {
-    throw new Error(`Slack rejected the message: ${body.error ?? response.status}`);
+    throw new Error(
+      describeSlackError(body.error ?? String(response.status), config.channelId),
+    );
   }
 
   const permalink =
@@ -192,11 +278,10 @@ export async function postSlackAlert(
  * gets the all-clear.
  */
 export async function postSlackFollowUp(
+  config: SlackConfig,
   message: string,
   threadTs: string | null,
 ): Promise<void> {
-  const config = slackConfig();
-  if (!config) return;
 
   if (config.transport === "webhook") {
     await post(config.webhookUrl!, {

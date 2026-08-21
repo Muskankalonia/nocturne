@@ -163,7 +163,9 @@ export async function POST(request: Request) {
         await queueReportEmail({
           to: addresses,
           subject: `[Nocturne] Weekly report — ${scopeLabel(scope)} — week to ${period.endsAt.slice(0, 10)}`,
-          html: renderReportHtml(payload, { kind: "weekly" }),
+          // The attached PDF is light, for printing and forwarding. The
+          // inline email body stays on the console palette.
+          html: renderReportHtml(payload, { kind: "weekly", theme: "dark" }),
           text: renderReportText(payload),
           attachment: { filename: pdfFilename(payload, "weekly"), content: pdf },
           meta: { kind: "weekly_report", scope: key, periodEnd: period.endsAt },

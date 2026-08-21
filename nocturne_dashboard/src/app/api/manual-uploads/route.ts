@@ -3,11 +3,19 @@ import { gzipSync } from "node:zlib";
 
 import { applicationDefault } from "firebase-admin/app";
 import { cookies } from "next/headers";
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 
-import { manualUploadRejection } from "@/lib/manual-upload";
+import {
+  manualUploadRejection,
+  titleFromFileName,
+  uploadKindFor,
+} from "@/lib/manual-upload";
+import { ExtractionError, extractUploadText } from "@/server/document-text";
 import { organizations, users } from "@/mocks/organizations";
-import { copyManualUploadObject, nocturneBackend } from "@/server/nocturne-backend";
+import {
+  nocturneBackend,
+  requestManualUploadIngest,
+} from "@/server/nocturne-backend";
 import { invalidateQueryCache } from "@/server/query-cache";
 import {
   SESSION_COOKIE_NAME,
@@ -26,6 +34,34 @@ const RESPONSE_HEADERS = {
 };
 const ORG_ID_PATTERN = /^[a-z0-9]+(?:_[a-z0-9]+)*$/;
 const MANUAL_SOURCE = "manual_upload";
+
+/** Stored on the retained original so it is served correctly if ever fetched. */
+const CONTENT_TYPES: Record<string, string> = {
+  ".txt": "text/plain",
+  ".md": "text/markdown",
+  ".csv": "text/csv",
+  ".tsv": "text/tab-separated-values",
+  ".log": "text/plain",
+  ".json": "application/json",
+  ".yaml": "application/yaml",
+  ".yml": "application/yaml",
+  ".eml": "message/rfc822",
+  ".html": "text/html",
+  ".htm": "text/html",
+  ".pdf": "application/pdf",
+  ".docx":
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".pptx":
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".bmp": "image/bmp",
+  ".tif": "image/tiff",
+  ".tiff": "image/tiff",
+};
 
 function unauthorized() {
   const response = NextResponse.json(
@@ -100,8 +136,15 @@ async function authenticatedScope(
   return { ok: true, orgId, scope: { kind: "org", orgId } };
 }
 
-function sha256(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
+/**
+ * Accepts bytes or a string. A UTF-8 string and its own encoded bytes hash
+ * identically, which is what keeps the content hash of a .txt upload the same
+ * value it was before binary formats were supported.
+ */
+function sha256(value: string | Buffer): string {
+  return typeof value === "string"
+    ? createHash("sha256").update(value, "utf8").digest("hex")
+    : createHash("sha256").update(value).digest("hex");
 }
 
 function objectPathFromSourceFile(sourceFile: string | null): string {
@@ -168,8 +211,9 @@ async function accessToken(): Promise<string> {
 async function uploadGcsObject(
   bucket: string,
   objectPath: string,
-  gzippedJsonl: Buffer,
+  payload: Buffer,
   metadata: Record<string, string>,
+  contentType = "application/x-ndjson",
 ): Promise<string> {
   const boundary = `nocturne_${randomUUID()}`;
   const objectMetadata = {
@@ -178,7 +222,7 @@ async function uploadGcsObject(
     // Do not set GCS Content-Encoding here: some readers can receive
     // decompressed/transcoded bytes, which makes Snowflake report a gzip
     // decompression error for an otherwise valid .jsonl.gz object.
-    contentType: "application/x-ndjson",
+    contentType,
     metadata,
   };
   const body = Buffer.concat([
@@ -187,11 +231,11 @@ async function uploadGcsObject(
       + "Content-Type: application/json; charset=UTF-8\r\n\r\n"
       + `${JSON.stringify(objectMetadata)}\r\n`
       + `--${boundary}\r\n`
-      + "Content-Type: application/x-ndjson\r\n"
+      + `Content-Type: ${contentType}\r\n`
       + "\r\n",
       "utf8",
     ),
-    gzippedJsonl,
+    payload,
     Buffer.from(`\r\n--${boundary}--\r\n`, "utf8"),
   ]);
 
@@ -222,7 +266,7 @@ export async function POST(request: Request) {
     formData = await request.clone().formData();
   } catch {
     return NextResponse.json(
-      { error: "Submit a multipart form with a .txt file." },
+      { error: "Submit a multipart form with a file." },
       { status: 400, headers: RESPONSE_HEADERS },
     );
   }
@@ -233,7 +277,7 @@ export async function POST(request: Request) {
   const file = formData.get("file");
   if (!(file instanceof File)) {
     return NextResponse.json(
-      { error: "A .txt file is required." },
+      { error: "A file is required." },
       { status: 400, headers: RESPONSE_HEADERS },
     );
   }
@@ -247,9 +291,21 @@ export async function POST(request: Request) {
     );
   }
 
-  const rawText = await file.text();
-  const title = safeTitle(formData.get("title"), file.name.replace(/\.txt$/i, ""));
-  const contentSha256 = sha256(rawText);
+  // The extension decides the parser; manualUploadRejection has already refused
+  // anything not on the allowlist, so this cannot be null here.
+  const kind = uploadKindFor(file.name)!;
+  const bytes = Buffer.from(await file.arrayBuffer());
+  const title = safeTitle(formData.get("title"), titleFromFileName(file.name));
+
+  // Hashed over the *original bytes*, not the extracted text.
+  //
+  // For a .txt file these are the same value, so existing rows keep matching.
+  // For everything else the bytes are the stable identity: two runs of a vision
+  // model over one screenshot can differ by a character, and hashing the
+  // transcript would make the same image look like a new dump every time. It
+  // also means the duplicate check below happens before any extraction, so
+  // re-uploading a PDF costs nothing.
+  const contentSha256 = sha256(bytes);
 
   try {
     const existingUpload = await nocturneBackend.findManualUploadByContentSha256(
@@ -279,6 +335,57 @@ export async function POST(request: Request) {
     const crawlDate = fetchedAt.slice(0, 10);
     const uploadId = randomUUID();
     const url = `manual-upload://${uploadId}`;
+    const bucket = requireBucket();
+
+    // The original is stored first, and under a name this server generated:
+    // the uploaded file name never reaches a path. Snowflake reads the object
+    // in place for the formats that need parsing, so the bytes are not sent
+    // back through a query.
+    //
+    // It is also the audit trail. Extraction is lossy and occasionally wrong,
+    // and without the original there is no way to check a claim back against
+    // what was actually uploaded.
+    const extension = file.name.toLowerCase().slice(file.name.lastIndexOf("."));
+    const originalStagePath = `org_id=${auth.orgId}/${uploadId}${extension}`;
+    const originalObjectPath = `uploads/originals/${originalStagePath}`;
+    await uploadGcsObject(
+      bucket,
+      originalObjectPath,
+      bytes,
+      {
+        source: MANUAL_SOURCE,
+        org_id: auth.orgId,
+        upload_id: uploadId,
+        original_filename: file.name.slice(0, 200),
+      },
+      CONTENT_TYPES[extension] ?? "application/octet-stream",
+    );
+
+    let extracted;
+    try {
+      extracted = await extractUploadText({
+        kind,
+        bytes,
+        stagePath: originalStagePath,
+      });
+    } catch (extractionError) {
+      // The original stays in the bucket on a failed extraction, deliberately:
+      // it is the only way to see what could not be read.
+      if (extractionError instanceof ExtractionError) {
+        return NextResponse.json(
+          { error: extractionError.message },
+          { status: 422, headers: RESPONSE_HEADERS },
+        );
+      }
+      throw extractionError;
+    }
+    const rawText = extracted.text;
+    if (!rawText.trim()) {
+      return NextResponse.json(
+        { error: "No text could be read from that file." },
+        { status: 422, headers: RESPONSE_HEADERS },
+      );
+    }
     const docId = sha256([auth.orgId, MANUAL_SOURCE, url, fetchedAt].join("\0"));
     const dedupeKey = sha256([auth.orgId, MANUAL_SOURCE, contentSha256].join("\0"));
     const runId = `manual_${uploadId}`;
@@ -299,13 +406,18 @@ export async function POST(request: Request) {
       content_length: Buffer.byteLength(rawText, "utf8"),
       content_sha256: contentSha256,
       raw_text: rawText,
+      // Provenance for the extraction. Additive keys: the ingestion COPY reads
+      // named paths out of the VARIANT and ignores anything it was not told
+      // about, so older readers are unaffected.
+      upload_format: kind,
+      extraction_method: extracted.method,
+      original_object: `gs://${bucket}/${originalObjectPath}`,
     };
     const gzippedJsonl = gzipSync(`${JSON.stringify(record)}\n`);
     const objectPath =
       `raw/crawls/org_id=${auth.orgId}/crawl_date=${crawlDate}/`
       + `run_id=${runId}/task=manual/attempt=0/part-00000.jsonl.gz`;
 
-    const bucket = requireBucket();
     const objectUri = await uploadGcsObject(bucket, objectPath, gzippedJsonl, {
       source: MANUAL_SOURCE,
       org_id: auth.orgId,
@@ -315,7 +427,20 @@ export async function POST(request: Request) {
     // One-shot manual ingest only: load exactly this uploaded object and leave
     // the crawler schedule exactly as it was. Stream-triggered AI tasks handle
     // new candidates asynchronously after ingest lands the row.
-    await copyManualUploadObject(objectPath);
+    //
+    // Started *after* the response rather than awaited. The COPY and the
+    // dynamic-table refreshes behind it take minutes, and holding the request
+    // open for them bought nothing: the console already polls this upload's
+    // status, on a cadence it slows down specifically while raw ingest is
+    // outstanding. `after` is what keeps the work alive past the response on a
+    // platform that would otherwise stop the instance once it is sent.
+    after(() => {
+      requestManualUploadIngest(objectPath);
+    });
+
+    // Invalidated now rather than after the COPY. These caches are keyed by
+    // scope and expire on their own; the poll re-reads regardless, and holding
+    // the response open purely to time a cache eviction would defeat the point.
     invalidateQueryCache("command-center");
     invalidateQueryCache("breach-monitor");
     invalidateQueryCache("pipeline");
@@ -328,7 +453,9 @@ export async function POST(request: Request) {
       objectPath,
       objectUri,
       statusUrl: `/api/manual-uploads/${uploadId}`,
-      message: "Paste dump uploaded and one-shot ingestion completed.",
+      message:
+        "Paste dump stored. Ingestion is running — this page follows it through "
+        + "the pipeline on its own.",
     };
     return NextResponse.json(response, { status: 202, headers: RESPONSE_HEADERS });
   } catch (error) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Alert,
   Box,
@@ -15,15 +15,18 @@ import {
   Typography,
   alpha,
 } from "@mui/material";
-import { Camera, Check, RefreshCw, X } from "lucide-react";
+import { Camera, Check, RefreshCw, ShieldCheck, X } from "lucide-react";
 
 import {
   fetchScreenshot,
+  markMitigated,
   requestScreenshot,
   submitReviewDecision,
+  unmarkMitigated,
   withdrawReviewDecision,
 } from "@/lib/triage-client";
 import { colors, fonts, layout } from "@/theme/tokens";
+import type { RemediationStatus } from "@/types";
 import type { PageScreenshot, ReviewDecision } from "@/types/triage";
 
 /**
@@ -47,14 +50,37 @@ export interface ReviewCapturePanelProps {
   /** Existing verdict, so the panel opens in the right state. */
   decision: ReviewDecision | null;
   decidedBy?: string | null;
-  /** Only a super admin may rule; everyone else sees the capture read-only. */
+  /** False renders the capture read-only, with no verdict controls. */
   canDecide: boolean;
+  /** Current workflow state of the row, so the mitigate control can toggle. */
+  remediationStatus?: RemediationStatus;
+  /**
+   * False renders the capture on its own, with no verdict controls.
+   *
+   * Used on the incident detail page, where the capture is evidence for an
+   * incident that has already been ruled on and where IncidentActionBar
+   * already owns confirm / mitigate / dismiss. Showing a second set of verdict
+   * buttons a few hundred pixels away would give the same incident two
+   * controls for one decision.
+   */
+  showVerdictControls?: boolean;
   onDecided?: (decision: ReviewDecision | null) => void;
 }
 
-const POLL_INTERVAL_MS = 5_000;
-/** Two minutes of polling. A Tor fetch that slow has effectively failed. */
-const MAX_POLLS = 24;
+/**
+ * Poll fast at first, then back off. A clearnet onion page usually lands in a
+ * few seconds; a Dread page sits in an access queue the worker waits out for up
+ * to 300s, and hammering Snowflake every 3s for that whole time is wasteful.
+ */
+const FAST_POLL_MS = 3_000;
+const SLOW_POLL_MS = 10_000;
+const FAST_PHASE_MS = 30_000;
+/**
+ * Total budget, deliberately longer than the worker's own interstitial wait
+ * (INTERSTITIAL_WAIT, 300s) plus a fetch. Giving up before the worker does
+ * would report "stuck" for a capture that was about to arrive.
+ */
+const MAX_WAIT_MS = 8 * 60_000;
 
 export function ReviewCapturePanel({
   orgId,
@@ -63,6 +89,8 @@ export function ReviewCapturePanel({
   decision,
   decidedBy,
   canDecide,
+  remediationStatus = "new",
+  showVerdictControls = true,
   onDecided,
 }: ReviewCapturePanelProps) {
   const [screenshot, setScreenshot] = useState<PageScreenshot | null>(null);
@@ -70,9 +98,14 @@ export function ReviewCapturePanel({
   const [isRequesting, setIsRequesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [current, setCurrent] = useState<ReviewDecision | null>(decision);
+  const [mitigated, setMitigated] = useState(remediationStatus === "mitigated");
+  const [isWorking, setIsWorking] = useState(false);
   const [pendingDecision, setPendingDecision] = useState<ReviewDecision | null>(null);
   const [note, setNote] = useState("");
-  const pollCount = useRef(0);
+  const [timedOut, setTimedOut] = useState(false);
+  // Bumped on every manual capture so the poll loop restarts its budget even
+  // when the status it is watching does not change value.
+  const [pollEpoch, setPollEpoch] = useState(0);
 
   const load = useCallback(async () => {
     try {
@@ -91,24 +124,51 @@ export function ReviewCapturePanel({
   }, [monitorKey, orgId]);
 
   useEffect(() => {
-    pollCount.current = 0;
     void load();
   }, [load]);
 
-  // Poll only while a capture is genuinely in flight, and stop after a bounded
-  // number of attempts. An open tab left overnight should not keep a Snowflake
-  // warehouse awake on this row's behalf.
-  useEffect(() => {
-    const status = screenshot?.status;
-    if (status !== "requested" && status !== "capturing") return;
-    if (pollCount.current >= MAX_POLLS) return;
+  const inFlight =
+    screenshot?.status === "requested" || screenshot?.status === "capturing";
 
-    const timer = window.setTimeout(() => {
-      pollCount.current += 1;
-      void load();
-    }, POLL_INTERVAL_MS);
-    return () => window.clearTimeout(timer);
-  }, [load, screenshot?.status]);
+  // Poll while a capture is in flight, and stop once it lands or the budget
+  // runs out — an open tab left overnight must not keep a Snowflake warehouse
+  // awake on this row's behalf.
+  //
+  // The loop lives *inside* the effect rather than being re-armed by it. An
+  // earlier version scheduled one timeout and depended on `screenshot?.status`
+  // to schedule the next, which silently polled exactly once: a poll that finds
+  // the capture still "requested" leaves that dependency unchanged, so the
+  // effect never re-ran. Depending on a boolean that stays true for the whole
+  // wait, and owning the recursion here, is what makes it keep going.
+  useEffect(() => {
+    if (!inFlight) return;
+
+    let cancelled = false;
+    let elapsed = 0;
+    let timer: number | undefined;
+
+    const schedule = () => {
+      const delay = elapsed < FAST_PHASE_MS ? FAST_POLL_MS : SLOW_POLL_MS;
+      timer = window.setTimeout(async () => {
+        if (cancelled) return;
+        elapsed += delay;
+        if (elapsed > MAX_WAIT_MS) {
+          setTimedOut(true);
+          return;
+        }
+        await load();
+        // `load` may have flipped the status, in which case this effect is
+        // already being torn down and `cancelled` short-circuits the next hop.
+        if (!cancelled) schedule();
+      }, delay);
+    };
+
+    schedule();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [inFlight, load, pollEpoch]);
 
   const capture = useCallback(
     async (refresh: boolean) => {
@@ -117,7 +177,8 @@ export function ReviewCapturePanel({
       try {
         const result = await requestScreenshot(monitorKey, orgId, refresh);
         setScreenshot(result.screenshot);
-        pollCount.current = 0;
+        setTimedOut(false);
+        setPollEpoch((epoch) => epoch + 1);
       } catch (requestError) {
         setError(
           requestError instanceof Error
@@ -149,6 +210,30 @@ export function ReviewCapturePanel({
     [monitorKey, onDecided, orgId],
   );
 
+  // Mitigation is keyed by monitor key, so a page that never became an incident
+  // can be closed out exactly like one that did.
+  const toggleMitigated = useCallback(
+    async (next: boolean) => {
+      setIsWorking(true);
+      setError(null);
+      try {
+        if (next) await markMitigated(monitorKey, orgId);
+        else await unmarkMitigated(monitorKey, orgId);
+        setMitigated(next);
+        onDecided?.(current);
+      } catch (mitigateError) {
+        setError(
+          mitigateError instanceof Error
+            ? mitigateError.message
+            : "Updating the workflow state failed.",
+        );
+      } finally {
+        setIsWorking(false);
+      }
+    },
+    [current, monitorKey, onDecided, orgId],
+  );
+
   const withdraw = useCallback(async () => {
     setError(null);
     try {
@@ -165,8 +250,7 @@ export function ReviewCapturePanel({
   }, [monitorKey, onDecided, orgId]);
 
   const status = screenshot?.status ?? null;
-  const inFlight = status === "requested" || status === "capturing";
-  const exhausted = inFlight && pollCount.current >= MAX_POLLS;
+  const exhausted = inFlight && timedOut;
 
   return (
     <Stack gap={1.4}>
@@ -285,7 +369,7 @@ export function ReviewCapturePanel({
         </Alert>
       )}
 
-      {current ? (
+      {showVerdictControls && (current ? (
         <Stack
           direction="row"
           gap={1}
@@ -311,9 +395,19 @@ export function ReviewCapturePanel({
             {decidedBy ? ` by ${decidedBy}` : ""}.
           </Typography>
           {canDecide && (
-            <Button size="small" onClick={() => void withdraw()} sx={{ ml: "auto" }}>
-              Withdraw
-            </Button>
+            <Stack direction="row" gap={0.5} sx={{ ml: "auto" }}>
+              <Button
+                size="small"
+                disabled={isWorking}
+                onClick={() => void toggleMitigated(!mitigated)}
+                sx={{ color: mitigated ? colors.text2 : colors.verified }}
+              >
+                {mitigated ? "Unmark mitigated" : "Mark mitigated"}
+              </Button>
+              <Button size="small" onClick={() => void withdraw()}>
+                Withdraw
+              </Button>
+            </Stack>
           )}
         </Stack>
       ) : canDecide ? (
@@ -321,6 +415,7 @@ export function ReviewCapturePanel({
           <Button
             size="small"
             variant="outlined"
+            disabled={isWorking}
             startIcon={<Check size={14} />}
             onClick={() => setPendingDecision("confirmed_breach")}
             sx={{ borderColor: alpha(colors.critical, 0.5), color: colors.critical }}
@@ -330,6 +425,21 @@ export function ReviewCapturePanel({
           <Button
             size="small"
             variant="outlined"
+            disabled={isWorking}
+            startIcon={
+              isWorking
+                ? <CircularProgress size={13} color="inherit" />
+                : <ShieldCheck size={14} />
+            }
+            onClick={() => void toggleMitigated(!mitigated)}
+            sx={{ borderColor: alpha(colors.verified, 0.5), color: colors.verified }}
+          >
+            {mitigated ? "Unmark mitigated" : "Mark as mitigated"}
+          </Button>
+          <Button
+            size="small"
+            variant="outlined"
+            disabled={isWorking}
             startIcon={<X size={14} />}
             onClick={() => setPendingDecision("not_a_breach")}
             sx={{ borderColor: colors.edgeHi, color: colors.text2 }}
@@ -339,9 +449,9 @@ export function ReviewCapturePanel({
         </Stack>
       ) : (
         <Typography sx={{ fontSize: 11, color: colors.text3 }}>
-          Only an administrator can rule on this row.
+          Sign in to rule on this row.
         </Typography>
-      )}
+      ))}
 
       <Dialog
         open={pendingDecision !== null}
@@ -354,7 +464,7 @@ export function ReviewCapturePanel({
             ? "Confirm this is a breach of your data"
             : "Rule that this is not a breach"}
         </DialogTitle>
-        <DialogContent>
+        <DialogContent sx={{ overflowX: "hidden" }}>
           <Typography sx={{ fontSize: 12, color: colors.text2, mb: 1.5 }}>
             {pendingDecision === "confirmed_breach"
               ? "The row moves to Confirmed Breach and becomes actionable — you can dispatch a SOC alert and mark it mitigated."
@@ -373,7 +483,7 @@ export function ReviewCapturePanel({
             onChange={(event) => setNote(event.target.value.slice(0, 500))}
           />
         </DialogContent>
-        <DialogActions>
+        <DialogActions sx={{ px: 3, pb: 2.5, pt: 0 }}>
           <Button size="small" onClick={() => setPendingDecision(null)}>
             Cancel
           </Button>

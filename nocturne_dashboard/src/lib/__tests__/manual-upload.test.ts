@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  MANUAL_UPLOAD_MAX_BINARY_BYTES,
   MANUAL_UPLOAD_MAX_BYTES,
   MANUAL_UPLOAD_MAX_LABEL,
   formatBytes,
   manualUploadRejection,
+  uploadKindFor,
 } from "@/lib/manual-upload";
 
 function file(name: string, size: number): File {
@@ -53,12 +55,43 @@ describe("manualUploadRejection", () => {
     expect(manualUploadRejection(file("DUMP.TXT", 2048))).toBeNull();
   });
 
-  it("refuses anything that is not .txt with a 400", () => {
-    const rejection = manualUploadRejection(file("dump.pdf", 2048));
-    expect(rejection).toEqual({
-      reason: "Upload a plain .txt paste dump.",
-      status: 400,
-    });
+  it("accepts the other supported formats", () => {
+    for (const name of [
+      "dump.md", "notes.csv", "page.html", "report.pdf",
+      "brief.docx", "deck.pptx", "screenshot.png", "photo.JPEG",
+    ]) {
+      expect(manualUploadRejection(file(name, 2048))).toBeNull();
+    }
+  });
+
+  it("refuses an unsupported extension with a 400", () => {
+    const rejection = manualUploadRejection(file("payload.exe", 2048));
+    expect(rejection?.status).toBe(400);
+    expect(rejection?.reason).toContain("not supported");
+  });
+
+  it("refuses a file with no extension at all", () => {
+    expect(manualUploadRejection(file("dump", 2048))?.status).toBe(400);
+  });
+
+  it("classifies each extension by how it will be parsed", () => {
+    expect(uploadKindFor("dump.txt")).toBe("text");
+    expect(uploadKindFor("page.HTML")).toBe("html");
+    expect(uploadKindFor("report.pdf")).toBe("document");
+    expect(uploadKindFor("shot.png")).toBe("image");
+    expect(uploadKindFor("payload.exe")).toBeNull();
+  });
+
+  it("allows binary formats a larger budget than text", () => {
+    // The same byte count is over the limit as text and under it as an image:
+    // a screenshot of one forum post routinely clears the text ceiling.
+    const overText = MANUAL_UPLOAD_MAX_BYTES + 1;
+    expect(manualUploadRejection(file("dump.txt", overText))?.status).toBe(413);
+    expect(manualUploadRejection(file("shot.png", overText))).toBeNull();
+    expect(
+      manualUploadRejection(file("shot.png", MANUAL_UPLOAD_MAX_BINARY_BYTES + 1))
+        ?.status,
+    ).toBe(413);
   });
 
   it("refuses an empty file with a 400", () => {
@@ -70,7 +103,9 @@ describe("manualUploadRejection", () => {
       file("dump.txt", MANUAL_UPLOAD_MAX_BYTES + 1),
     );
     expect(rejection?.status).toBe(413);
-    expect(rejection?.reason).toBe(`That file is 5.1 MB. The limit is ${MANUAL_UPLOAD_MAX_LABEL}.`);
+    expect(rejection?.reason).toBe(
+      `That file is 5.1 MB. The limit for this format is ${MANUAL_UPLOAD_MAX_LABEL}.`,
+    );
   });
 
   it("accepts a file exactly at the limit", () => {

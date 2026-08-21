@@ -21,6 +21,7 @@ import {
   RotateCcw,
   Send,
   ShieldCheck,
+  ShieldOff,
 } from "lucide-react";
 
 import {
@@ -28,9 +29,12 @@ import {
   dispatchSocAlert,
   fetchActionState,
   markMitigated,
+  submitReviewDecision,
   unmarkMitigated,
+  withdrawReviewDecision,
   type ChannelAvailability,
 } from "@/lib/triage-client";
+import { useAuth } from "@/contexts/AuthContext";
 import { colors, fonts } from "@/theme/tokens";
 import type { IncidentActionState, SocDispatchResponse } from "@/types/triage";
 
@@ -54,7 +58,7 @@ export interface IncidentActionBarProps {
   onChanged?: (state: IncidentActionState) => void;
 }
 
-type Busy = "none" | "mitigate" | "dispatch";
+type Busy = "none" | "mitigate" | "dispatch" | "dismiss";
 
 export function IncidentActionBar({
   incidentKey,
@@ -71,6 +75,11 @@ export function IncidentActionBar({
   const [confirmRedispatch, setConfirmRedispatch] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
   const [note, setNote] = useState("");
+  const [dismissOpen, setDismissOpen] = useState(false);
+  const { session } = useAuth();
+  // Any signed-in analyst may rule on their own organization's incident, the
+  // same as marking one mitigated. The server scopes the write to their tenant.
+  const canRule = Boolean(session);
 
   const load = useCallback(async () => {
     try {
@@ -107,7 +116,10 @@ export function IncidentActionBar({
         const result = mitigate
           ? await markMitigated(incidentKey, orgId, withNote)
           : await unmarkMitigated(incidentKey, orgId);
-        apply(result.state);
+        // Null only for a page-level row, which this bar is never rendered for;
+        // fall back to a reload rather than clearing the state it is showing.
+        if (result.state) apply(result.state);
+        else await load();
 
         if (result.jira && result.jira.configured && !result.jira.delivered) {
           // Reported rather than thrown: the mitigation *did* land, and saying
@@ -158,6 +170,34 @@ export function IncidentActionBar({
     [incidentKey, load, orgId],
   );
 
+  const runDismiss = useCallback(
+    async (dismiss: boolean, reason?: string) => {
+      setBusy("dismiss");
+      setError(null);
+      setNotice(null);
+      try {
+        // A confirmed incident's monitor key *is* its incident key, so one
+        // decisions table serves both an unresolved page and a raised incident.
+        if (dismiss) {
+          await submitReviewDecision(incidentKey, orgId, "not_a_breach", reason);
+          setNotice("Dismissed as not a breach. It now sits under the Dismissed tab.");
+        } else {
+          await withdrawReviewDecision(incidentKey, orgId);
+          setNotice("Dismissal withdrawn; the cascade's own verdict applies again.");
+        }
+        await load();
+      } catch (actionError) {
+        setError(
+          actionError instanceof Error ? actionError.message : "The action failed.",
+        );
+      } finally {
+        setBusy("none");
+      }
+    },
+    [incidentKey, load, orgId],
+  );
+
+  const isDismissed = state?.reviewDecision === "not_a_breach";
   const isMitigated = state?.remediationStatus === "mitigated";
   const noChannels = channels ? !channels.email && !channels.jira && !channels.slack : false;
 
@@ -223,6 +263,38 @@ export function IncidentActionBar({
         </span>
       </Tooltip>
 
+      {canRule && (
+        <Tooltip
+          title={
+            isDismissed
+              ? "Restore the cascade's own verdict for this incident."
+              : "Rule that this is not your organization's breach. It moves to the Dismissed tab."
+          }
+        >
+          <span>
+            <Button
+              size="small"
+              variant="text"
+              disabled={busy !== "none"}
+              startIcon={
+                busy === "dismiss" ? (
+                  <CircularProgress size={13} color="inherit" />
+                ) : (
+                  <ShieldOff size={14} />
+                )
+              }
+              onClick={() => {
+                if (isDismissed) void runDismiss(false);
+                else setDismissOpen(true);
+              }}
+              sx={{ color: colors.text2, fontSize: 11.5 }}
+            >
+              {isDismissed ? "Undo dismissal" : "Not a breach"}
+            </Button>
+          </span>
+        </Tooltip>
+      )}
+
       {state?.jiraIssueUrl && (
         <Button
           size="small"
@@ -258,6 +330,17 @@ export function IncidentActionBar({
     <Stack gap={compact ? 0.8 : 1.2}>
       {buttons}
 
+      {isDismissed && (
+        <Stack direction="row" gap={0.6} alignItems="center">
+          <ShieldOff size={12} color={colors.text3} />
+          <Typography sx={{ fontSize: 11, color: colors.text3 }}>
+            Ruled not a breach by {state?.reviewDecidedBy ?? "an administrator"}.
+            The cascade still classifies it as a confirmed breach; that reasoning
+            is preserved.
+          </Typography>
+        </Stack>
+      )}
+
       {isMitigated && state?.mitigatedAt && (
         <Stack direction="row" gap={0.6} alignItems="center">
           <CheckCircle2 size={12} color={colors.verified} />
@@ -291,7 +374,7 @@ export function IncidentActionBar({
           closure is ever captured, so it is offered rather than assumed. */}
       <Dialog open={noteOpen} onClose={() => setNoteOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle sx={{ fontSize: 15 }}>Mark this incident mitigated</DialogTitle>
-        <DialogContent>
+        <DialogContent sx={{ overflowX: "hidden" }}>
           <Typography sx={{ fontSize: 12, color: colors.text2, mb: 1.5 }}>
             The incident moves to the Mitigated tab
             {state?.jiraIssueKey ? ` and ${state.jiraIssueKey} is closed in Jira` : ""}.
@@ -310,7 +393,7 @@ export function IncidentActionBar({
             onChange={(event) => setNote(event.target.value.slice(0, 500))}
           />
         </DialogContent>
-        <DialogActions>
+        <DialogActions sx={{ px: 3, pb: 2.5, pt: 0 }}>
           <Button size="small" onClick={() => setNoteOpen(false)}>
             Cancel
           </Button>
@@ -329,16 +412,54 @@ export function IncidentActionBar({
         </DialogActions>
       </Dialog>
 
+      <Dialog open={dismissOpen} onClose={() => setDismissOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ fontSize: 15 }}>Rule that this is not a breach</DialogTitle>
+        <DialogContent sx={{ overflowX: "hidden" }}>
+          <Typography sx={{ fontSize: 12, color: colors.text2, mb: 1.5 }}>
+            The incident moves to the Dismissed tab and leaves the active queues.
+            What the cascade concluded is kept alongside your ruling and stays
+            visible, and you can undo this at any time.
+          </Typography>
+          <TextField
+            autoFocus
+            fullWidth
+            multiline
+            minRows={2}
+            size="small"
+            label="Reason (optional)"
+            placeholder="Resale of a 2019 dump; not our data…"
+            value={note}
+            onChange={(event) => setNote(event.target.value.slice(0, 500))}
+          />
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5, pt: 0 }}>
+          <Button size="small" onClick={() => setDismissOpen(false)}>Cancel</Button>
+          <Button
+            size="small"
+            variant="contained"
+            color="error"
+            onClick={() => {
+              setDismissOpen(false);
+              const reason = note.trim();
+              setNote("");
+              void runDismiss(true, reason || undefined);
+            }}
+          >
+            Dismiss incident
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       <Dialog open={confirmRedispatch} onClose={() => setConfirmRedispatch(false)}>
         <DialogTitle sx={{ fontSize: 15 }}>Dispatch this alert again?</DialogTitle>
-        <DialogContent>
+        <DialogContent sx={{ overflowX: "hidden" }}>
           <Typography sx={{ fontSize: 12.5, color: colors.text2 }}>
             This incident has already been dispatched. Sending again emails every
             recipient a second time and posts to Slack again. The existing Jira
             ticket is commented on rather than duplicated.
           </Typography>
         </DialogContent>
-        <DialogActions>
+        <DialogActions sx={{ px: 3, pb: 2.5, pt: 0 }}>
           <Button size="small" onClick={() => setConfirmRedispatch(false)}>
             Cancel
           </Button>
@@ -359,17 +480,34 @@ export function IncidentActionBar({
   );
 }
 
+/**
+ * What actually happened, per channel — including the channels that did
+ * nothing.
+ *
+ * Unconfigured channels used to be filtered out entirely, which made "the SOC
+ * was emailed" and "email is switched off on this deployment" render
+ * identically. An analyst who has just paged their team reads this line once
+ * and moves on; if it omits email, they leave believing the mail went out. A
+ * dispatch summary that hides a silent channel is worse than no summary,
+ * because it manufactures confidence.
+ */
 function describeDispatch(result: SocDispatchResponse): string {
   const configured = result.results.filter((channel) => channel.configured);
+  const skipped = result.results.filter((channel) => !channel.configured);
+
   if (!configured.length) {
     return "No delivery channel is configured on this deployment; nothing was sent.";
   }
+
   const parts = configured.map((channel) =>
     channel.delivered
       ? `${channel.channel}${channel.externalId ? ` (${channel.externalId})` : ""} ✓`
       : `${channel.channel} failed: ${channel.error ?? "unknown error"}`,
   );
-  return `Dispatch ${result.outcome} — ${parts.join(" · ")}`;
+  const note = skipped.length
+    ? ` · not configured: ${skipped.map((channel) => channel.channel).join(", ")}`
+    : "";
+  return `Dispatch ${result.outcome} — ${parts.join(" · ")}${note}`;
 }
 
 function formatWhen(value: string): string {

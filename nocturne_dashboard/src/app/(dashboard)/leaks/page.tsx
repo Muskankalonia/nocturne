@@ -14,10 +14,11 @@ import {
   Typography,
   alpha,
 } from "@mui/material";
-import { Download, Eye, RefreshCw, X } from "lucide-react";
+import { Download, Eye, RefreshCw, RotateCcw, X } from "lucide-react";
 import type { AgGridReact } from "ag-grid-react";
 import type { ColDef, ICellRendererParams, RowClassParams } from "ag-grid-community";
 import { ExportEvidenceButton } from "@/components/triage/ExportEvidenceButton";
+import { withdrawReviewDecision } from "@/lib/triage-client";
 import { ReviewCapturePanel } from "@/components/triage/ReviewCapturePanel";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePosture } from "@/contexts/PostureContext";
@@ -48,21 +49,40 @@ type StatusFilter =
   | "dismissed"
   | "other";
 
-const monitorStatusLabel: Record<BreachMonitorStatus, string> = {
+/**
+ * What the Status column shows.
+ *
+ * It is the cascade's verdict *until a person acts on it*, at which point what
+ * the analyst did is the more useful answer to "what is the state of this row".
+ * An incident someone has closed out reading "Confirmed Breach" is technically
+ * true and practically wrong — it is the question the reader is not asking.
+ * The pipeline's own verdict is never lost: it stays in `pipelineMonitorStatus`
+ * and is surfaced in the cell's tooltip.
+ */
+type DisplayStatus = BreachMonitorStatus | "mitigated";
+
+function displayStatus(row: BreachMonitorRecord): DisplayStatus {
+  if (row.remediationStatus === "mitigated") return "mitigated";
+  return row.monitorStatus;
+}
+
+const monitorStatusLabel: Record<DisplayStatus, string> = {
   confirmed_yours: "Confirmed Breach",
   needs_review: "Needs Review",
   another_company: "Other Company Breach ",
   dismissed: "Dismissed",
+  mitigated: "Mitigated",
 };
 
 const monitorStatusTone: Record<
-  BreachMonitorStatus,
-  "ok" | "medium" | "neutral"
+  DisplayStatus,
+  "ok" | "medium" | "neutral" | "critical"
 > = {
   confirmed_yours: "ok",
   needs_review: "medium",
   another_company: "neutral",
   dismissed: "neutral",
+  mitigated: "ok",
 };
 
 const configuredRefreshMs = Number(
@@ -90,6 +110,9 @@ export default function BreachMonitorPage() {
   // incident and therefore no detail page to navigate to, so the verdict is
   // taken here, over the capture.
   const [reviewRow, setReviewRow] = useState<BreachMonitorRecord | null>(null);
+  // Rows whose withdrawal is in flight, so the button can show it is working
+  // without a spinner per row in the grid.
+  const [undoing, setUndoing] = useState<ReadonlySet<string>>(new Set());
 
   const load = useCallback(async (signal?: AbortSignal, background = false) => {
     if (!session) return;
@@ -136,6 +159,32 @@ export default function BreachMonitorPage() {
       if (background) setIsRefreshing(false);
     }
   }, [session, fleetSelection]);
+
+  // Undo a ruling straight from the grid. A dismissed row is the one row a
+  // person most wants to reverse, and making them open the incident to find the
+  // control hides it behind exactly the screen they have decided to skip.
+  const undoDismissal = useCallback(
+    async (row: BreachMonitorRecord) => {
+      setUndoing((current) => new Set(current).add(row.monitorKey));
+      try {
+        await withdrawReviewDecision(row.monitorKey, row.orgId);
+        await load(undefined, true);
+      } catch (undoError) {
+        setError(
+          undoError instanceof Error
+            ? undoError.message
+            : "Withdrawing the decision failed.",
+        );
+      } finally {
+        setUndoing((current) => {
+          const next = new Set(current);
+          next.delete(row.monitorKey);
+          return next;
+        });
+      }
+    },
+    [load],
+  );
 
   // The page is statically prerendered, so `useSearchParams()` is empty on the
   // first render and a useState initializer would capture "all" forever. Sync
@@ -378,16 +427,27 @@ export default function BreachMonitorPage() {
         headerName: "Status",
         field: "monitorStatus",
         minWidth: 148,
+        // Sort and filter on what is displayed. Without this the column would
+        // read "Mitigated" while its filter still offered "Confirmed Breach",
+        // and ticking that box would hide the row the user just acted on.
+        valueGetter: (p) => (p.data ? displayStatus(p.data) : null),
         // Tick "Confirmed yours", not "confirmed_yours".
         filterParams: { valueLabel: monitorStatusLabel },
-        cellRenderer: (p: ICellRendererParams<BreachMonitorRecord>) =>
-          p.data ? (
-            <Box title={humanize(p.data.routingReason)}>
-              <Tag tone={monitorStatusTone[p.data.monitorStatus]}>
-                {monitorStatusLabel[p.data.monitorStatus]}
-              </Tag>
+        cellRenderer: (p: ICellRendererParams<BreachMonitorRecord>) => {
+          if (!p.data) return null;
+          const shown = displayStatus(p.data);
+          // The tooltip is where the cascade's reasoning stays reachable once an
+          // analyst's action has taken over the cell.
+          const title =
+            shown === p.data.monitorStatus
+              ? humanize(p.data.routingReason)
+              : `Cascade verdict: ${monitorStatusLabel[p.data.pipelineMonitorStatus]} · ${humanize(p.data.routingReason)}`;
+          return (
+            <Box title={title}>
+              <Tag tone={monitorStatusTone[shown]}>{monitorStatusLabel[shown]}</Tag>
             </Box>
-          ) : null,
+          );
+        },
       },
       {
         headerName: "Exposed data",
@@ -505,6 +565,27 @@ export default function BreachMonitorPage() {
           const row = p.data;
           if (!row) return null;
 
+          // A ruling is reversible, and the row carrying one is where the
+          // reversal belongs — regardless of whether an incident sits behind it.
+          if (row.reviewDecision) {
+            const busy = undoing.has(row.monitorKey);
+            return (
+              <Button
+                size="small"
+                variant="text"
+                disabled={busy}
+                startIcon={<RotateCcw size={12} />}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void undoDismissal(row);
+                }}
+                sx={{ fontSize: 11, color: colors.text2, px: 0.8 }}
+              >
+                {busy ? "Undoing…" : "Undo"}
+              </Button>
+            );
+          }
+
           // A row that never became an incident has nothing to open, but it is
           // exactly the row an admin needs to look at — so it gets the capture
           // and the verdict instead of a dead link.
@@ -544,7 +625,7 @@ export default function BreachMonitorPage() {
     ];
 
     return isFleetScope ? [orgCol, ...rest] : rest;
-  }, [isFleetScope, router]);
+  }, [isFleetScope, router, undoDismissal, undoing]);
 
   const getRowClass = useCallback((p: RowClassParams<BreachMonitorRecord>) => {
     const band = p.data?.impactSeverityBand;
@@ -774,7 +855,8 @@ export default function BreachMonitorPage() {
               url={reviewRow.url}
               decision={reviewRow.reviewDecision}
               decidedBy={reviewRow.reviewDecidedBy}
-              canDecide={session?.user.role === "SUPER_ADMIN"}
+              canDecide={Boolean(session)}
+              remediationStatus={reviewRow.remediationStatus}
               onDecided={() => {
                 // Refresh rather than patching locally: the ruling changes the
                 // row's effective status, which is computed in Snowflake.

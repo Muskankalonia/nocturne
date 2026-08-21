@@ -6,6 +6,7 @@ import { Box, Button, Divider, Stack, Typography, alpha } from "@mui/material";
 import { ArrowLeft, Network } from "lucide-react";
 import { scopeOrgId, useAuth } from "@/contexts/AuthContext";
 import { IncidentActionBar } from "@/components/triage/IncidentActionBar";
+import { ReviewCapturePanel } from "@/components/triage/ReviewCapturePanel";
 import { Panel } from "@/components/ui/Panel";
 import {
   CanvasSkeleton,
@@ -179,6 +180,35 @@ export default function IncidentDetailPage({
           orgId={incident.orgId}
         />
       </Panel>
+
+      {/* Evidence capture for *any* incident, not only the ones the cascade
+          could not decide.
+          
+          A confirmed incident is the case where seeing the page matters most:
+          it is what an analyst attaches to a regulator notification or a Jira
+          ticket, and a listing can be pulled hours after the alert fires. The
+          capture is keyed by incident key, which VW_BREACH_MONITOR and
+          VW_INCIDENTS agree on, so the same worker and the same storage serve
+          both surfaces. */}
+      {isCapturable(incident.topUrl) ? (
+        <Panel title="Source page capture">
+          <ReviewCapturePanel
+            orgId={incident.orgId}
+            monitorKey={incident.incidentKey}
+            url={incident.topUrl}
+            decision={null}
+            canDecide={false}
+            showVerdictControls={false}
+          />
+        </Panel>
+      ) : (
+        <Panel title="Source page capture">
+          <Typography sx={{ fontSize: 12, color: colors.text3, lineHeight: 1.7 }}>
+            This incident came from a manual paste-dump upload, so there is no
+            live page to capture. The uploaded file is the evidence.
+          </Typography>
+        </Panel>
+      )}
 
       <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", lg: "1.55fr 1fr" } }}>
         {/* narrative */}
@@ -447,6 +477,22 @@ export default function IncidentDetailPage({
  * second step. Single source for both the chip styling and its legend.
  */
 const DIRECTLY_ABUSABLE: ReadonlySet<string> = new Set(["credential", "financial"]);
+
+/**
+ * Whether a headless browser could open this incident's source.
+ *
+ * Mirrors the server's rule in triage-actions.ts. Duplicated deliberately: the
+ * server's copy is the one that holds, and this one exists only so the console
+ * explains the absence instead of rendering a button that always fails.
+ */
+function isCapturable(url: string): boolean {
+  try {
+    const { protocol } = new URL(url);
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
 
 function isDirectlyAbusable(leakType: string): boolean {
   return DIRECTLY_ABUSABLE.has(leakType);

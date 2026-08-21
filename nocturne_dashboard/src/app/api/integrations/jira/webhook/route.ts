@@ -3,13 +3,19 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 
 import { postSlackFollowUp } from "@/server/integrations/slack";
+import { resolveSlackConfig } from "@/server/integration-settings";
 import {
+  clearReviewDecision,
   findIncidentByJiraIssue,
   getIncidentActionState,
   recordAction,
   recordIntegration,
+  recordReviewDecision,
   setIncidentRemediation,
 } from "@/server/triage-actions";
+import { invalidateIncidentViews } from "@/server/query-cache";
+import type { RemediationStatus } from "@/types";
+import type { ReviewDecision } from "@/types/triage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -86,14 +92,93 @@ interface JiraWebhookBody {
 }
 
 /**
- * Jira workflows name their columns whatever they like, so "closed" is decided
- * by the status *category* — `done` is one of Jira's three fixed categories and
- * survives a project renaming its column to "Shipped".
+ * What a Jira column means in Nocturne's vocabulary.
+ *
+ * A board mirroring Nocturne's statuses should drive them, not just the one
+ * "done" transition. Two independent axes live behind these names:
+ *
+ *   remediation — has this been worked?  new / investigating / mitigated
+ *   review      — is this ours at all?   confirmed_breach / not_a_breach
+ *
+ * A ticket sits in one column at a time, so a move sets one axis and leaves the
+ * other alone. Dragging to "Confirmed Breach" says nothing about whether the
+ * work is done, and dragging to "Mitigated" says nothing about whether the
+ * finding was ever disputed.
  */
-function isClosed(body: JiraWebhookBody): boolean {
+type JiraSyncAction =
+  | { axis: "remediation"; status: RemediationStatus }
+  | { axis: "review"; decision: ReviewDecision }
+  | { axis: "review"; decision: null }
+  | null;
+
+/** Lowercased, punctuation and spacing removed, so "In-Progress" === "in progress". */
+function normalizeStatusName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z]+/g, " ").trim();
+}
+
+/**
+ * Matched on the column's *name* first, because a board that has deliberately
+ * mirrored Nocturne's statuses is telling us exactly what it means. Only when a
+ * name is unrecognised does the fixed Jira status category decide, which keeps
+ * the original behaviour for boards using a stock workflow.
+ */
+const STATUS_MAP: Record<string, JiraSyncAction> = {
+  // Worked and closed out.
+  mitigated: { axis: "remediation", status: "mitigated" },
+  remediated: { axis: "remediation", status: "mitigated" },
+  contained: { axis: "remediation", status: "mitigated" },
+  resolved: { axis: "remediation", status: "mitigated" },
+  done: { axis: "remediation", status: "mitigated" },
+  closed: { axis: "remediation", status: "mitigated" },
+
+  // In flight.
+  investigating: { axis: "remediation", status: "investigating" },
+  "in progress": { axis: "remediation", status: "investigating" },
+  triage: { axis: "remediation", status: "investigating" },
+  "in review": { axis: "remediation", status: "investigating" },
+
+  // Untouched.
+  new: { axis: "remediation", status: "new" },
+  open: { axis: "remediation", status: "new" },
+  "to do": { axis: "remediation", status: "new" },
+  todo: { axis: "remediation", status: "new" },
+  backlog: { axis: "remediation", status: "new" },
+  reopened: { axis: "remediation", status: "new" },
+
+  // The analyst's verdict on whether this is the organization's breach.
+  "confirmed breach": { axis: "review", decision: "confirmed_breach" },
+  confirmed: { axis: "review", decision: "confirmed_breach" },
+  "confirmed yours": { axis: "review", decision: "confirmed_breach" },
+  dismissed: { axis: "review", decision: "not_a_breach" },
+  "not a breach": { axis: "review", decision: "not_a_breach" },
+  "false positive": { axis: "review", decision: "not_a_breach" },
+  "wont do": { axis: "review", decision: "not_a_breach" },
+  rejected: { axis: "review", decision: "not_a_breach" },
+
+  // Back to undecided: withdraw the ruling and let the cascade's verdict stand.
+  "needs review": { axis: "review", decision: null },
+  "needs confirmation": { axis: "review", decision: null },
+  review: { axis: "review", decision: null },
+};
+
+function resolveSyncAction(body: JiraWebhookBody): JiraSyncAction {
+  const name = body.issue?.fields?.status?.name;
+  if (name) {
+    const mapped = STATUS_MAP[normalizeStatusName(name)];
+    if (mapped !== undefined) return mapped;
+  }
+
+  // Unrecognised column. Jira's status *category* is one of three fixed values
+  // and survives any renaming, so it is the safe fallback — and it preserves
+  // the behaviour boards had before this mapping existed.
   const category = body.issue?.fields?.status?.statusCategory?.key;
-  if (category === "done") return true;
-  return Boolean(body.issue?.fields?.resolution);
+  if (category === "done" || body.issue?.fields?.resolution) {
+    return { axis: "remediation", status: "mitigated" };
+  }
+  if (category === "indeterminate") {
+    return { axis: "remediation", status: "investigating" };
+  }
+  return null;
 }
 
 export async function POST(request: Request) {
@@ -129,10 +214,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ ignored: "no-issue-key" }, { headers: RESPONSE_HEADERS });
   }
 
-  if (!isClosed(body)) {
-    // Every other transition is a legitimate event we simply do not act on.
-    // 200, not an error: a webhook that returns failures gets disabled by Jira.
-    return NextResponse.json({ ignored: "not-closed" }, { headers: RESPONSE_HEADERS });
+  const action = resolveSyncAction(body);
+  if (!action) {
+    // A column we have no mapping for. 200, not an error: a webhook that
+    // returns failures gets disabled by Jira, and this is a legitimate event we
+    // simply do not act on.
+    return NextResponse.json({ ignored: "unmapped-status" }, { headers: RESPONSE_HEADERS });
   }
 
   try {
@@ -145,54 +232,98 @@ export async function POST(request: Request) {
     }
 
     const state = await getIncidentActionState(link.orgId, link.incidentKey);
-    if (state?.remediationStatus === "mitigated") {
-      // Already there. Jira fires several events for one transition, and this
-      // is what stops the second from re-writing MITIGATED_AT.
-      return NextResponse.json(
-        { ignored: "already-mitigated" },
-        { headers: RESPONSE_HEADERS },
-      );
+    const statusName = body.issue?.fields?.status?.name ?? "its new column";
+
+    if (action.axis === "remediation") {
+      if (state?.remediationStatus === action.status) {
+        // Jira fires several events for one transition; this is what stops the
+        // second from rewriting MITIGATED_AT.
+        return NextResponse.json(
+          { ignored: "already-in-state", state: action.status },
+          { headers: RESPONSE_HEADERS },
+        );
+      }
+
+      await setIncidentRemediation({
+        orgId: link.orgId,
+        incidentKey: link.incidentKey,
+        status: action.status,
+        actor: `jira:${issueKey}`,
+        note: `Moved to "${statusName}" in Jira.`,
+        via: "jira",
+      });
+
+      // Only a move into a done column reflects back onto the ticket itself.
+      // Anything else was driven *by* the board and needs no echo.
+      if (action.status === "mitigated") {
+        await recordIntegration({
+          orgId: link.orgId,
+          incidentKey: link.incidentKey,
+          channel: "jira",
+          externalId: issueKey,
+          externalUrl: state?.jiraIssueUrl ?? null,
+          state: "closed",
+          error: null,
+          actor: `jira:${issueKey}`,
+        });
+
+        if (state?.slackState) {
+          const slack = await resolveSlackConfig(link.orgId);
+          if (slack) {
+            void postSlackFollowUp(
+              slack,
+              `:white_check_mark: *Mitigated* — ${state.organizationName}: ${state.title}\nClosed in Jira as ${issueKey}.`,
+              state.slackMessageTs,
+            ).catch(() => undefined);
+          }
+        }
+      }
+    } else {
+      if ((state?.reviewDecision ?? null) === action.decision) {
+        return NextResponse.json(
+          { ignored: "already-in-state", decision: action.decision },
+          { headers: RESPONSE_HEADERS },
+        );
+      }
+
+      if (action.decision === null) {
+        await clearReviewDecision(link.orgId, link.incidentKey);
+      } else {
+        await recordReviewDecision({
+          orgId: link.orgId,
+          monitorKey: link.incidentKey,
+          decision: action.decision,
+          note: `Moved to "${statusName}" in Jira.`,
+          decidedBy: `jira:${issueKey}`,
+        });
+      }
     }
 
-    await setIncidentRemediation({
-      orgId: link.orgId,
-      incidentKey: link.incidentKey,
-      status: "mitigated",
-      actor: `jira:${issueKey}`,
-      note: `Closed in Jira (${body.issue?.fields?.status?.name ?? "done"}).`,
-      via: "jira",
-    });
-
-    await recordIntegration({
-      orgId: link.orgId,
-      incidentKey: link.incidentKey,
-      channel: "jira",
-      externalId: issueKey,
-      externalUrl: state?.jiraIssueUrl ?? null,
-      state: "closed",
-      error: null,
-      actor: `jira:${issueKey}`,
-    });
-
-    if (state?.slackState) {
-      void postSlackFollowUp(
-        `:white_check_mark: *Mitigated* — ${state.organizationName}: ${state.title}\nClosed in Jira as ${issueKey}.`,
-        state.slackMessageTs,
-      ).catch(() => undefined);
-    }
+    invalidateIncidentViews();
 
     await recordAction({
       orgId: link.orgId,
       incidentKey: link.incidentKey,
-      action: "mark_mitigated",
+      action: action.axis === "remediation"
+        ? (action.status === "mitigated" ? "mark_mitigated" : "unmark_mitigated")
+        : "review_decision",
       actor: `jira:${issueKey}`,
       outcome: "success",
-      summary: `Marked mitigated because ${issueKey} was closed in Jira`,
-      detail: { issueKey, status: body.issue?.fields?.status?.name ?? null },
+      summary: `${issueKey} moved to "${statusName}" in Jira`,
+      detail: {
+        issueKey,
+        status: statusName,
+        axis: action.axis,
+        applied: action.axis === "remediation" ? action.status : action.decision,
+      },
     });
 
     return NextResponse.json(
-      { mitigated: true, incidentKey: link.incidentKey },
+      {
+        applied: action.axis === "remediation" ? action.status : action.decision,
+        axis: action.axis,
+        incidentKey: link.incidentKey,
+      },
       { headers: RESPONSE_HEADERS },
     );
   } catch (error) {

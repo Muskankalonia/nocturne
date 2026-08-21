@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 
-import { isJiraConfigured } from "@/server/integrations/jira";
-import { isSlackConfigured } from "@/server/integrations/slack";
 import { isMailConfigured } from "@/server/alert-mailer";
+import {
+  resolveJiraConfig,
+  resolveSlackConfig,
+} from "@/server/integration-settings";
 import {
   API_RESPONSE_HEADERS,
   INCIDENT_KEY_PATTERN,
@@ -45,7 +47,11 @@ export async function GET(request: Request, context: RouteContext) {
   if (!scoped.ok) return scoped.response;
 
   try {
-    const state = await getIncidentActionState(scoped.orgId, incidentKey);
+    const [state, jira, slack] = await Promise.all([
+      getIncidentActionState(scoped.orgId, incidentKey),
+      resolveJiraConfig(scoped.orgId),
+      resolveSlackConfig(scoped.orgId),
+    ]);
     if (!state) {
       return NextResponse.json(
         { error: "Incident not found." },
@@ -58,8 +64,8 @@ export async function GET(request: Request, context: RouteContext) {
         state,
         channels: {
           email: isMailConfigured(),
-          jira: isJiraConfigured(),
-          slack: isSlackConfigured(),
+          jira: jira !== null,
+          slack: slack !== null,
         },
         fetchedAt: new Date().toISOString(),
       },

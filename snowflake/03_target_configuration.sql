@@ -259,6 +259,15 @@ CREATE TABLE IF NOT EXISTS NOCTURNE.CONFIG.PAGE_SCREENSHOTS (
   REQUESTED_BY STRING NOT NULL,
   REQUESTED_AT TIMESTAMP_TZ DEFAULT CURRENT_TIMESTAMP() NOT NULL,
   CAPTURED_AT TIMESTAMP_TZ,
+  -- When a worker took this row, as distinct from when the console asked for
+  -- it. The reaper needs the difference: a row requested twenty minutes ago and
+  -- claimed one minute ago is healthy, and reaping on REQUESTED_AT would cancel
+  -- a capture that is happily in progress.
+  CLAIMED_AT TIMESTAMP_TZ,
+  -- Claims made against this row, so a page that reliably kills its worker
+  -- fails honestly instead of being requeued forever. A crash loop that stays
+  -- invisible is worse than a failure that is written down.
+  CAPTURE_ATTEMPTS NUMBER DEFAULT 0 NOT NULL,
   CONSTRAINT PK_PAGE_SCREENSHOTS PRIMARY KEY (ORG_ID, MONITOR_KEY)
 );
 
@@ -293,6 +302,61 @@ CREATE TABLE IF NOT EXISTS NOCTURNE.CONFIG.REPORT_RUNS (
   CONSTRAINT PK_REPORT_RUNS PRIMARY KEY (REPORT_ID)
 );
 
+-- Cached natural-language readings of the knowledge graph.
+--
+-- Persisted rather than held in memory because the console runs on Cloud Run
+-- and scales to zero: an in-process cache would be cold on most requests, and
+-- every cold hit is a Cortex call billed again for a graph that has not
+-- changed. GRAPH_FINGERPRINT is a hash of the node and edge identities the
+-- summary was written from, so a graph that gains an actor or an edge misses
+-- the cache and is re-read, while a page refresh does not.
+CREATE TABLE IF NOT EXISTS NOCTURNE.CONFIG.GRAPH_SUMMARIES (
+  ORG_ID STRING NOT NULL,
+  -- 'incident' | 'actors'
+  VIEW_KIND STRING NOT NULL,
+  -- Incident key for the incident view, '' for the org-wide actor view.
+  SCOPE_KEY STRING NOT NULL,
+  GRAPH_FINGERPRINT STRING NOT NULL,
+  SUMMARY STRING NOT NULL,
+  NODE_COUNT NUMBER,
+  EDGE_COUNT NUMBER,
+  MODEL_NAME STRING,
+  GENERATED_AT TIMESTAMP_TZ DEFAULT CURRENT_TIMESTAMP() NOT NULL,
+  CONSTRAINT PK_GRAPH_SUMMARIES PRIMARY KEY (ORG_ID, VIEW_KIND, SCOPE_KEY)
+);
+
+-- =============================================================================
+-- Integration credentials.
+--
+-- Jira and Slack were originally configured from the environment, which made
+-- them a deployment concern and identical for every tenant. They are neither:
+-- each organization has its own Jira project and its own Slack channel, and the
+-- person who knows those values is an analyst, not whoever last edited the
+-- Cloud Run service.
+--
+-- SETTINGS holds the non-secret half (base URL, project key, channel) and is
+-- read back to the browser. SECRETS holds API tokens, encrypted with AES-256-GCM
+-- by the console before they ever reach Snowflake — a warehouse admin reading
+-- this table sees ciphertext, and the key lives only in the app's environment.
+-- Nothing here is ever returned to a client in plaintext.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS NOCTURNE.CONFIG.INTEGRATION_SETTINGS (
+  ORG_ID STRING NOT NULL,
+  -- 'jira' | 'slack'
+  PROVIDER STRING NOT NULL,
+  ENABLED BOOLEAN DEFAULT TRUE NOT NULL,
+  SETTINGS VARIANT,
+  SECRETS VARIANT,
+  UPDATED_BY STRING,
+  UPDATED_AT TIMESTAMP_TZ DEFAULT CURRENT_TIMESTAMP() NOT NULL,
+  CONSTRAINT PK_INTEGRATION_SETTINGS PRIMARY KEY (ORG_ID, PROVIDER)
+);
+
+-- DELETE is granted here, unlike the tables above: disconnecting an integration
+-- should remove the stored credential rather than leave ciphertext behind.
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE NOCTURNE.CONFIG.INTEGRATION_SETTINGS
+  TO ROLE IDENTIFIER($NOCTURNE_DASHBOARD_ROLE);
+
 -- The console owns this workflow state end to end, so it needs write access.
 -- DELETE is granted nowhere: unmarking a mitigation is an UPDATE that clears
 -- MITIGATED_AT, and the audit row for it stays.
@@ -307,6 +371,10 @@ GRANT SELECT, INSERT, UPDATE ON TABLE NOCTURNE.CONFIG.PAGE_SCREENSHOTS
 GRANT SELECT, INSERT, UPDATE ON TABLE NOCTURNE.CONFIG.REVIEW_DECISIONS
   TO ROLE IDENTIFIER($NOCTURNE_DASHBOARD_ROLE);
 GRANT SELECT, INSERT ON TABLE NOCTURNE.CONFIG.REPORT_RUNS
+  TO ROLE IDENTIFIER($NOCTURNE_DASHBOARD_ROLE);
+-- UPDATE as well as INSERT: a row is replaced in place when the fingerprint
+-- changes, so one graph keeps one summary rather than accumulating history.
+GRANT SELECT, INSERT, UPDATE ON TABLE NOCTURNE.CONFIG.GRAPH_SUMMARIES
   TO ROLE IDENTIFIER($NOCTURNE_DASHBOARD_ROLE);
 
 SELECT

@@ -70,11 +70,16 @@ export interface IncidentActionState {
   socEmailState: IntegrationState | null;
   socEmailSentAt: string | null;
   hasBeenDispatched: boolean;
+  /** An analyst's verdict on the incident, when one has been recorded. */
+  reviewDecision: ReviewDecision | null;
+  reviewDecidedBy: string | null;
+  reviewNote: string | null;
 }
 
 export interface MitigationResponse {
   incidentKey: string;
-  state: IncidentActionState;
+  /** Null when the row is a page that never became an incident. */
+  state: IncidentActionState | null;
   /** What happened to the linked Jira ticket, when there is one. */
   jira: IntegrationDispatchResult | null;
 }

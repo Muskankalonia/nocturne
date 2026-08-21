@@ -190,3 +190,48 @@ export async function readJsonBody(request: Request): Promise<unknown | null> {
     return null;
   }
 }
+
+/**
+ * The absolute base URL of this console, for links that leave the app.
+ *
+ * A Jira ticket or a Slack message is read somewhere else entirely, so a
+ * relative path in one is useless. This used to depend solely on
+ * NOCTURNE_CONSOLE_URL and fall back to an empty string, which produced a link
+ * like `/leaks/<key>` and gave no sign anything was wrong until somebody
+ * clicked it in a ticket.
+ *
+ * The request already knows the origin it was reached on, so that is the
+ * fallback. Forwarded headers come first because Cloud Run behind Firebase
+ * Hosting sees an internal URL, not the address the user typed. The environment
+ * variable still wins where it is set, since a deployment reachable on several
+ * hostnames may want links pinned to the canonical one.
+ */
+export function resolveConsoleBaseUrl(request?: Request): string {
+  const configured = process.env.NOCTURNE_CONSOLE_URL?.trim().replace(/\/$/, "");
+  if (configured) return configured;
+
+  if (request) {
+    const forwardedHost = request.headers.get("x-forwarded-host");
+    const host = forwardedHost ?? request.headers.get("host");
+    if (host) {
+      const proto =
+        request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim()
+        // Anything not obviously local is assumed to be TLS-terminated.
+        ?? (host.startsWith("localhost") || host.startsWith("127.0.0.1")
+          ? "http"
+          : "https");
+      return `${proto}://${host}`;
+    }
+    try {
+      return new URL(request.url).origin;
+    } catch {
+      // Fall through to the warning below.
+    }
+  }
+
+  console.error(
+    "[nocturne] NOCTURNE_CONSOLE_URL is not set and no request origin was "
+    + "available; outbound links will be relative and will not resolve.",
+  );
+  return "";
+}

@@ -1,3 +1,4 @@
+import type { ResolvedJiraConfig } from "@/server/integration-settings";
 import type { PendingAlert } from "@/types/dashboard";
 
 if (typeof window !== "undefined") {
@@ -7,31 +8,17 @@ if (typeof window !== "undefined") {
 /**
  * Jira Cloud REST v3, for opening and closing an incident's ticket.
  *
- * Configured entirely from the environment and absent by default: with no
- * credentials set, every function here reports "not configured" and the console
- * carries on. That is the shape the rest of the app already uses for email, and
- * it means a deployment without a Jira account is a supported configuration
- * rather than a broken one.
+ * This module no longer resolves its own configuration. Credentials are
+ * per-organization and live in NOCTURNE.CONFIG.INTEGRATION_SETTINGS, so the
+ * caller resolves them for the tenant it is acting on and passes them in. That
+ * keeps a single global `process.env` read from quietly deciding which Jira
+ * project a given tenant's incidents land in.
  *
- * Required to enable:
- *   JIRA_BASE_URL      https://your-domain.atlassian.net
- *   JIRA_EMAIL         the account the API token belongs to
- *   JIRA_API_TOKEN     from id.atlassian.com/manage-profile/security/api-tokens
- *   JIRA_PROJECT_KEY   e.g. SOC
- * Optional:
- *   JIRA_ISSUE_TYPE          defaults to "Task"
- *   JIRA_DONE_TRANSITION     transition name used to close, defaults to "Done"
- *   JIRA_WEBHOOK_SECRET      shared secret for the inbound close-sync route
+ * See `resolveJiraConfig` in server/integration-settings.ts, which falls back
+ * to the JIRA_* environment variables when a tenant has saved nothing.
  */
 
-export interface JiraConfig {
-  baseUrl: string;
-  email: string;
-  apiToken: string;
-  projectKey: string;
-  issueType: string;
-  doneTransition: string;
-}
+export type JiraConfig = ResolvedJiraConfig;
 
 export interface JiraIssueRef {
   key: string;
@@ -39,42 +26,6 @@ export interface JiraIssueRef {
 }
 
 const REQUEST_TIMEOUT_MS = 12_000;
-
-export function jiraConfig(): JiraConfig | null {
-  const baseUrl = process.env.JIRA_BASE_URL?.trim().replace(/\/$/, "");
-  const email = process.env.JIRA_EMAIL?.trim();
-  const apiToken = process.env.JIRA_API_TOKEN?.trim();
-  const projectKey = process.env.JIRA_PROJECT_KEY?.trim();
-  if (!baseUrl || !email || !apiToken || !projectKey) return null;
-
-  // A misconfigured base URL is the difference between "no Jira" and "our
-  // incident summaries are being POSTed to someone else's host", so it is
-  // validated rather than trusted.
-  let parsed: URL;
-  try {
-    parsed = new URL(baseUrl);
-  } catch {
-    console.error("[nocturne-jira] JIRA_BASE_URL is not a valid URL; disabling.");
-    return null;
-  }
-  if (parsed.protocol !== "https:") {
-    console.error("[nocturne-jira] JIRA_BASE_URL must be https; disabling.");
-    return null;
-  }
-
-  return {
-    baseUrl,
-    email,
-    apiToken,
-    projectKey,
-    issueType: process.env.JIRA_ISSUE_TYPE?.trim() || "Task",
-    doneTransition: process.env.JIRA_DONE_TRANSITION?.trim() || "Done",
-  };
-}
-
-export function isJiraConfigured(): boolean {
-  return jiraConfig() !== null;
-}
 
 function authHeader(config: JiraConfig): string {
   const encoded = Buffer.from(`${config.email}:${config.apiToken}`).toString("base64");
@@ -177,11 +128,10 @@ function describeIncident(alert: PendingAlert, consoleUrl: string) {
 }
 
 export async function createJiraIssue(
+  config: JiraConfig,
   alert: PendingAlert,
   consoleUrl: string,
 ): Promise<JiraIssueRef> {
-  const config = jiraConfig();
-  if (!config) throw new Error("Jira is not configured.");
 
   const headline = alert.insightHeadline?.trim() || alert.title;
   const response = await jiraFetch(config, "/issue", {
@@ -218,9 +168,10 @@ export async function createJiraIssue(
  * transition available, which is reported as success — the caller asked for it
  * to be closed, and it is.
  */
-export async function closeJiraIssue(issueKey: string): Promise<void> {
-  const config = jiraConfig();
-  if (!config) throw new Error("Jira is not configured.");
+export async function closeJiraIssue(
+  config: JiraConfig,
+  issueKey: string,
+): Promise<void> {
 
   const listed = await jiraFetch(config, `/issue/${encodeURIComponent(issueKey)}/transitions`);
   if (!listed.ok) throw new Error(await describeFailure(listed));
@@ -263,11 +214,10 @@ export async function closeJiraIssue(issueKey: string): Promise<void> {
 
 /** Best-effort note on the ticket. Never fails the action that triggered it. */
 export async function commentOnJiraIssue(
+  config: JiraConfig,
   issueKey: string,
   comment: string,
 ): Promise<void> {
-  const config = jiraConfig();
-  if (!config) return;
   try {
     await jiraFetch(config, `/issue/${encodeURIComponent(issueKey)}/comment`, {
       method: "POST",
@@ -281,7 +231,6 @@ export async function commentOnJiraIssue(
   }
 }
 
-export function jiraIssueUrl(issueKey: string): string | null {
-  const config = jiraConfig();
-  return config ? `${config.baseUrl}/browse/${issueKey}` : null;
+export function jiraIssueUrl(config: JiraConfig, issueKey: string): string {
+  return `${config.baseUrl}/browse/${issueKey}`;
 }

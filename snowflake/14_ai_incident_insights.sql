@@ -299,7 +299,7 @@ AS
       SOURCE.INCIDENT_KEY,
       SOURCE.CONTENT_SHA256,
       SOURCE.INPUT_SHA256,
-      'incident_insight_v1',
+      'incident_insight_v2',
       'claude-sonnet-4-5',
       'pending_parse',
       TO_VARIANT(AI_COMPLETE(
@@ -315,11 +315,16 @@ AS
           'details, or other secret values.\n',
           '4. Do not recalculate, modify, or reinterpret supplied scores.\n',
           '5. Separate likely business impact from evidence confidence.\n',
-          '6. Recommend no more than five specific, defensive actions.\n',
-          '7. Keep the headline under 140 characters, the executive summary ',
-          'under 600 characters, and each remaining narrative under 800 ',
-          'characters.\n',
-          '8. Return empty caveats only when the evidence has no meaningful ',
+          '6. Recommend no more than three specific, defensive actions.\n',
+          '7. Keep the headline under 100 characters, the executive summary ',
+          'under 320 characters, and each remaining narrative under 400 ',
+          'characters. Write to be read in a queue, not filed in a report: ',
+          'prefer one dense sentence over three hedged ones.\n',
+          '8. Do not restate scores, bands, corroboration counts, or record ',
+          'totals. The console already shows every number next to this text, ',
+          'and repeating them spends the summary on what the reader can ',
+          'already see. Spend it on what the evidence means instead.\n',
+          '9. Return empty caveats only when the evidence has no meaningful ',
           'limitation.\n\n',
           '=== INCIDENT_FACTS START ===\n',
           SOURCE.INCIDENT_INPUT,
@@ -327,7 +332,7 @@ AS
         ),
         model_parameters => {
           'temperature': 0,
-          'max_tokens': 1536
+          'max_tokens': 1024
         },
         response_format => {
           'type': 'json',

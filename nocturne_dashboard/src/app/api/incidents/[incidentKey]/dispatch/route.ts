@@ -10,6 +10,7 @@ import {
   authenticateRequest,
   badRequest,
   readJsonBody,
+  resolveConsoleBaseUrl,
   resolveWriteScope,
   serviceUnavailable,
 } from "@/server/route-auth";
@@ -75,6 +76,7 @@ export async function POST(request: Request, context: RouteContext) {
       orgId: scoped.orgId,
       incidentKey,
       actor: auth.caller.username,
+      consoleBaseUrl: resolveConsoleBaseUrl(request),
     });
 
     const configured = result.results.filter((channel) => channel.configured);

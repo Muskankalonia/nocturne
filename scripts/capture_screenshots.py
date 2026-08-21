@@ -10,7 +10,14 @@ behind Tor, holding nothing but its own credentials — does the fetching.
     NOCTURNE.CONFIG.PAGE_SCREENSHOTS
         console: INSERT status='requested'
         worker:  claim -> 'capturing' -> upload PNG -> 'captured' | 'failed'
+        worker:  reap  -> 'capturing' abandoned past the stale window goes back
+                          to 'requested', or to 'failed' once attempts run out
         console: reads status, streams the image back through an authed route
+
+The reaper exists because 'capturing' is the one state nothing else can leave.
+The queue view only offers 'requested' rows, so a worker that dies mid-capture
+strands its row where no worker will look at it again — and the console reports
+"still queued" indefinitely for a capture nobody is attempting.
 
 Requires a local Tor SOCKS proxy on 127.0.0.1:9050 — the same one the crawler
 uses — and Playwright's Chromium:
@@ -173,6 +180,89 @@ def wait_for_tor(timeout: int = 60) -> None:
     )
 
 
+# How long a claim may go unfinished before another worker may take the row.
+#
+# Derived from the timeouts rather than fixed, because the failure mode of
+# guessing low is two workers rendering the same onion page at once. The floor
+# is roughly twice the worst case a single capture can legitimately take: the
+# interstitial wait, then a full page timeout, then settling and upload.
+def stale_claim_seconds() -> int:
+    worst_case = INTERSTITIAL_WAIT + (PAGE_TIMEOUT_MS / 1000) + (SETTLE_MS / 1000) + 60
+    configured = int(os.environ.get("NOCTURNE_CAPTURE_STALE_SECONDS", "900"))
+    return max(configured, int(worst_case * 2))
+
+
+# Claims allowed before a row is called failed instead of being requeued. A page
+# that kills its worker every time would otherwise be immortal: reaped, retried,
+# crashed, forever, with the queue never draining past it.
+MAX_CAPTURE_ATTEMPTS = int(os.environ.get("NOCTURNE_CAPTURE_MAX_ATTEMPTS", "3"))
+
+
+def reap_stale_claims(conn) -> int:
+    """Return abandoned 'capturing' rows to the queue.
+
+    A worker that dies mid-capture — OOM, task timeout, a Cloud Run revision
+    replaced under it — leaves its row in 'capturing'. VW_SCREENSHOT_QUEUE only
+    offers rows in 'requested', so nothing would ever pick that row up again:
+    the console polls for its eight-minute budget and then reports "still
+    queued" forever, about a capture no process is attempting.
+
+    This runs at the top of every pass, which means a restarted worker cleans up
+    after the instance it replaced before it does anything else.
+    """
+    stale = stale_claim_seconds()
+    cursor = conn.cursor()
+    try:
+        # Exhausted first, so a poison row cannot be handed back to the queue by
+        # the branch below on the same pass.
+        cursor.execute(
+            """
+            UPDATE NOCTURNE.CONFIG.PAGE_SCREENSHOTS
+            SET STATUS = 'failed',
+                CAPTURE_ERROR = %s
+            WHERE STATUS = 'capturing'
+              AND COALESCE(CAPTURE_ATTEMPTS, 0) >= %s
+              AND COALESCE(CLAIMED_AT, REQUESTED_AT)
+                  < DATEADD(second, -%s, CURRENT_TIMESTAMP())
+            """,
+            (
+                f"Abandoned by {MAX_CAPTURE_ATTEMPTS} workers without completing. "
+                "The page may be crashing the browser; capture it manually or retry later.",
+                MAX_CAPTURE_ATTEMPTS,
+                stale,
+            ),
+        )
+        exhausted = cursor.rowcount or 0
+
+        # COALESCE onto REQUESTED_AT covers rows claimed before CLAIMED_AT
+        # existed; without it those would sit in 'capturing' permanently, which
+        # is the very state this exists to clear.
+        cursor.execute(
+            """
+            UPDATE NOCTURNE.CONFIG.PAGE_SCREENSHOTS
+            SET STATUS = 'requested',
+                CAPTURE_ERROR = 'Requeued after a worker abandoned the capture.',
+                CLAIMED_AT = NULL
+            WHERE STATUS = 'capturing'
+              AND COALESCE(CLAIMED_AT, REQUESTED_AT)
+                  < DATEADD(second, -%s, CURRENT_TIMESTAMP())
+            """,
+            (stale,),
+        )
+        requeued = cursor.rowcount or 0
+    finally:
+        cursor.close()
+
+    if requeued or exhausted:
+        log.warning(
+            "Reaped stale claims older than %ss: %s requeued, %s gave up",
+            stale,
+            requeued,
+            exhausted,
+        )
+    return requeued
+
+
 def claim_next(conn, worker_id: str) -> dict[str, Any] | None:
     """Take exactly one queued request, or return None.
 
@@ -196,7 +286,10 @@ def claim_next(conn, worker_id: str) -> dict[str, Any] | None:
         cursor.execute(
             """
             UPDATE NOCTURNE.CONFIG.PAGE_SCREENSHOTS
-            SET STATUS = 'capturing', CAPTURE_ERROR = %s
+            SET STATUS = 'capturing',
+                CAPTURE_ERROR = %s,
+                CLAIMED_AT = CURRENT_TIMESTAMP(),
+                CAPTURE_ATTEMPTS = COALESCE(CAPTURE_ATTEMPTS, 0) + 1
             WHERE ORG_ID = %s AND MONITOR_KEY = %s AND STATUS = 'requested'
             """,
             (f"claimed by {worker_id}", row["ORG_ID"], row["MONITOR_KEY"]),
@@ -326,6 +419,15 @@ def run_once(conn, bucket: str, worker_id: str, limit: int) -> int:
     from playwright.sync_api import sync_playwright
 
     processed = 0
+    # Before claiming anything: a worker that has just replaced a dead one is
+    # the only thing in a position to free the row that died with it.
+    try:
+        reap_stale_claims(conn)
+    except Exception as error:  # noqa: BLE001
+        # Never fatal. Reaping is maintenance; failing it must not stop the
+        # worker from capturing the rows that are queued and healthy.
+        log.warning("Reaping stale claims failed: %s", error)
+
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
             headless=True,
