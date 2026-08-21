@@ -53,7 +53,7 @@ export function AssistantMessageList({
             lineHeight: 1.6,
           }}
         >
-          Your dark-web intelligence assistant. Ask me anything about your breach data.
+          Your dark-web intelligence assistant. Ask me anything about your breached data.
         </Typography>
         <Stack gap={1} sx={{ width: "100%", mt: 1 }}>
           {[

@@ -61,6 +61,8 @@ export const navigation: NavItem[] = [
     children: [
       { label: "Confirmed Breach", href: "/leaks?status=confirmed" },
       { label: "Needs Review", href: "/leaks?status=ambiguous" },
+      { label: "Mitigated", href: "/leaks?status=mitigated" },
+      { label: "Dismissed", href: "/leaks?status=dismissed" },
       { label: "Other Company Breach", href: "/leaks?status=other" },
     ],
   },
@@ -95,11 +97,21 @@ export const navigation: NavItem[] = [
     ],
   },
   {
+    id: "reports",
+    label: "Reports",
+    icon: "FileText",
+    href: "/reports",
+    section: "ops",
+  },
+  {
     id: "settings",
     label: "Settings",
     icon: "Settings",
-    href: "/settings",
     section: "ops",
+    children: [
+      { label: "Monitored Assets", href: "/settings" },
+      { label: "Integrations", href: "/settings/integrations" },
+    ],
   },
 ];
 

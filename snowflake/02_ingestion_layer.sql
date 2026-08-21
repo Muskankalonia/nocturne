@@ -24,6 +24,18 @@ CREATE OR REPLACE STAGE NOCTURNE.RAW.GCS_CRAWL_STAGE
   URL = 'gcs://nocturne-502617-nocturne-raw/raw/crawls/'
   FILE_FORMAT = (FORMAT_NAME = 'NOCTURNE.RAW.JSONL_GZ_FORMAT');
 
+-- Originals of analyst paste-dump uploads, so Snowflake's document and vision
+-- functions can read them in place.
+--
+-- DIRECTORY is enabled because TO_FILE() resolves against the stage's directory
+-- table; without it AI_PARSE_DOCUMENT reports the object as missing even when
+-- it is present in the bucket. No FILE_FORMAT is set: nothing COPYs from this
+-- stage, it is only ever addressed one file at a time.
+CREATE OR REPLACE STAGE NOCTURNE.RAW.GCS_UPLOAD_ORIGINALS_STAGE
+  STORAGE_INTEGRATION = NOCTURNE_GCS_INT
+  URL = 'gcs://nocturne-502617-nocturne-raw/uploads/originals/'
+  DIRECTORY = (ENABLE = TRUE);
+
 -- Fail here if the Snowflake-generated identity cannot list the bucket.
 LIST @NOCTURNE.RAW.GCS_CRAWL_STAGE
   PATTERN = '.*org_id=[a-z0-9]+(_[a-z0-9]+)*/.*task=[0-9]+/attempt=[0-9]+/part-[0-9]+[.]jsonl[.]gz';

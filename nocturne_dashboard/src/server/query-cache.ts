@@ -94,3 +94,18 @@ export function invalidateQueryCache(prefix: string): void {
     if (key.startsWith(prefix)) entries.delete(key);
   }
 }
+
+/**
+ * Clears the reads that show incident state, after a triage action changes it.
+ *
+ * This cache was built when the console was read-only, where a minute of
+ * staleness cost nothing. Now that a person can mitigate or dismiss an incident,
+ * a stale read is actively wrong: they act, the grid keeps showing the old
+ * state, and the obvious conclusion is that the action failed. Losing the whole
+ * prefix rather than one scope's key is deliberate — a tenant's write also
+ * changes what the fleet view totals, and both are cheap to rebuild.
+ */
+export function invalidateIncidentViews(): void {
+  invalidateQueryCache("breach-monitor:");
+  invalidateQueryCache("command-center:");
+}

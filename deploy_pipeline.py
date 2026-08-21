@@ -5,7 +5,7 @@ Deploys the Snowflake classification pipeline by executing SQL files in order.
 Handles multi-statement SQL files, logs progress, and verifies each step.
 
 Usage:
-    # Existing storage integration/IAM: deploy and go live with steps 02-16
+    # Existing storage integration/IAM: deploy and go live with steps 02-17
     python deploy_pipeline.py
 
     # Fresh environment: also create step 01's storage integration
@@ -80,6 +80,7 @@ DEPLOY_STEPS = {
     14: "14_ai_incident_insights.sql",
     15: "15_seed_validate_golive.sql",
     16: "16_dashboard_interface.sql",
+    17: "17_triage_actions.sql",
 }
 
 STEP_TITLES = {
@@ -99,6 +100,7 @@ STEP_TITLES = {
     14: "Cached per-incident AI insights",
     15: "Seed, validate, and go live",
     16: "Organization-scoped dashboard interface",
+    17: "Triage and mitigation interface",
 }
 
 RELATIONSHIP_LABELS = (
@@ -110,8 +112,8 @@ RELATIONSHIP_LABELS = (
 
 # Replacing a configured storage integration can change its Snowflake-generated
 # GCS identity and invalidate the bucket IAM grant. Existing environments only
-# need steps 02-16, so step 01 requires an explicit CLI option.
-DEFAULT_DEPLOY_STEPS = tuple(range(2, 17))
+# need steps 02-17, so step 01 requires an explicit CLI option.
+DEFAULT_DEPLOY_STEPS = tuple(range(2, 18))
 
 AI_STAGES = {
     "relationship": {
@@ -1853,7 +1855,7 @@ def main():
             conn,
             affected_since=deployment_started_at,
             include_all_details=(
-                args.step is not None and args.step in range(5, 17)
+                args.step is not None and args.step in range(5, 18)
             ),
             log_ai_inputs=args.log_ai_inputs,
         )

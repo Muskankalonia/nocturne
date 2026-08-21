@@ -258,18 +258,38 @@ export interface BreachRecord {
   firstSeen: string;
   lastSeen: string;
 
-  /** Workflow state — UI-owned, not currently persisted in the warehouse. */
+  /**
+   * Workflow state, persisted in NOCTURNE.CONFIG.INCIDENT_REMEDIATION and
+   * joined into VW_INCIDENTS. An incident nobody has acted on has no row there
+   * and reads as "new".
+   */
   remediationStatus: RemediationStatus;
+  /** Set while the status is "mitigated"; cleared when it is unmarked. */
+  mitigatedAt?: string | null;
+  mitigatedBy?: string | null;
 }
 
 export type RemediationStatus =
   | "new"
   | "investigating"
   | "contained"
+  | "mitigated"
   | "resolved"
   | "false_positive"
   | "suppressed"
   | "context_only";
+
+/**
+ * The statuses an analyst may set from the console. The rest of
+ * RemediationStatus is derived by the pipeline (suppressed, context_only) or
+ * kept for records written before this list existed, and is never offered as a
+ * choice — otherwise a click could relabel a suppressed page as investigated.
+ */
+export const ANALYST_REMEDIATION_STATUSES = [
+  "new",
+  "investigating",
+  "mitigated",
+] as const satisfies readonly RemediationStatus[];
 
 /** SQL: 14_ai_incident_insights.sql — VW_L4_INCIDENT_INSIGHTS */
 export interface IncidentInsight {

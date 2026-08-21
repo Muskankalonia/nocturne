@@ -268,6 +268,20 @@ function monitorRow(incident: DashboardIncident): BreachMonitorRecord {
     actorCredibilityScore: incident.actorCredibilityScore,
     groundingLevel: incident.groundingLevel,
     remediationStatus: incident.remediationStatus,
+    mitigatedAt: incident.remediationStatus === "mitigated" ? incident.lastSeen : null,
+    mitigatedBy: incident.remediationStatus === "mitigated" ? "demo" : null,
+    // The demo tenant has no review decisions, so the effective status is
+    // always the cascade's own and the two agree by construction.
+    pipelineMonitorStatus: confirmed
+      ? "confirmed_yours"
+      : incident.relationshipLabel === "other_organization_leak"
+        ? "another_company"
+        : "needs_review",
+    reviewDecision: null,
+    reviewDecidedBy: null,
+    reviewDecidedAt: null,
+    screenshotStatus: null,
+    screenshotCapturedAt: null,
     detailAvailable: confirmed,
   };
 }
@@ -284,6 +298,8 @@ export function getDemoBreachMonitor(): BreachMonitorResponse {
       exposedDataClassCount: new Set(confirmed.flatMap((r) => r.leakTypes)).size,
       needsReview: rows.filter((r) => r.monitorStatus === "needs_review").length,
       anotherCompany: rows.filter((r) => r.monitorStatus === "another_company").length,
+      mitigated: rows.filter((r) => r.remediationStatus === "mitigated").length,
+      dismissed: rows.filter((r) => r.monitorStatus === "dismissed").length,
     },
     rows,
     lastUpdatedAt: now(),

@@ -1,5 +1,7 @@
 "use client";
 
+import NextLink from "next/link";
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Box,
@@ -13,7 +15,7 @@ import {
   Typography,
   alpha,
 } from "@mui/material";
-import { Plus } from "lucide-react";
+import { ArrowRight, Plus } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { Panel } from "@/components/ui/Panel";
 import { PageHeader, Tag } from "@/components/ui/Primitives";
@@ -440,46 +442,7 @@ export default function SettingsPage() {
               </Typography>
             )}
           </Panel>
-
-          <Panel
-            title="Breach Alerts"
-            meta={alertsSaving ? "SAVING…" : alertEmail ? `TO ${alertEmail}` : "NO EMAIL SET"}
-          >
-            <Stack gap={1.4}>
-              {(["critical", "high", "medium", "low"] as const).map((band) => (
-                <Stack key={band} direction="row" alignItems="center" gap={1.2}>
-                  <Switch
-                    checked={alertBands.includes(band)}
-                    onChange={(event) => toggleBand(band, event.target.checked)}
-                    disabled={!alertEmail || alertsSaving}
-                    size="small"
-                    color="secondary"
-                  />
-                  <Typography sx={{ fontSize: 12.5, color: colors.text2 }}>Email me on</Typography>
-                  <SeverityChip band={band} />
-                </Stack>
-              ))}
-              <Divider sx={{ borderColor: colors.edge, my: 0.5 }} />
-              <Stack direction="row" alignItems="center" gap={1.2}>
-                <Switch
-                  checked={weeklyDigest}
-                  onChange={(event) => saveAlerts(alertBands, event.target.checked)}
-                  disabled={!alertEmail || alertsSaving}
-                  size="small"
-                  color="secondary"
-                />
-                <Typography sx={{ fontSize: 12.5, color: colors.text2 }}>
-                  Weekly digest of everything else
-                </Typography>
-              </Stack>
-
-              {alertError && (
-                <Typography sx={{ fontSize: 11.5, color: colors.critical }}>
-                  {alertError}
-                </Typography>
-              )}
-            </Stack>
-          </Panel>
+          
         </Stack>
       </Box>
     </Stack>

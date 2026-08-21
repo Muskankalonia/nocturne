@@ -185,14 +185,24 @@ function HandoffSplash() {
         backgroundImage: gradients.page,
       }}
     >
+      {/* 96px is the ceiling, not a taste call: nocturne-mark.png is 192x192,
+        * so 96 CSS px is exactly where a 2x display runs out of real pixels.
+        * Anything larger is upscaling, and a soft logo on an otherwise empty
+        * screen is more noticeable than a small one. Replace the asset with a
+        * larger export if this ever needs to go bigger. */}
       <Box
         component="img"
         src="/nocturne-mark.png"
         alt=""
-        width={40}
-        height={40}
+        width={96}
+        height={96}
         sx={{
-          filter: `drop-shadow(0 0 18px ${alpha(colors.ion, 0.45)})`,
+          width: { xs: 72, sm: 96 },
+          height: { xs: 72, sm: 96 },
+          // The glow scales with the mark. Left at 18px it read as a tight
+          // outline on a logo this size rather than the diffuse halo it is on
+          // the small one.
+          filter: `drop-shadow(0 0 34px ${alpha(colors.ion, 0.5)})`,
           animation: "nocturnePulse 1.6s ease-in-out infinite",
           "@keyframes nocturnePulse": {
             "0%, 100%": { opacity: 0.45 },

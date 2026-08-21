@@ -19,7 +19,14 @@ CREATE OR REPLACE STORAGE INTEGRATION NOCTURNE_GCS_INT
   STORAGE_PROVIDER = 'GCS'
   ENABLED = TRUE
   STORAGE_ALLOWED_LOCATIONS = (
-    'gcs://nocturne-502617-nocturne-raw/raw/crawls/'
+    'gcs://nocturne-502617-nocturne-raw/raw/crawls/',
+    -- Originals of analyst paste-dump uploads. Snowflake reads these directly
+    -- so AI_PARSE_DOCUMENT and AI_COMPLETE can extract text from a PDF, DOCX,
+    -- or screenshot without the console shipping the bytes back through a
+    -- query. Kept as its own prefix rather than folded into raw/crawls/ so the
+    -- ingestion COPY's file pattern and this never have to reason about each
+    -- other's objects.
+    'gcs://nocturne-502617-nocturne-raw/uploads/originals/'
   );
 
 -- Copy the PROPERTY_VALUE from the STORAGE_GCP_SERVICE_ACCOUNT row.

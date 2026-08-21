@@ -21,9 +21,9 @@ import { colors, gradients, layout } from "@/theme/tokens";
 
 const SECTIONS = [
   { href: "#cascade", label: "How it works" },
+  { href: "#platform", label: "Platform"},
   { href: "#evidence", label: "Evidence" },
   { href: "#graph", label: "Knowledge graph" },
-  { href: "#architecture", label: "Architecture" },
 ] as const;
 
 export function StartNav() {

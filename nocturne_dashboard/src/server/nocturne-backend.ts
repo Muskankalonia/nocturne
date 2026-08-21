@@ -282,6 +282,23 @@ const BREACH_MONITOR_COLUMNS = `
   ACTOR_CREDIBILITY_SCORE,
   GROUNDING_LEVEL,
   REMEDIATION_STATUS,
+  TO_VARCHAR(
+    MITIGATED_AT,
+    'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM'
+  ) AS MITIGATED_AT,
+  MITIGATED_BY,
+  PIPELINE_MONITOR_STATUS,
+  REVIEW_DECISION,
+  REVIEW_DECIDED_BY,
+  TO_VARCHAR(
+    REVIEW_DECIDED_AT,
+    'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM'
+  ) AS REVIEW_DECIDED_AT,
+  SCREENSHOT_STATUS,
+  TO_VARCHAR(
+    SCREENSHOT_CAPTURED_AT,
+    'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM'
+  ) AS SCREENSHOT_CAPTURED_AT,
   DETAIL_AVAILABLE
 `;
 
@@ -1039,7 +1056,13 @@ async function getConnection(): Promise<Connection> {
   return connectionPromise;
 }
 
-async function executeQuery(
+/**
+ * Exported so the triage-action module can share this connection rather than
+ * opening a second one. The pool here is a single long-lived connection; a
+ * parallel module with its own would double the warehouse sessions for no gain
+ * and make the query tag lie about who is asking.
+ */
+export async function executeQuery(
   sqlText: string,
   binds: Binds = [],
 ): Promise<SnowflakeRow[]> {
@@ -1327,6 +1350,23 @@ function mapBreachMonitorRecord(row: SnowflakeRow): BreachMonitorRecord {
       row.REMEDIATION_STATUS,
       "new",
     ) as RemediationStatus,
+    mitigatedAt: nullableString(row.MITIGATED_AT),
+    mitigatedBy: nullableString(row.MITIGATED_BY),
+    // Falls back to the effective status so a deployment that has not yet run
+    // step 16 renders sensibly instead of showing an empty column.
+    pipelineMonitorStatus: stringValue(
+      row.PIPELINE_MONITOR_STATUS,
+      stringValue(row.MONITOR_STATUS),
+    ) as BreachMonitorStatus,
+    reviewDecision: nullableString(
+      row.REVIEW_DECISION,
+    ) as BreachMonitorRecord["reviewDecision"],
+    reviewDecidedBy: nullableString(row.REVIEW_DECIDED_BY),
+    reviewDecidedAt: nullableString(row.REVIEW_DECIDED_AT),
+    screenshotStatus: nullableString(
+      row.SCREENSHOT_STATUS,
+    ) as BreachMonitorRecord["screenshotStatus"],
+    screenshotCapturedAt: nullableString(row.SCREENSHOT_CAPTURED_AT),
     detailAvailable: booleanValue(row.DETAIL_AVAILABLE),
   };
 }
@@ -1540,6 +1580,11 @@ function summarizeBreachMonitor(
     anotherCompany: rows.filter(
       (row) => row.monitorStatus === "another_company",
     ).length,
+    // Counted across every row, not only confirmed ones: an incident stays
+    // mitigated after an admin dismisses the page that raised it, and the tab
+    // has to keep showing it or the row appears to vanish.
+    mitigated: rows.filter((row) => row.remediationStatus === "mitigated").length,
+    dismissed: rows.filter((row) => row.monitorStatus === "dismissed").length,
   };
 }
 
@@ -2024,15 +2069,27 @@ async function getManualIngestDiagnostic(uploadId: string): Promise<ManualIngest
     };
   }
 
+  // The COPY now runs after the upload response is sent, so this is the surface
+  // that reports it. A failure recorded by this instance is named outright; a
+  // retry is kicked first, because a poll is the only recurring signal there is.
+  retryManualUploadIngest(uploadId);
+  const failure = manualIngestFailureFor(uploadId);
+  if (failure) {
+    return {
+      detail: `Raw ingest failed: ${failure}. The uploaded object is still in the bucket; retrying on the next refresh.`,
+    };
+  }
+
   return {
     detail:
-      "Waiting for direct manual COPY to make this object visible in RAW. If this remains here, check the upload API server log for a COPY INTO error.",
+      "Raw ingest is running. The paste dump is stored and this page updates on its own once Snowflake has loaded it.",
   };
 }
 
 function manualUploadStages(
   status: ManualUploadStatus | null,
   ingestDiagnostic: ManualIngestDiagnostic | null = null,
+  advanceInFlight = false,
 ): ManualUploadPipelineStage[] {
   const base: Array<Omit<ManualUploadPipelineStage, "state" | "detail">> = [
     {
@@ -2114,16 +2171,32 @@ function manualUploadStages(
     );
   const stopped = new Set<ManualUploadPipelineStage["id"]>();
 
+  // A stage is only reported as skipped once nothing is still running for this
+  // upload.
+  //
+  // Every "stopped" verdict below is re-derived from L1 and L2 fields rather
+  // than read from a decision the warehouse recorded, and the only thing
+  // separating "L2 will not run" from "L2 has not run yet" is the absence of an
+  // L2 row — which is what in-progress looks like too. While the advance loop
+  // is mid-walk those fields are a half-written answer, so stating a terminal
+  // verdict from them tells an analyst their evidence extraction was skipped
+  // moments before the extraction appears. Suppressing it while work is in
+  // flight costs nothing: the next poll re-evaluates, and by then the fields
+  // are settled.
+  const settled = !advanceInFlight;
+
   if (status.relationshipAiStatus === "error") {
     stopped.add("l1_relevance");
     stopped.add("l2_evidence");
     stopped.add("l3_graph");
     stopped.add("l4_insight");
-  } else if (terminalAfterL1) {
+  } else if (terminalAfterL1 && settled) {
     stopped.add("l2_evidence");
     stopped.add("l3_graph");
     stopped.add("l4_insight");
   } else if (status.l2Route && status.l2Route !== "target_confirmed") {
+    // Safe without the settled guard: an L2 route is a decision the warehouse
+    // actually wrote down, not one re-derived here.
     stopped.add("l3_graph");
     stopped.add("l4_insight");
   }
@@ -2150,9 +2223,9 @@ function manualUploadStages(
         ? status.indicatorSummary
       : stage.id === "l1_relevance" && status.relationshipLabel
         ? status.relationshipLabel
-      : terminalAfterL1 && stage.id === "l2_evidence"
+      : terminalAfterL1 && settled && stage.id === "l2_evidence"
         ? skippedAfterL1Detail
-      : terminalAfterL1 && (stage.id === "l3_graph" || stage.id === "l4_insight")
+      : terminalAfterL1 && settled && (stage.id === "l3_graph" || stage.id === "l4_insight")
         ? "Skipped because L2 was not run for this L1 result."
       : status.l2Route && status.l2Route !== "target_confirmed" && (
         stage.id === "l3_graph" || stage.id === "l4_insight"
@@ -2540,7 +2613,11 @@ export class SnowflakeNocturneBackend implements NocturneBackend {
       scope,
       uploadId,
       status,
-      stages: manualUploadStages(status, ingestDiagnostic),
+      stages: manualUploadStages(
+        status,
+        ingestDiagnostic,
+        isManualAdvanceInFlight(uploadId),
+      ),
       incident: detail?.incident ?? null,
       graph: detail?.graph ?? { nodes: [], edges: [] },
       fetchedAt: new Date().toISOString(),
@@ -2711,19 +2788,10 @@ export const nocturneBackend: NocturneBackend = {
 
     const demo = getDemoBreachMonitor();
     const rows = [...live.rows.filter(isConsoleTenant), ...demo.rows].filter(selected);
-    const confirmed = rows.filter((row) => row.monitorStatus === "confirmed_yours");
-    return {
-      ...live,
-      rows,
-      summary: {
-        totalRows: rows.length,
-        confirmedLeaks: confirmed.length,
-        recordsClaimed: confirmed.reduce((sum, r) => sum + (r.quantityClaimed ?? 0), 0),
-        exposedDataClassCount: new Set(confirmed.flatMap((r) => r.leakTypes)).size,
-        needsReview: rows.filter((r) => r.monitorStatus === "needs_review").length,
-        anotherCompany: rows.filter((r) => r.monitorStatus === "another_company").length,
-      },
-    };
+    // The same roll-up the org-scoped path uses. It had been reimplemented
+    // inline here, which is how the fleet view ends up disagreeing with a
+    // single tenant's own numbers the next time a counter is added.
+    return { ...live, rows, summary: summarizeBreachMonitor(rows) };
   },
   getIncidentDetail(scope, incidentKey) {
     if (isDemoScope(scope)) return Promise.resolve(getDemoIncidentDetail(incidentKey));
@@ -3331,6 +3399,93 @@ const MANUAL_PIPELINE_REFRESH_ORDER = [
 ] as const;
 
 const manualAdvanceInFlight = new Set<string>();
+
+/**
+ * Whether this instance is still walking an upload through the pipeline.
+ *
+ * The stage view needs it to tell "this stage was skipped" apart from "this
+ * stage has not been reached yet". Those look identical in the warehouse — both
+ * are simply an absent L2 row — and only the advance loop knows which one is
+ * true right now.
+ */
+export function isManualAdvanceInFlight(uploadId: string): boolean {
+  return manualAdvanceInFlight.has(uploadId);
+}
+
+/**
+ * Raw ingest that is running, or that failed, for an upload this instance
+ * accepted.
+ *
+ * The COPY used to run inside the upload request, which held the response open
+ * for as long as Snowflake took and gave the analyst a spinner with no
+ * progress. It is now started after the response is sent, and the console's
+ * existing status poll reports it — the upload page already polls on a slower
+ * cadence precisely while raw ingest is outstanding.
+ *
+ * Both maps are per-process, which is the honest scope for them: they exist so
+ * a status poll served by the *same* instance can explain a failure or retry a
+ * dropped COPY. A poll routed elsewhere falls back to the generic diagnostic,
+ * which is correct rather than merely tolerable — the object is in the bucket
+ * either way, and the warehouse is the source of truth for whether it loaded.
+ */
+const manualIngestInFlight = new Set<string>();
+const manualIngestPending = new Map<string, string>();
+const manualIngestFailure = new Map<string, string>();
+
+function uploadIdFromObjectPath(objectPath: string): string | null {
+  return objectPath.match(/run_id=manual_([0-9a-f-]+)\//)?.[1] ?? null;
+}
+
+/** The failure this instance saw for an upload's COPY, if it saw one. */
+export function manualIngestFailureFor(uploadId: string): string | null {
+  return manualIngestFailure.get(uploadId) ?? null;
+}
+
+/**
+ * Starts the raw ingest without waiting for it.
+ *
+ * Idempotent by upload: a duplicate call while one is in flight is ignored, and
+ * COPY itself skips a file it has already loaded, so a retry after a failure
+ * cannot double-insert.
+ */
+export function requestManualUploadIngest(objectPath: string): void {
+  const uploadId = uploadIdFromObjectPath(objectPath);
+  if (!uploadId || manualIngestInFlight.has(uploadId)) return;
+
+  manualIngestInFlight.add(uploadId);
+  manualIngestPending.set(uploadId, objectPath);
+  manualIngestFailure.delete(uploadId);
+
+  void copyManualUploadObject(objectPath)
+    .then(() => {
+      manualIngestPending.delete(uploadId);
+    })
+    .catch((error: unknown) => {
+      const message =
+        error instanceof Error ? error.message : "unknown server error";
+      // Kept so the status poll can say what went wrong instead of leaving the
+      // run parked on "waiting for COPY" with the reason only in a server log.
+      manualIngestFailure.set(uploadId, message);
+      console.error(
+        `[nocturne-manual-upload] raw ingest failed for ${uploadId}:`,
+        message,
+      );
+    })
+    .finally(() => {
+      manualIngestInFlight.delete(uploadId);
+    });
+}
+
+/**
+ * Re-kicks an ingest this instance started but that is not in flight any more
+ * and never landed. Called from the status poll, which is the only recurring
+ * signal the upload flow has.
+ */
+function retryManualUploadIngest(uploadId: string): void {
+  if (manualIngestInFlight.has(uploadId)) return;
+  const objectPath = manualIngestPending.get(uploadId);
+  if (objectPath) requestManualUploadIngest(objectPath);
+}
 
 async function insertManualRelationshipAiResults(uploadId: string): Promise<void> {
   await executeQuery(
@@ -3977,7 +4132,7 @@ async function insertManualIncidentInsightAiResults(uploadId: string): Promise<v
         SOURCE.INCIDENT_KEY,
         SOURCE.CONTENT_SHA256,
         SOURCE.INPUT_SHA256,
-        'incident_insight_v1',
+        'incident_insight_v2',
         'claude-sonnet-4-5',
         'pending_parse',
         TO_VARIANT(AI_COMPLETE(
@@ -3993,17 +4148,22 @@ async function insertManualIncidentInsightAiResults(uploadId: string): Promise<v
             'details, or other secret values.\\n',
             '4. Do not recalculate, modify, or reinterpret supplied scores.\\n',
             '5. Separate likely business impact from evidence confidence.\\n',
-            '6. Recommend no more than five specific, defensive actions.\\n',
-            '7. Keep the headline under 140 characters, the executive summary ',
-            'under 600 characters, and each remaining narrative under 800 ',
-            'characters.\\n',
-            '8. Return empty caveats only when the evidence has no meaningful ',
+            '6. Recommend no more than three specific, defensive actions.\\n',
+            '7. Keep the headline under 100 characters, the executive summary ',
+            'under 320 characters, and each remaining narrative under 400 ',
+            'characters. Write to be read in a queue, not filed in a report: ',
+            'prefer one dense sentence over three hedged ones.\\n',
+            '8. Do not restate scores, bands, corroboration counts, or record ',
+            'totals. The console already shows every number next to this text, ',
+            'and repeating them spends the summary on what the reader can ',
+            'already see. Spend it on what the evidence means instead.\\n',
+            '9. Return empty caveats only when the evidence has no meaningful ',
             'limitation.\\n\\n',
             '=== INCIDENT_FACTS START ===\\n',
             SOURCE.INCIDENT_INPUT,
             '\\n=== INCIDENT_FACTS END ==='
           ),
-          model_parameters => {'temperature': 0, 'max_tokens': 1536},
+          model_parameters => {'temperature': 0, 'max_tokens': 1024},
           response_format => {
             'type': 'json',
             'schema': {

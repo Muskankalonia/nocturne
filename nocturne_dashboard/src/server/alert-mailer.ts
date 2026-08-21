@@ -245,6 +245,47 @@ export async function queueAlertEmail(alert: PendingAlert): Promise<void> {
     });
 }
 
+/**
+ * Queues a report email, optionally with the PDF attached.
+ *
+ * The extension passes `message` straight to nodemailer, so `attachments`
+ * follows nodemailer's shape rather than one of ours. The report is attached
+ * base64-encoded; the same HTML is inlined in the body so the summary is
+ * readable on a phone without opening anything.
+ */
+export async function queueReportEmail(input: {
+  to: string[];
+  subject: string;
+  html: string;
+  text: string;
+  attachment?: { filename: string; content: Buffer };
+  meta?: Record<string, unknown>;
+}): Promise<void> {
+  await db()
+    .collection(MAIL_COLLECTION)
+    .add({
+      to: input.to,
+      message: {
+        subject: input.subject,
+        text: input.text,
+        html: input.html,
+        ...(input.attachment
+          ? {
+              attachments: [
+                {
+                  filename: input.attachment.filename,
+                  content: input.attachment.content.toString("base64"),
+                  encoding: "base64",
+                  contentType: "application/pdf",
+                },
+              ],
+            }
+          : {}),
+      },
+      nocturne: { ...(input.meta ?? {}), queuedAt: new Date().toISOString() },
+    });
+}
+
 /** True when enough is configured for a queue attempt to be worth making. */
 export function isMailConfigured(): boolean {
   return Boolean(

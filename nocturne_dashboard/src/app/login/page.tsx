@@ -161,8 +161,9 @@ export default function LoginPage() {
                 maxWidth: "46ch",
               }}
             >
-              Know which dark-web leaks are actually yours — and see the exact line that
-              proves it.
+              Most dark-web monitoring hands you a pile of maybes and leaves the verification to you. 
+              Nocturne crawls the same sources, then refuses to call anything a breach until the 
+              evidence connects to your organization and shows you the verbatim line that proves it.
             </Typography>
           </Box>
         </Stack>
