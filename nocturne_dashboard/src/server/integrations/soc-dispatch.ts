@@ -4,6 +4,7 @@ import {
   closeJiraIssue,
   commentOnJiraIssue,
   createJiraIssue,
+  transitionJiraIssue,
 } from "@/server/integrations/jira";
 import { postSlackAlert, postSlackFollowUp } from "@/server/integrations/slack";
 import {
@@ -11,6 +12,7 @@ import {
   resolveSlackConfig,
 } from "@/server/integration-settings";
 import {
+  findMonitorRow,
   getIncidentActionState,
   getIncidentAlertFacts,
   getIncidentAlertPayloads,
@@ -106,6 +108,30 @@ async function dispatchEmail(
   };
 }
 
+/**
+ * The Jira column a new ticket should open in, mirroring the console's status.
+ *
+ * Read from VW_BREACH_MONITOR rather than inferred from the alert, because the
+ * monitor row is the same thing the console's own tabs are filtered on — so the
+ * board and the queue cannot disagree about what a row is.
+ */
+async function openingStatusFor(
+  orgId: string,
+  incidentKey: string,
+): Promise<string | null> {
+  const row = await findMonitorRow(orgId, incidentKey).catch(() => null);
+  switch (row?.monitorStatus) {
+    case "confirmed_yours":
+      return "Confirmed Breach";
+    case "needs_review":
+      return "Needs Review";
+    // Anything else — another company's breach, a dismissed row — has no column
+    // of its own here, so the workflow's default is left alone.
+    default:
+      return null;
+  }
+}
+
 async function dispatchJira(
   orgId: string,
   baseUrl: string,
@@ -140,6 +166,31 @@ async function dispatchJira(
       alert,
       consoleIncidentUrl(baseUrl, alert.incidentKey),
     );
+
+    // Open the ticket in the column that matches the console's own verdict.
+    //
+    // Jira's create API cannot set an arbitrary status — a new issue always
+    // lands in the workflow's initial one — so the opening state is a
+    // transition immediately after creation. Without it every ticket starts in
+    // the same column regardless of whether the cascade confirmed the breach or
+    // could not decide, and a SOC triaging from the board loses the distinction
+    // the console spent the whole pipeline establishing.
+    //
+    // Best-effort: a workflow with no such transition leaves the ticket in its
+    // default column, which is worse than the intent but far better than
+    // failing a dispatch that already created the ticket and paged the team.
+    const opening = await openingStatusFor(orgId, alert.incidentKey);
+    if (opening) {
+      try {
+        await transitionJiraIssue(config, issue.key, opening);
+      } catch (transitionError) {
+        console.error(
+          `[nocturne-soc-dispatch] could not open ${issue.key} in "${opening}":`,
+          message(transitionError),
+        );
+      }
+    }
+
     return {
       channel: "jira",
       configured: true,

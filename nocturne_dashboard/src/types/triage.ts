@@ -17,7 +17,8 @@ export type TriageAction =
   | "export_evidence"
   | "generate_weekly_report"
   | "request_screenshot"
-  | "review_decision";
+  | "review_decision"
+  | "unlink_jira_issue";
 
 export type TriageOutcome = "success" | "partial" | "failed";
 

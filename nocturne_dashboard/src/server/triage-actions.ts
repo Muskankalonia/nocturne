@@ -351,6 +351,39 @@ export async function recordIntegration(write: IntegrationWrite): Promise<void> 
  * only authority on which incident a ticket belongs to, and the webhook body's
  * own claim about that is not consulted.
  */
+/**
+ * Detaches a deleted Jira ticket from its incident, leaving the incident alone.
+ *
+ * The row is updated rather than removed. EXTERNAL_ID is cleared because that
+ * is what every read treats as "this incident has a ticket" — most importantly
+ * `dispatchJira`, which comments on an existing key instead of opening a new
+ * one. Left in place, a deleted ticket makes the incident permanently
+ * un-ticketable: the re-dispatch comments into a 404, `commentOnJiraIssue`
+ * swallows it, and the console reports the dispatch as delivered to a ticket
+ * that does not exist.
+ *
+ * The row itself stays as the record that a ticket was once opened and why it
+ * went away. Nothing touches INCIDENT_REMEDIATION or REVIEW_DECISIONS: deleting
+ * a ticket is a statement about tracking, not about whether the breach happened
+ * or was handled.
+ */
+export async function unlinkJiraIssue(input: {
+  orgId: string;
+  incidentKey: string;
+  reason: string;
+}): Promise<void> {
+  await executeQuery(
+    `UPDATE NOCTURNE.CONFIG.INCIDENT_INTEGRATIONS
+     SET EXTERNAL_ID = NULL,
+         EXTERNAL_URL = NULL,
+         STATE = 'deleted',
+         LAST_ERROR = ?,
+         UPDATED_AT = CURRENT_TIMESTAMP()
+     WHERE ORG_ID = ? AND INCIDENT_KEY = ? AND CHANNEL = 'jira'`,
+    [input.reason, input.orgId, input.incidentKey],
+  );
+}
+
 export async function findIncidentByJiraIssue(
   issueKey: string,
 ): Promise<{ orgId: string; incidentKey: string } | null> {

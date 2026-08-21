@@ -172,6 +172,28 @@ export async function closeJiraIssue(
   config: JiraConfig,
   issueKey: string,
 ): Promise<void> {
+  await transitionJiraIssue(config, issueKey, config.doneTransition, "done");
+}
+
+/**
+ * Moves an issue to a named status.
+ *
+ * Transitions are per-workflow and named by the project rather than global, so
+ * the target is resolved from the issue's *own* available transitions by name.
+ * `fallbackCategory` covers a project that renamed the column — "Resolved"
+ * instead of "Mitigated" — by accepting any transition landing in that fixed
+ * Jira status category. Categories are the only part of a workflow that cannot
+ * be renamed.
+ *
+ * An issue already in the requested status has no transition to it and is
+ * reported as success: the caller asked for it to be there, and it is.
+ */
+export async function transitionJiraIssue(
+  config: JiraConfig,
+  issueKey: string,
+  targetStatusName: string,
+  fallbackCategory?: "new" | "indeterminate" | "done",
+): Promise<void> {
 
   const listed = await jiraFetch(config, `/issue/${encodeURIComponent(issueKey)}/transitions`);
   if (!listed.ok) throw new Error(await describeFailure(listed));
@@ -185,23 +207,30 @@ export async function closeJiraIssue(
   };
   const transitions = body.transitions ?? [];
 
-  const wanted = config.doneTransition.toLowerCase();
+  const wanted = targetStatusName.toLowerCase();
   const target =
+    // The transition's own name, then the name of the status it lands in.
+    // Jira boards commonly name the transition "Start review" while the column
+    // is "In Review", so matching only on transition name misses it.
     transitions.find((t) => t.name.toLowerCase() === wanted)
-    // Fall back to any transition landing in Jira's "done" status category,
-    // which survives a project that renamed its column to "Resolved".
-    || transitions.find((t) => t.to?.statusCategory?.key === "done");
+    || transitions.find((t) => t.to?.name?.toLowerCase() === wanted)
+    || (fallbackCategory
+      ? transitions.find((t) => t.to?.statusCategory?.key === fallbackCategory)
+      : undefined);
 
   if (!target) {
     const current = await jiraFetch(config, `/issue/${encodeURIComponent(issueKey)}?fields=status`);
     if (current.ok) {
       const issue = (await current.json()) as {
-        fields?: { status?: { statusCategory?: { key?: string } } };
+        fields?: { status?: { name?: string; statusCategory?: { key?: string } } };
       };
-      if (issue.fields?.status?.statusCategory?.key === "done") return;
+      const status = issue.fields?.status;
+      // Already where it was asked to be, by name or by category.
+      if (status?.name?.toLowerCase() === wanted) return;
+      if (fallbackCategory && status?.statusCategory?.key === fallbackCategory) return;
     }
     throw new Error(
-      `No transition to "${config.doneTransition}" is available on ${issueKey}.`,
+      `No transition to "${targetStatusName}" is available on ${issueKey}.`,
     );
   }
 

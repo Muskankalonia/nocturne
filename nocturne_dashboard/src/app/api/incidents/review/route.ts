@@ -14,12 +14,43 @@ import {
 import {
   clearReviewDecision,
   findMonitorRow,
+  getIncidentActionState,
   recordAction,
   recordReviewDecision,
 } from "@/server/triage-actions";
+import { resolveJiraConfig } from "@/server/integration-settings";
+import { transitionJiraIssue } from "@/server/integrations/jira";
 import type { ReviewDecision } from "@/types/triage";
 
 export const runtime = "nodejs";
+
+/**
+ * Moves the incident's Jira ticket to the column matching a console ruling.
+ *
+ * Returns what happened rather than throwing, so the audit row records whether
+ * the board was actually updated. "not-linked" is the common and unremarkable
+ * case: most rows the console rules on never had a ticket opened.
+ */
+async function syncDecisionToJira(
+  orgId: string,
+  incidentKey: string | null,
+  decision: ReviewDecision,
+): Promise<string> {
+  if (!incidentKey) return "no-incident";
+  const column = decision === "not_a_breach" ? "Dismissed" : "Confirmed Breach";
+  try {
+    const state = await getIncidentActionState(orgId, incidentKey);
+    if (!state?.jiraIssueKey) return "not-linked";
+    const config = await resolveJiraConfig(orgId);
+    if (!config) return "not-configured";
+    await transitionJiraIssue(config, state.jiraIssueKey, column);
+    return `moved ${state.jiraIssueKey} to ${column}`;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "unknown error";
+    console.error("[nocturne-review-decision] Jira sync failed:", detail);
+    return `failed: ${detail}`;
+  }
+}
 export const dynamic = "force-dynamic";
 
 const MAX_NOTE_LENGTH = 500;
@@ -95,6 +126,20 @@ export async function POST(request: Request) {
 
     invalidateIncidentViews();
 
+    // Push the verdict back to Jira, so the board and the console agree
+    // whichever side the analyst happened to be looking at.
+    //
+    // Mitigation has always propagated outward through closeJiraIssue; a
+    // dismissal did not, which left a ticket sitting in Confirmed Breach for a
+    // finding the console had already ruled out. Best-effort and never fatal:
+    // the ruling is recorded in the warehouse either way, and a Jira outage
+    // must not stop an analyst dismissing a false positive.
+    const jiraOutcome = await syncDecisionToJira(
+      scoped.orgId,
+      row.incidentKey,
+      body!.decision as ReviewDecision,
+    );
+
     await recordAction({
       orgId: scoped.orgId,
       incidentKey: row.incidentKey,
@@ -104,7 +149,7 @@ export async function POST(request: Request) {
       summary: `Ruled ${
         body!.decision === "confirmed_breach" ? "a confirmed breach" : "not a breach"
       }: "${row.title.slice(0, 80)}"`,
-      detail: { monitorKey, decision: body!.decision, note },
+      detail: { monitorKey, decision: body!.decision, note, jira: jiraOutcome },
     });
 
     return NextResponse.json(
