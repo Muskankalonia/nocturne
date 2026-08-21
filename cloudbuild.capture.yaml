@@ -1,0 +1,44 @@
+# Cloud Build config for the page-capture worker.
+#
+# A config file rather than `gcloud builds submit --tag`, because --tag only
+# ever builds a file literally named `Dockerfile` at the context root. This
+# image is built from Dockerfile.capture, and the repository root already has a
+# Dockerfile belonging to the crawler — renaming either one to suit the shorter
+# command would be the tail wagging the dog.
+#
+# Build context is the repository root, which is what Dockerfile.capture needs:
+# it copies requirements.txt, snowflake/requirements.txt, and
+# scripts/capture_screenshots.py, and those live in three different places.
+#
+#   gcloud builds submit . \
+#     --config=cloudbuild.capture.yaml \
+#     --region=us-central1
+#
+# us-central1 throughout, following the crawler rather than the console. This
+# worker's heavy traffic is PNG uploads to nocturne-502617-nocturne-raw, which
+# is a US-CENTRAL1 bucket, and the existing nocturne-containers registry is
+# there too. The console sits in asia-southeast1 for its own reasons and is not
+# in this path at all.
+
+substitutions:
+  _IMAGE: us-central1-docker.pkg.dev/nocturne-502617/nocturne-containers/nocturne-capture
+  _TAG: latest
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --file=Dockerfile.capture
+      - --tag=${_IMAGE}:${_TAG}
+      - .
+
+images:
+  - ${_IMAGE}:${_TAG}
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+# Generous on purpose. The Playwright base image is a ~2GB pull before any of
+# this repository's own layers are built, and the default ten minutes is not
+# reliably enough for a cold build.
+timeout: 3600s

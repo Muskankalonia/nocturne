@@ -1,0 +1,37 @@
+# What NOT to upload as a Cloud Build source context.
+#
+# Without this the context is the whole working tree — 1.9GB, most of it
+# .venv and node_modules — which is uploaded on every build and then ignored
+# by the Dockerfile anyway.
+#
+# gcloud will fall back to .gitignore when this file is absent, which happens
+# to produce a similar result today. That is a coincidence of the two files
+# agreeing, not a guarantee: .gitignore answers "what should not be committed"
+# and this answers "what should not leave the machine". They diverge the moment
+# something is committed that a build has no business seeing.
+
+.git/
+.gitignore
+
+# Local Python and Node trees. The images install their own dependencies.
+.venv/
+**/node_modules/
+**/__pycache__/
+*.pyc
+
+# Credentials. Already covered by .gitignore, repeated here because the cost of
+# these two lines being wrong is uploading a Snowflake token to a build service.
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Local run artifacts.
+logs/
+*.log
+.next/
+coverage/
+.idea/
+.DS_Store
