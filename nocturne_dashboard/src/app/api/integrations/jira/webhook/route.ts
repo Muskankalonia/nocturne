@@ -272,7 +272,7 @@ export async function POST(request: Request) {
         incidentKey: link.incidentKey,
         reason: `${issueKey} was deleted in Jira; unlinked from this incident.`,
       });
-      invalidateIncidentViews();
+      invalidateIncidentViews(link.orgId);
 
       await recordAction({
         orgId: link.orgId,
@@ -442,7 +442,7 @@ export async function POST(request: Request) {
       }
     }
 
-    invalidateIncidentViews();
+    invalidateIncidentViews(link.orgId);
 
     await recordAction({
       orgId: link.orgId,

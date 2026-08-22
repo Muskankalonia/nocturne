@@ -97,7 +97,6 @@ export default function GraphPage() {
 
     try {
       const response = await fetch(`/api/knowledge-graph?${query.toString()}`, {
-        cache: "no-store",
         credentials: "same-origin",
         signal,
       });

@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { organizations, users } from "@/mocks/organizations";
-import { cachedQuery, scopeKey } from "@/server/query-cache";
+import { cachedQuery, scopeKey, TRIAGE_TTL_MS } from "@/server/query-cache";
 import { nocturneBackend } from "@/server/nocturne-backend";
 import {
   SESSION_COOKIE_NAME,
@@ -15,7 +15,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const RESPONSE_HEADERS = {
-  "Cache-Control": "no-store",
+  "Cache-Control": "private, max-age=30, stale-while-revalidate=120",
   Vary: "Cookie",
 };
 const ORG_ID_PATTERN = /^[a-z0-9]+(?:_[a-z0-9]+)*$/;
@@ -100,6 +100,7 @@ export async function GET(request: Request) {
     const data = await cachedQuery(
       `command-center:${scopeKey(scope)}:sel=${selectionKey}`,
       () => nocturneBackend.getCommandCenter(scope, include),
+      TRIAGE_TTL_MS,
     );
     if (scope.kind === "org" && data.organizations.length === 0) {
       return NextResponse.json(

@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import { Box, Stack, Typography } from "@mui/material";
 import { colors, fonts, severityColor } from "@/theme/tokens";
 import type { SeverityBand } from "@/types";
@@ -100,7 +101,7 @@ function shortHost(label: string, max = 26): string {
   return `${head}\u2026${suffix}`;
 }
 
-export function PostureFlow({
+export const PostureFlow = memo(function PostureFlow({
   sources,
   extraSourceCount,
   collected,
@@ -471,7 +472,7 @@ export function PostureFlow({
       </g>
     </Box>
   );
-}
+});
 
 /* ── pieces ────────────────────────────────────────────────────────────────── */
 
@@ -682,4 +683,5 @@ function describeArc(cx: number, cy: number, r: number, from: number, to: number
   return `M ${s.x} ${s.y} A ${r} ${r} 0 ${large} 0 ${e.x} ${e.y}`;
 }
 
+PostureFlow.displayName = "PostureFlow";
 export default PostureFlow;

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { summarizeGraph } from "@/server/graph-summary";
 import { nocturneBackend } from "@/server/nocturne-backend";
-import { cachedQuery, scopeKey } from "@/server/query-cache";
+import { cachedQuery, scopeKey, PIPELINE_CYCLE_TTL_MS } from "@/server/query-cache";
 import {
   API_RESPONSE_HEADERS,
   INCIDENT_KEY_PATTERN,
@@ -68,6 +68,7 @@ export async function POST(request: Request) {
           view as KnowledgeGraphView,
           view === "incident" ? incidentKey ?? undefined : undefined,
         ),
+      PIPELINE_CYCLE_TTL_MS,
     );
     if (!graph) {
       return NextResponse.json(

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { memo, useState } from "react";
 import { CircularProgress, IconButton, Snackbar, Stack, Tooltip } from "@mui/material";
 import { RotateCcw, Send, ShieldCheck } from "lucide-react";
 
@@ -34,7 +34,7 @@ export interface PriorityQueueActionsProps {
   onChanged?: () => void;
 }
 
-export function PriorityQueueActions({
+export const PriorityQueueActions = memo(function PriorityQueueActions({
   incidentKey,
   orgId,
   remediationStatus,
@@ -135,4 +135,6 @@ export function PriorityQueueActions({
       />
     </>
   );
-}
+});
+
+PriorityQueueActions.displayName = "PriorityQueueActions";

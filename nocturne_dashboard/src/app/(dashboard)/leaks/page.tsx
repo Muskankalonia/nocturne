@@ -125,9 +125,10 @@ export default function BreachMonitorPage() {
     if (session.scope.kind === "fleet" && fleetSelection) {
       query.set("orgIds", fleetSelection.join(","));
     }
-    const url = query.size
-      ? `/api/breach-monitor?${query.toString()}`
-      : "/api/breach-monitor";
+    // Fetch up to 200 rows to cap payload size while keeping client-side
+    // pagination/filtering functional within the window.
+    query.set("pageSize", "200");
+    const url = `/api/breach-monitor?${query.toString()}`;
 
     try {
       const response = await fetch(url, {

@@ -308,6 +308,7 @@ export interface BreachMonitorResponse {
   scope: DataScope;
   summary: BreachMonitorSummary;
   rows: BreachMonitorRecord[];
+  totalCount: number;
   lastUpdatedAt: string | null;
   fetchedAt: string;
 }

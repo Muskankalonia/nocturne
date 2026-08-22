@@ -73,7 +73,6 @@ export default function PipelinePage() {
 
     try {
       const response = await fetch(url, {
-        cache: "no-store",
         credentials: "same-origin",
         signal,
       });
