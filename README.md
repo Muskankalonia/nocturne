@@ -7,8 +7,8 @@
 </p>
 
 <p align="center">
-  <strong>Dark-web breach intelligence with the receipt attached.</strong><br />
-  Nocturne finds the leaks that are actually yours, and shows you the exact line that proves it.
+  <strong>Dark-web breach intelligence system with the evidence grounding.</strong><br />
+  Nocturne finds the leaks that are actually yours and shows you the exact evidence that proves it.
 </p>
 
 <p align="center">
@@ -25,20 +25,20 @@
 
 <p align="center">
   <a href="https://nocturne-console.web.app"><strong>Open the console</strong></a> |
-  <a href="#the-product"><strong>The product</strong></a> |
+  <a href="#the-product"><strong>The Product</strong></a> |
   <a href="#how-nocturne-works">Workflow</a> |
   <a href="#system-at-a-glance">Architecture</a> |
-  <a href="#the-knowledge-graph">Knowledge graph</a> |
+  <a href="#the-knowledge-graph">Knowledge Graph</a> |
   <a href="#severity-in-three-parts">Scoring</a> |
   <a href="#deploy">Deploy</a>
 </p>
 
 ---
 
-## The product
+## The Product
 
-Dark-web monitoring products are good at finding pages and bad at answering the only
-question that matters: **is this actually us?** They match a keyword, fire an alert,
+Dark-web monitoring products are good at finding dark web pages, but bad at answering the only
+question that matters: **Is this actually us?** They match a keyword, fire an alert,
 and leave the verification to an analyst — who then spends an afternoon establishing
 that a "breach" was somebody else's, or a resale of a five-year-old dump, or nothing
 at all.
@@ -54,7 +54,7 @@ typing, the graph, or your inbox.
 
 What you get is not a feed. It is an incident with its evidence attached: the
 verbatim span, the offsets into the source page, the actor, the marketplace, and
-three independent scores.
+the impact scores.
 
 ### The operating principle
 
@@ -65,8 +65,8 @@ three independent scores.
 | Summarizes the page                      | Carries the verbatim span and its offsets into the source             |
 | One severity number                      | Impact, confidence, and triage priority scored independently          |
 | Spends AI budget on everything collected | Deterministic regex runs on all; cached AI runs only on what survives |
-| "Trust our analysts"                     | Every claim traceable to the line it came from                        |
-| Re-alerts on every recrawl               | Deduplicated by `(org_id, dedupe_key)`; AI cached against its input  |
+| "Trust our analysts"                     | Every claim traceable to the dark web page it came from               |
+| Re-alerts on every recrawl               | Deduplicated by `(org_id, dedupe_key)`; AI cached against its input   |
 
 ---
 
@@ -77,7 +77,7 @@ stages sit last on purpose. Figures below are live from one monitored tenant.
 
 | Stage        | What happens                                                                    |      Survived |
 | :----------- | :------------------------------------------------------------------------------ | ------------: |
-| **L0** | Tor pages landed and swept for indicators by a deterministic UDF — no AI spend | **195** |
+| **L0** | Tor pages landed and swept for indicators by our in-house DLP engine— no AI spend | **195** |
 | **L0** | Duplicates removed on `(org_id, dedupe_key)`                                   | **194** |
 | **L1** | Cached `AI_CLASSIFY` keeps only plausible target leaks                         | **174** |
 | **L2** | Cached `AI_COMPLETE` extraction — evidence only, target hidden                | **114** |
@@ -90,7 +90,7 @@ against 1 ungrounded.
    fetches them through Tor with headless Chromium, and writes gzipped JSONL to GCS.
 2. **Land.** Snowflake ingests every five minutes and deduplicates on
    `(org_id, dedupe_key)`, so a page recrawled tomorrow costs nothing twice.
-3. **Screen.** A JavaScript UDF detects cards, credentials, tokens, keys, hashes,
+3. **Screen.** Our in-house DLP engine detects cards, credentials, tokens, keys, hashes,
    CVEs, emails and domains — deterministically, with no AI spend.
 4. **Classify.** `AI_CLASSIFY` decides each page's relationship to the target. Only
    target leaks and genuinely suspicious mentions go further.
@@ -139,26 +139,6 @@ exist, and exactly one of them decides whether a leak is yours.
 A claim is promoted into the graph only when it is **accepted**, **grounded**, and
 connected to a monitored target. Everything else stays in the audit trail where an
 analyst can find it, and out of the alert path.
-
----
-
-## Severity in three parts
-
-How bad it would be, how sure we are, and what to open first are three different
-questions — so they are three independent 0–100 scores.
-
-```text
-impact      = 0.60·data_sensitivity + 0.25·exposure_actionability + 0.15·claimed_scale
-
-confidence  = 0.35·ownership_evidence + 0.25·evidence_grounding + 0.20·claim_proof
-            + 0.15·distinct_content_corroboration + 0.05·actor_credibility
-
-triage      = 0.80·impact + 0.20·confidence
-```
-
-Banded `informational` 0–19 · `low` 20–39 · `medium` 40–59 · `high` 60–79 ·
-`critical` 80–100. A terrifying claim with thin evidence sorts differently from a
-modest one that is nailed down.
 
 ---
 
@@ -336,28 +316,13 @@ systems a SOC actually works in.
 Every one of these appends to `NOCTURNE.CONFIG.INCIDENT_ACTION_AUDIT`: who did
 what, when, and whether each channel actually landed.
 
-### Jira closes both ways
+### Dispatch SOC alerts for incidents
 
-Marking an incident mitigated in the console closes its ticket. Closing the
-ticket in Jira marks the incident mitigated. The loop terminates because each
-row records which side wrote it — `UPDATED_VIA` is `console` or `jira` — and
-because the inbound webhook is a no-op on an incident that is already mitigated.
+Alerts for the incidents are dispatched via Email, Jira, and Slack, each configurable on the console. The incident alerts ensure proactive monitoring.
 
-The inbound half is the only route in the console that accepts instructions from
-an external system, and it is written that way: the request is authenticated
-with an HMAC over the raw body, the payload's claim about *which* incident is
-never trusted (the issue key is looked up in `INCIDENT_INTEGRATIONS`, and a
-ticket Nocturne did not open resolves to nothing), and the only state change
-reachable from it is `mitigated`.
+### Capture evidence directly from the source dark web page
 
-Every integration is optional. With no Jira, Slack, or email configured, the
-buttons report that plainly and the rest of the console is unaffected — a
-deployment without those accounts is a supported configuration, not a broken one.
-
-### Looking at the page without visiting it
-
-Rows the cascade could not resolve sit in **Needs Review**, and the only way to
-resolve them is for a person to read the page. That should not mean an analyst
+Verifying the incident and collecting evidence should not mean an analyst
 opening Tor Browser and loading a criminal marketplace from their own laptop.
 
 Instead the console writes a request row and
