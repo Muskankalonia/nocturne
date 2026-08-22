@@ -90,7 +90,7 @@ export default function FleetCommandPage() {
                       key={org.orgId}
                       onClick={() => {
                         setScope({ kind: "org", orgId: org.orgId });
-                        router.push("/");
+                        router.push("/command-center");
                       }}
                       sx={{
                         cursor: "pointer",

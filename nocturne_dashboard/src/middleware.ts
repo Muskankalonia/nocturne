@@ -147,8 +147,7 @@ const SESSION_COOKIE = "__session";
 /** Public routes, plus the prefixes that must never be redirected. */
 function isPublicPath(pathname: string): boolean {
   return (
-    pathname === "/start"
-    || pathname === "/login"
+    pathname === "/login"
     || pathname.startsWith("/api/")
     || pathname.startsWith("/_next/")
     || pathname === "/icon.png"
@@ -158,12 +157,11 @@ function isPublicPath(pathname: string): boolean {
 }
 
 /**
- * Sends a visitor with no session straight to the landing page.
+ * Keeps `/` as the public landing page and sends signed-in visitors from there
+ * to the Command Center's dedicated route.
  *
- * AppShell already does this, but only after the client bundle has loaded and
- * /api/auth/session has answered — which is a blank splash and two round trips
- * before a first-time visitor sees anything. Deciding it here turns that into a
- * single 307 to a statically prerendered page.
+ * Other protected routes still send signed-out visitors back to `/`, where
+ * they can learn about the product before choosing to sign in.
  *
  * This checks that the cookie *exists*, not that it is valid, and it is not a
  * security boundary — it cannot be, since verifying the signature needs
@@ -171,13 +169,23 @@ function isPublicPath(pathname: string): boolean {
  * hit the real check in AppShell and every API route, and land back here. The
  * boundary is still the signed cookie and the server-side tenant check.
  */
-function landingRedirect(request: NextRequest) {
+function authRoutingResponse(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  if (pathname === "/") {
+    if (!request.cookies.has(SESSION_COOKIE)) return null;
+
+    const url = request.nextUrl.clone();
+    url.pathname = "/command-center";
+    url.search = "";
+    return NextResponse.redirect(url, 307);
+  }
+
   if (isPublicPath(pathname)) return null;
   if (request.cookies.has(SESSION_COOKIE)) return null;
 
   const url = request.nextUrl.clone();
-  url.pathname = "/start";
+  url.pathname = "/";
   url.search = "";
   return NextResponse.redirect(url, 307);
 }
@@ -197,7 +205,7 @@ export function middleware(request: NextRequest) {
   // The perimeter runs first when it is armed: someone outside the allowlist
   // should be refused, not helpfully redirected to the landing page.
   if (ipGate === ALLOW_ALL && hostGate === ALLOW_ALL && !expectsProxy) {
-    return landingRedirect(request) ?? NextResponse.next();
+    return authRoutingResponse(request) ?? NextResponse.next();
   }
 
   /**
@@ -273,7 +281,7 @@ export function middleware(request: NextRequest) {
     }
   }
 
-  return landingRedirect(request) ?? NextResponse.next();
+  return authRoutingResponse(request) ?? NextResponse.next();
 }
 
 function deny() {

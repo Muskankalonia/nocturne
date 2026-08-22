@@ -5,7 +5,7 @@ import { type GraphKind, graphColor } from "./graph-palette";
 /**
  * The L3 knowledge graph schema, drawn in the console's own palette.
  *
- * There is already a rendered copy of this diagram in ../assets — but it comes
+ * There is already a rendered copy of this diagram in the repository assets — but it comes
  * out of mermaid on pale yellow, which would be the single brightest object on
  * a blue-black page. Redrawing it as inline SVG costs about a hundred lines and
  * buys correct colour, crisp text at any density, and no image request.

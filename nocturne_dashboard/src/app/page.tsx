@@ -11,13 +11,13 @@ import {
   Workflow,
 } from "lucide-react";
 import { colors, fonts, gradients, layout, shadows } from "@/theme/tokens";
-import { AmbientBackdrop } from "./AmbientBackdrop";
-import { GraphDemo } from "./GraphDemo";
-import { HeroGraphic } from "./HeroGraphic";
-import { HeroActions, StartNav } from "./StartNav";
+import { AmbientBackdrop } from "@/components/landing/AmbientBackdrop";
+import { GraphDemo } from "@/components/landing/GraphDemo";
+import { HeroGraphic } from "@/components/landing/HeroGraphic";
+import { HeroActions, LandingNav } from "@/components/landing/LandingNav";
 
 /**
- * Public landing page — the front door at /start.
+ * Public landing page — the actual root route at /.
  *
  * Two constraints shaped this file.
  *
@@ -114,13 +114,13 @@ const EDGES = [
 
 const MAX_CASCADE = Math.max(...CASCADE.map((row) => row.count));
 
-/** Matches the md height of the sticky bar in StartNav. */
+/** Matches the md height of the sticky bar in LandingNav. */
 const NAV_HEIGHT = 68;
 
 export default function StartPage() {
   return (
     <Box sx={{ backgroundColor: colors.abyss, backgroundImage: gradients.page, minHeight: "100dvh" }}>
-      <StartNav />
+      <LandingNav />
 
       {/* ── hero ──────────────────────────────────────────────────────────── */}
       {/* The backdrop is clipped to this section, so the animated layers stop at
@@ -491,53 +491,6 @@ export default function StartPage() {
           ))}
         </Box>
 
-        <Stack
-          direction={{ xs: "column", sm: "row" }}
-          gap={{ xs: 2, sm: 4 }}
-          sx={{
-            mt: 3,
-            p: { xs: 2.4, md: 3 },
-            borderRadius: `${layout.radius}px`,
-            border: `1px solid ${colors.edge}`,
-            backgroundImage: gradients.panel,
-          }}
-        >
-          <Stack gap={1} sx={{ flex: 1 }}>
-            <Typography variant="h4">Impact</Typography>
-            <Mono sx={{ color: colors.text3, fontSize: 11, lineHeight: 1.8 }}>
-              0.60 data_sensitivity
-              <br />
-              0.25 exposure_actionability
-              <br />
-              0.15 claimed_scale
-            </Mono>
-          </Stack>
-          <Stack gap={1} sx={{ flex: 1 }}>
-            <Typography variant="h4">Confidence</Typography>
-            <Mono sx={{ color: colors.text3, fontSize: 11, lineHeight: 1.8 }}>
-              0.35 ownership_evidence
-              <br />
-              0.25 evidence_grounding
-              <br />
-              0.20 claim_proof
-              <br />
-              0.15 content_corroboration
-              <br />
-              0.05 actor_credibility
-            </Mono>
-          </Stack>
-          <Stack gap={1} sx={{ flex: 1 }}>
-            <Typography variant="h4">Triage priority</Typography>
-            <Mono sx={{ color: colors.text3, fontSize: 11, lineHeight: 1.8 }}>
-              0.80 impact
-              <br />
-              0.20 confidence
-            </Mono>
-            <Typography sx={{ fontSize: 12, color: colors.text3, mt: 0.5 }}>
-              Banded informational · low · medium · high · critical.
-            </Typography>
-          </Stack>
-        </Stack>
       </Section>
 
       {/* ── closing ───────────────────────────────────────────────────────── */}

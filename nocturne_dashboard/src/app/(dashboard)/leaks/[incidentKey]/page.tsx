@@ -33,7 +33,6 @@ import { colors, fonts, severityColor } from "@/theme/tokens";
 import {
   formatCount,
   formatDateTime,
-  hostOf,
   leakTypeLabel,
   routeLabel,
   scoreReasonLabel,
@@ -394,10 +393,6 @@ export default function IncidentDetailPage({
             <ScoreStat label="Confidence" value={incident.evidenceConfidenceScore} color={colors.verified} />
             <ScoreStat label="Triage" value={incident.triagePriorityScore} color={severityColor.critical} />
           </Stack>
-          <Typography sx={{ mt: 1.5, fontSize: 10.5, color: colors.text3, lineHeight: 1.55 }}>
-            Impact and confidence are never multiplied — they answer different questions. Neither is
-            a probability.
-          </Typography>
         </Panel>
 
         <Panel title="Exposed data classes">
@@ -496,7 +491,7 @@ export default function IncidentDetailPage({
             <Kv k="Incident key" v={shortHash(incident.incidentKey)} />
             <Kv k="Content hash" v={shortHash(incident.contentSha256)} />
             <Kv k="Source" v={incident.source} color={colors.ion} />
-            <Kv k="Host" v={hostOf(incident.topUrl)} />
+            <Kv k="Source URL" v={incident.topUrl} />
             <Kv k="First seen" v={formatDateTime(incident.firstSeen)} />
             <Kv k="Last seen" v={formatDateTime(incident.lastSeen)} />
             <Kv k="Sightings" v={`${incident.sightingCount} (${incident.mirrorSightingCount} reposts)`} />
@@ -709,7 +704,13 @@ function Kv({ k, v, color }: { k: string; v: string; color?: string }) {
         {k}
       </Typography>
       <Typography
-        sx={{ fontFamily: fonts.mono, fontSize: 11.5, color: color ?? colors.text1, wordBreak: "break-all" }}
+        sx={{
+          minWidth: 0,
+          fontFamily: fonts.mono,
+          fontSize: 11.5,
+          color: color ?? colors.text1,
+          overflowWrap: "anywhere",
+        }}
       >
         {v}
       </Typography>

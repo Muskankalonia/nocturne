@@ -17,7 +17,7 @@ export const navigation: NavItem[] = [
     id: "command-center",
     label: "Command Center",
     icon: "LayoutDashboard",
-    href: "/",
+    href: "/command-center",
     section: "main",
   },
 

@@ -16,7 +16,7 @@ import Sidebar from "./Sidebar";
  * an unauthenticated visitor is sent to the public landing page rather than
  * shown an empty dashboard.
  *
- * The destination is /start, not /login. Someone arriving with no session is
+ * The destination is /, not /login. Someone arriving with no session is
  * usually arriving for the first time, and a bare credential prompt is a poor
  * thing to open with — the landing page explains what this is and carries a
  * Sign in button for the people who already know.
@@ -26,7 +26,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { isAuthenticated, isLoading, hadSessionHint } = useAuth();
 
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) router.replace("/start");
+    if (!isLoading && !isAuthenticated) router.replace("/");
   }, [isLoading, isAuthenticated, router]);
 
   // A signed-out visitor is on their way off this route, so drawing dashboard
@@ -34,7 +34,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   // the same thing and must not share a placeholder:
   //
   //   - resolved and signed out, or no prior session on this device: the next
-  //     screen is /start, so show a neutral splash rather than sketching chrome
+  //     screen is /, so show a neutral splash rather than sketching chrome
   //     that is about to be replaced by a completely different page;
   //   - still resolving with a prior session here: the next screen is the
   //     dashboard, so sketching the chrome keeps the first paint in shape.
@@ -168,7 +168,7 @@ export default AppShell;
  *
  * Deliberately not shaped like any particular screen. The old version sketched
  * the two-pane login layout, which worked while /login was the only place a
- * signed-out visitor could go; now that they land on /start instead, a skeleton
+ * signed-out visitor could go; now that they land on / instead, a skeleton
  * of the wrong page is worse than no skeleton at all. The mark on the page
  * gradient reads as "loading", commits to nothing, and is correct whichever
  * page comes next.

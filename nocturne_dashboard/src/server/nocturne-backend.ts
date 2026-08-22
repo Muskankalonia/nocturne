@@ -1850,7 +1850,11 @@ function aggregateVersionDrift(rows: SnowflakeRow[]): VersionDrift[] {
     const currentVersion = stringValue(row.CURRENT_VERSION);
     if (!current) {
       byStage.set(stage, {
-        baselineVersion: nullableString(row.BASELINE_VERSION),
+        // The Snowflake view currently leaves BASELINE_VERSION null and
+        // exposes the comparison target as EXPECTED_VERSION. Surface that
+        // target instead of rendering an unexplained dash for every stage.
+        baselineVersion:
+          nullableString(row.BASELINE_VERSION) ?? nullableString(row.EXPECTED_VERSION),
         currentVersions: new Set([currentVersion]),
         expectedVersion: stringValue(row.EXPECTED_VERSION, currentVersion),
         rowsBehind: numberValue(row.ROWS_BEHIND),
@@ -1876,26 +1880,23 @@ function aggregateVersionDrift(rows: SnowflakeRow[]): VersionDrift[] {
 
 function normalizeTaskState(
   state: string,
-  trigger: TaskHealth["trigger"],
 ): TaskHealth["state"] {
   const normalized = state.toLowerCase();
   if (normalized.includes("suspend")) return "suspended";
   if (normalized.includes("fail")) return "failed";
   if (normalized.includes("queue")) return "queued";
-  if (normalized.includes("start") || normalized.includes("run")) {
-    return trigger === "stream" ? "idle" : "running";
-  }
+  // SHOW TASKS uses STARTED to mean enabled/resumed. It says nothing about
+  // whether a scheduled invocation is executing at this instant.
+  if (normalized.includes("start")) return "enabled";
+  if (normalized.includes("run")) return "running";
   return "idle";
 }
 
-function taskLastRunAt(row: SnowflakeRow, fallback: string | null): string | null {
+function taskLastRunAt(row: SnowflakeRow | undefined, fallback: string | null): string | null {
+  if (!row) return fallback;
   return nullableString(
     rowField(
       row,
-      "last_committed_on",
-      "LAST_COMMITTED_ON",
-      "last_run_at",
-      "LAST_RUN_AT",
       "completed_time",
       "COMPLETED_TIME",
       "scheduled_time",
@@ -1912,6 +1913,10 @@ const AI_TASK_STAGE: Record<string, AiStage | null> = {
   CRAWL_INGEST_TASK: null,
   INCIDENT_INSIGHT_CANDIDATE_DISCOVERY_TASK: null,
 };
+
+const PIPELINE_TASK_NAMES_SQL = Object.keys(AI_TASK_STAGE)
+  .map((taskName) => `'${taskName}'`)
+  .join(", ");
 
 function defaultTasks(cacheStages: PipelineAiCacheStage[]): TaskHealth[] {
   const byStage = new Map(cacheStages.map((stage) => [stage.stage, stage]));
@@ -1932,11 +1937,18 @@ function defaultTasks(cacheStages: PipelineAiCacheStage[]): TaskHealth[] {
 
 function mapTaskRows(
   rows: SnowflakeRow[],
+  historyRows: SnowflakeRow[],
   cacheStages: PipelineAiCacheStage[],
 ): TaskHealth[] {
   if (rows.length === 0) return defaultTasks(cacheStages);
 
   const byStage = new Map(cacheStages.map((stage) => [stage.stage, stage]));
+  const historyByTask = new Map(
+    historyRows.map((row) => [
+      stringValue(rowField(row, "name", "NAME")),
+      row,
+    ]),
+  );
   const tasks = rows
     .map((row) => {
       const taskName = stringValue(rowField(row, "name", "task_name", "NAME", "TASK_NAME"));
@@ -1952,9 +1964,11 @@ function mapTaskRows(
         scheduleLabel: trigger === "schedule" ? schedule ?? "manual" : null,
         state: normalizeTaskState(
           stringValue(rowField(row, "state", "STATE"), "idle"),
-          trigger,
         ),
-        lastRunAt: taskLastRunAt(row, cacheStage?.lastCalledAt ?? null),
+        lastRunAt: taskLastRunAt(
+          historyByTask.get(taskName),
+          cacheStage?.lastCalledAt ?? null,
+        ),
         pendingCandidates: stage ? cacheStage?.missingCandidates ?? 0 : null,
         errorCount: stage ? cacheStage?.errorRows ?? 0 : 0,
       };
@@ -1967,15 +1981,29 @@ function mapTaskRows(
 function aggregatePipelineHealth(
   organizations: CommandCenterOrganizationSnapshot[],
   cacheStages: PipelineCacheStageRow[],
+  ingestRows: SnowflakeRow[],
 ): PipelineResponse["health"] {
+  const lastIngestByOrg = new Map(
+    ingestRows.map((row) => [
+      stringValue(row.ORG_ID),
+      nullableString(row.LAST_INGESTED_AT),
+    ]),
+  );
   return organizations.map((organization) => {
     const orgCache = cacheStages.filter((stage) => stage.orgId === organization.orgId);
     const backlogCount = orgCache.reduce(
       (total, stage) => total + stage.missingCandidates,
       0,
     );
-    const aiErrorCount = organization.metrics.downstreamAiErrorCount
-      + orgCache.reduce((total, stage) => total + stage.errorRows, 0);
+    const cachedAiErrorCount = orgCache.reduce(
+      (total, stage) => total + stage.errorRows,
+      0,
+    );
+    // L2 and leak-type failures already appear in the cache rows. Adding the
+    // command-center downstream count doubled those failures (81 became 162).
+    const aiErrorCount = orgCache.length > 0
+      ? cachedAiErrorCount
+      : organization.metrics.downstreamAiErrorCount;
     const groundingRate = organization.metrics.grounding.rate;
     const status: PipelineResponse["health"][number]["status"] = aiErrorCount > 0
       ? "degraded"
@@ -1985,7 +2013,7 @@ function aggregatePipelineHealth(
     return {
       orgId: organization.orgId,
       organizationName: organization.organizationName,
-      lastIngestAt: organization.lastUpdatedAt,
+      lastIngestAt: lastIngestByOrg.get(organization.orgId) ?? null,
       groundingRate,
       quarantinedCount: organization.metrics.grounding.quarantinedCount,
       totalExtractedCount: organization.metrics.grounding.totalExtractedClaims,
@@ -2560,6 +2588,8 @@ export class SnowflakeNocturneBackend implements NocturneBackend {
       cacheRows,
       driftRows,
       taskRows,
+      taskHistoryRows,
+      ingestRows,
     ] = await Promise.all([
       executeQuery(
         `SELECT ${SUMMARY_COLUMNS}
@@ -2589,6 +2619,47 @@ export class SnowflakeNocturneBackend implements NocturneBackend {
         filter.binds,
       ),
       executeQuery("SHOW TASKS IN SCHEMA NOCTURNE.RAW").catch(() => []),
+      optionalDashboardQuery(
+        "pipeline task execution history",
+        `SELECT
+           NAME,
+           STATE AS LAST_RUN_STATE,
+           TO_VARCHAR(
+             SCHEDULED_TIME,
+             'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM'
+           ) AS SCHEDULED_TIME,
+           TO_VARCHAR(
+             COMPLETED_TIME,
+             'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM'
+           ) AS COMPLETED_TIME
+         FROM TABLE(NOCTURNE.INFORMATION_SCHEMA.TASK_HISTORY(
+           SCHEDULED_TIME_RANGE_START => DATEADD('day', -7, CURRENT_TIMESTAMP()),
+           RESULT_LIMIT => 10000
+         ))
+         WHERE COMPLETED_TIME IS NOT NULL
+           AND NAME IN (${PIPELINE_TASK_NAMES_SQL})
+         QUALIFY ROW_NUMBER() OVER (
+           PARTITION BY NAME
+           ORDER BY SCHEDULED_TIME DESC
+         ) = 1
+         ORDER BY NAME`,
+      ),
+      optionalDashboardQuery(
+        "pipeline last raw ingest",
+        `SELECT
+           ORG_ID,
+           TO_VARCHAR(
+             MAX(_INGESTED_AT),
+             'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM'
+           ) AS LAST_INGESTED_AT
+         FROM NOCTURNE.RAW.CRAWL_PAGES
+         WHERE SCHEMA_VERSION = 2
+           AND ORG_ID = _PATH_ORG_ID
+           AND COALESCE(SOURCE, '') <> 'manual_upload'
+           ${scope.kind === "org" ? "AND ORG_ID = ?" : ""}
+         GROUP BY ORG_ID`,
+        scope.kind === "org" ? [scope.orgId] : [],
+      ),
     ]);
 
     const organizations = summaryRows.map(mapOrganization);
@@ -2619,8 +2690,8 @@ export class SnowflakeNocturneBackend implements NocturneBackend {
       cacheStages,
       rejectionReasons: aggregateRejectionReasons(rejectionRows),
       versionDrift: aggregateVersionDrift(driftRows),
-      health: aggregatePipelineHealth(organizations, orgCacheStages),
-      tasks: mapTaskRows(taskRows, cacheStages),
+      health: aggregatePipelineHealth(organizations, orgCacheStages, ingestRows),
+      tasks: mapTaskRows(taskRows, taskHistoryRows, cacheStages),
       lastUpdatedAt: latestTimestamp(
         organizations.map((organization) => organization.lastUpdatedAt),
       ),

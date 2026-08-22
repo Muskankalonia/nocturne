@@ -26,7 +26,7 @@ const SECTIONS = [
   { href: "#graph", label: "Knowledge graph" },
 ] as const;
 
-export function StartNav() {
+export function LandingNav() {
   // Transparent over the hero, and a defined bar once the page moves under it.
   // A permanently filled bar reads as chrome and competes with the headline;
   // one that never fills leaves the links floating over content further down.
@@ -67,7 +67,7 @@ export function StartNav() {
       >
         <Stack
           component={NextLink}
-          href="/start"
+          href="/"
           direction="row"
           alignItems="center"
           gap={1.2}
@@ -119,7 +119,7 @@ export function StartNav() {
 
         <Button
           component={NextLink}
-          href={isAuthenticated ? "/" : "/login"}
+          href={isAuthenticated ? "/command-center" : "/login"}
           variant="contained"
           sx={{ ml: "auto", px: 2.2, py: 0.9, borderRadius: `${layout.radiusSm}px`, flexShrink: 0 }}
         >
@@ -131,7 +131,7 @@ export function StartNav() {
 }
 
 /**
- * Shown under the hero copy. Same destinations as the bar above, at the size a
+ * Shown under the hero copy. Same destinations as the landing bar, at the size a
  * primary action wants to be.
  *
  * `secondary` is off at the bottom of the page: the second button scrolls up to
@@ -162,7 +162,7 @@ export function HeroActions({
     >
       <Button
         component={NextLink}
-        href={isAuthenticated ? "/" : "/login"}
+        href={isAuthenticated ? "/command-center" : "/login"}
         variant="contained"
         size="large"
         sx={{ px: 3, py: 1.4, fontSize: 13.5 }}

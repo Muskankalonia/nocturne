@@ -33,6 +33,7 @@ const PostureFlow = dynamic(() => import("@/components/ui/PostureFlow"), {
 /** Rows of the priority queue shown at once. */
 const QUEUE_PAGE_SIZE = 5;
 
+/** Signed-in organization posture at /command-center. */
 export default function CommandCenterPage() {
   const router = useRouter();
   const { isFleetScope, activeOrg, switchableOrgs } = useAuth();
@@ -387,16 +388,16 @@ export default function CommandCenterPage() {
               mt: 1.6,
               px: 1.5,
               py: 1.1,
-              border: `1px dashed ${alpha(colors.critical, 0.32)}`,
+              border: `1px dashed ${alpha(colors.verified, 0.38)}`,
               borderRadius: "7px",
-              backgroundColor: alpha(colors.critical, 0.05),
+              backgroundColor: alpha(colors.verified, 0.06),
               fontSize: 11.5,
               color: colors.text2,
               lineHeight: 1.6,
             }}
           >
             Expensive extraction ran on{" "}
-            <Box component="b" sx={{ color: colors.critical, fontFamily: fonts.mono }}>
+            <Box component="b" sx={{ color: colors.verified, fontFamily: fonts.mono }}>
               {extractedCount.toLocaleString()} / {relevanceCount.toLocaleString()}
             </Box>{" "}
             pages. A send-everything baseline would have run the expensive model on all of them.

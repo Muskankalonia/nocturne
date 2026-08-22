@@ -30,11 +30,12 @@ export function createBroadcastPoll<T>({
   if (typeof window === "undefined" || !("BroadcastChannel" in window)) {
     // Fallback: no BroadcastChannel support, just poll normally.
     let timer: ReturnType<typeof setInterval> | null = null;
+    let active = false;
 
     async function poll() {
       try {
         const data = await fetchData();
-        onData(data);
+        if (active) onData(data);
       } catch {
         // Swallow — the page's own error handling covers this.
       }
@@ -42,10 +43,12 @@ export function createBroadcastPoll<T>({
 
     return {
       start() {
+        active = true;
         void poll();
         timer = setInterval(poll, intervalMs);
       },
       stop() {
+        active = false;
         if (timer) clearInterval(timer);
         timer = null;
       },
@@ -62,6 +65,7 @@ export function createBroadcastPoll<T>({
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let leaderCheckTimer: ReturnType<typeof setTimeout> | null = null;
+  let active = false;
 
   function broadcastHeartbeat() {
     const msg: Message<T> = { type: "leader-heartbeat", tabId };
@@ -76,6 +80,10 @@ export function createBroadcastPoll<T>({
   async function leaderPoll() {
     try {
       const data = await fetchData();
+      // A scope change stops this poller while its fetch may still be in
+      // flight. Discard that response instead of letting stale fleet data
+      // overwrite the newly selected organization's payload.
+      if (!active || !isLeader) return;
       onData(data);
       broadcastData(data);
     } catch {
@@ -129,12 +137,14 @@ export function createBroadcastPoll<T>({
 
   return {
     start() {
+      active = true;
       channel.addEventListener("message", handleMessage);
       // Try to become leader immediately; if another tab is already leading,
       // its next heartbeat will cause us to step down.
       becomeLeader();
     },
     stop() {
+      active = false;
       stepDown();
       if (leaderCheckTimer) clearTimeout(leaderCheckTimer);
       channel.removeEventListener("message", handleMessage);

@@ -173,10 +173,6 @@ export default function PipelinePage() {
   const versionDriftRows = visibleData?.versionDrift ?? [];
   const taskRows = visibleData?.tasks ?? [];
   const relativeNow = visibleData ? Date.parse(visibleData.fetchedAt) : Date.now();
-  const driftRowsBehind = versionDriftRows.reduce(
-    (total, row) => total + row.rowsBehind,
-    0,
-  );
   const rejectedGraphElementCount = visibleData?.rejectionReasons.reduce(
     (total, reason) => total + reason.count,
     0,
@@ -443,29 +439,31 @@ export default function PipelinePage() {
       {tab === "health" && (
       <>
       <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "1fr", lg: "1fr 1fr" } }}>
-        <Panel title="Version drift" meta="BASELINE VS CURRENT">
+        <Panel title="Version drift" meta="EXPECTED VS CURRENT">
           <Box sx={{ overflowX: "auto" }}>
-            <Table headers={["Stage", "Baseline", "Current", "Rows behind"]}>
-              {versionDriftRows.map((d) => (
-                <Box component="tr" key={d.stage}>
-                  <Td>{d.stage}</Td>
-                  <Td>
-                    <Mono size={10.5} color={colors.text3}>
-                      {d.baselineVersion ?? "—"}
-                    </Mono>
-                  </Td>
-                  <Td>
-                    <Mono size={10.5} color={d.rowsBehind ? severityColor.medium : colors.verified}>
-                      {d.currentVersion}
-                    </Mono>
-                  </Td>
-                  <Td>
-                    <Mono color={d.rowsBehind ? severityColor.medium : colors.text1}>
-                      {d.rowsBehind}
-                    </Mono>
-                  </Td>
-                </Box>
-              ))}
+            <Table headers={["Stage", "Expected", "Current"]}>
+              {versionDriftRows.map((d) => {
+                const matchesExpected =
+                  d.baselineVersion === null || d.baselineVersion === d.currentVersion;
+                return (
+                  <Box component="tr" key={d.stage}>
+                    <Td>{d.stage}</Td>
+                    <Td>
+                      <Mono size={10.5} color={colors.text3}>
+                        {d.baselineVersion ?? "—"}
+                      </Mono>
+                    </Td>
+                    <Td>
+                      <Mono
+                        size={10.5}
+                        color={matchesExpected ? colors.verified : severityColor.medium}
+                      >
+                        {d.currentVersion}
+                      </Mono>
+                    </Td>
+                  </Box>
+                );
+              })}
             </Table>
           </Box>
         </Panel>
@@ -475,10 +473,10 @@ export default function PipelinePage() {
             <Table
               headers={[
                 ...(isFleetScope ? ["Tenant"] : []),
-                "Last ingest",
+                "Last raw ingest",
                 "Verified",
                 "Quarantined",
-                "Errors",
+                "AI result errors",
                 "Status",
               ]}
             >
@@ -526,21 +524,43 @@ export default function PipelinePage() {
         </Panel>
       </Box>
 
-      <Panel title="Task health" meta={`${scheduledTaskCount} SCHEDULED · ${streamTaskCount} STREAM-TRIGGERED`}>
+      <Panel
+        title="Task health"
+        meta={`CRAWLER: 12 HOURS · ${scheduledTaskCount} SCHEDULED · ${streamTaskCount} STREAM-TRIGGERED`}
+      >
         <Box sx={{ overflowX: "auto" }}>
-          <Table headers={["Task", "Trigger", "State", "Last run", "Pending", "Errors"]}>
+          <Table headers={["Task", "Trigger", "State", "Last run", "Pending", "AI result errors"]}>
             {taskRows.map((t) => (
               <Box component="tr" key={t.taskName}>
                 <Td>
                   <Mono size={11}>{t.taskName}</Mono>
+                  {t.taskName === "CRAWL_INGEST_TASK" && (
+                    <Typography sx={{ mt: 0.35, fontSize: 10, color: colors.text3 }}>
+                      Ingests output from the 12-hour Cloud crawler
+                    </Typography>
+                  )}
                 </Td>
                 <Td>
                   <Tag tone={t.trigger === "stream" ? "ion" : "neutral"}>
-                    {t.trigger === "stream" ? "stream" : `${t.scheduleLabel} schedule`}
+                    {t.trigger === "stream"
+                      ? "stream"
+                      : t.taskName === "CRAWL_INGEST_TASK"
+                        ? `${t.scheduleLabel ?? "manual"} ingest poll`
+                        : `${t.scheduleLabel ?? "manual"} schedule`}
                   </Tag>
                 </Td>
                 <Td>
-                  <Tag tone={t.state === "queued" ? "medium" : "ok"}>
+                  <Tag
+                    tone={
+                      t.state === "failed"
+                        ? "critical"
+                        : t.state === "suspended" || t.state === "queued"
+                          ? "medium"
+                          : t.state === "enabled"
+                            ? "ok"
+                            : "neutral"
+                    }
+                  >
                     {t.state[0]!.toUpperCase() + t.state.slice(1)}
                   </Tag>
                 </Td>
@@ -564,8 +584,10 @@ export default function PipelinePage() {
           </Table>
         </Box>
         <Typography sx={{ mt: 1.5, fontSize: 11, color: colors.text3, lineHeight: 1.6 }}>
-          Stream-triggered tasks run only when new work exists. A waiting task holds no warehouse,
-          so an idle pipeline costs nothing.
+          The Cloud crawler runs every 12 hours. CRAWL_INGEST_TASK checks for completed crawler
+          files every 5 minutes; it is an ingest poll, not the crawler schedule. Enabled means a
+          Snowflake task is resumed and ready, not continuously executing. Last run comes from
+          Snowflake task history.
         </Typography>
       </Panel>
       </>

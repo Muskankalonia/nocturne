@@ -42,7 +42,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
-      router.replace("/");
+      router.replace("/command-center");
     }
   }, [isLoading, isAuthenticated, router]);
 
@@ -56,7 +56,7 @@ export default function LoginPage() {
       setError(result.error);
       return;
     }
-    router.replace("/");
+    router.replace("/command-center");
   }
 
   return (
@@ -86,12 +86,12 @@ export default function LoginPage() {
             * carries across is the *ratio*: 40/28 here and 24/17 in the rail
             * are both ~1.43, so it reads as one logo at two scales instead of
             * two different logos. */}
-          {/* The lockup is the way back out. /start is the public front door and
+          {/* The lockup is the way back out. / is the public front door and
             * this is the only screen reachable from it that has no other exit,
             * so the mark carries the link rather than adding a stray "back". */}
           <Stack
             component={NextLink}
-            href="/start"
+            href="/"
             direction="row"
             alignItems="center"
             gap={{ xs: 1.4, md: 1.8 }}
@@ -188,7 +188,8 @@ export default function LoginPage() {
           sx={{
             width: "100%",
             maxWidth: 400,
-            p: { xs: 2.5, sm: 3.5 },
+            px: { xs: 2.5, sm: 3.5 },
+            py: { xs: 3.5, sm: 5 },
             borderRadius: `${layout.radius}px`,
             border: `1px solid ${colors.edge}`,
             backgroundImage: gradients.panel,
@@ -196,7 +197,7 @@ export default function LoginPage() {
             boxShadow: shadows.raised,
             display: "flex",
             flexDirection: "column",
-            gap: 2,
+            gap: { xs: 2.5, sm: 3 },
           }}
         >
           <Box>

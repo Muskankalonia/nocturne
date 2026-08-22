@@ -389,7 +389,7 @@ listing is a bearer token that outlives the session that minted it.
 ## The analyst console
 
 Next.js 15 (App Router) · React 19 · MUI v6 · TypeScript, reading the views from
-steps 16 and 17. Public landing page at `/start`; everything else is behind a signed,
+steps 16 and 17. Public landing page at `/`; everything else is behind a signed,
 HttpOnly session cookie with tenant scope enforced server-side on every route.
 
 <p align="center">

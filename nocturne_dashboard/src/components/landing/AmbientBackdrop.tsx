@@ -3,7 +3,7 @@ import { alpha } from "@mui/material/styles";
 import { colors } from "@/theme/tokens";
 
 /**
- * Moving backdrop for the hero.
+ * Moving backdrop for the landing-page hero.
  *
  * Pure CSS on three absolutely positioned layers — no canvas, no animation
  * library, no client component. Everything here is `transform` and `opacity`,

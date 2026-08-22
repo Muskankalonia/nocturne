@@ -307,10 +307,6 @@ export default function ThreatActorsPage() {
               onRowClicked={(event) => event.data && setSelectedKey(event.data.actorNodeKey)}
             />
           </Box>
-          <Typography sx={{ mt: 1.5, fontSize: 11, color: colors.text3, lineHeight: 1.6 }}>
-            Generic aliases are keyed per source context and never merged. Credibility measures
-            support for an actor&apos;s claims; it is not identity certainty or threat severity.
-          </Typography>
         </Panel>
 
         {selected ? (

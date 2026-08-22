@@ -1,7 +1,7 @@
 import { colors } from "@/theme/tokens";
 
 /**
- * Categorical colour for the two landing-page graphs, keyed by entity type.
+ * Shared categorical colour for the two landing-page graphs, keyed by entity type.
  *
  * ── Why these five and not a rainbow ────────────────────────────────────────
  *

@@ -4,7 +4,7 @@ import { colors, fonts, layout, shadows } from "@/theme/tokens";
 import { GRAPH_LEGEND, type GraphKind, graphColor } from "./graph-palette";
 
 /**
- * A worked example of the knowledge graph, at the size the argument needs.
+ * A landing-page example of the knowledge graph, at the size the argument needs.
  *
  * The hero diagram shows the *schema* — six edge types, one organization. This
  * shows what the schema is for: a field of claims where most never reach you,

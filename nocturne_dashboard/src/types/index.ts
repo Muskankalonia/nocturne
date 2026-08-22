@@ -486,7 +486,8 @@ export interface TaskHealth {
   taskName: string;
   trigger: "schedule" | "stream";
   scheduleLabel: string | null;
-  state: "running" | "idle" | "queued" | "suspended" | "failed";
+  /** Definition state from SHOW TASKS; enabled does not mean currently executing. */
+  state: "enabled" | "running" | "idle" | "queued" | "suspended" | "failed";
   lastRunAt: string | null;
   pendingCandidates: number | null;
   errorCount: number;

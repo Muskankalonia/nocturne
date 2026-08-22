@@ -806,18 +806,6 @@ export default function BreachMonitorPage() {
           />
         </Box>
 
-        <Stack
-          direction="row"
-          gap={1}
-          alignItems="flex-start"
-          sx={{ px: 2, py: 1.6, borderTop: `1px solid ${colors.edge}` }}
-        >
-          <Typography sx={{ fontSize: 11, color: colors.text3, lineHeight: 1.6 }}>
-            Rows without a score are kept deliberately. A page that named your organization but
-            produced no grounded ownership evidence is <b>suppressed, not deleted</b> — the routing
-            reason travels with it so you can audit why it stopped.
-          </Typography>
-        </Stack>
       </Panel>
 
       {/* Capture-and-rule for a row the cascade could not decide. Rendered as a
