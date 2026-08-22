@@ -1,0 +1,258 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Nocturne end-to-end architecture</title>
+  <desc id="desc">A five-stage architecture showing collection, Snowflake ingestion, cost-gated AI analysis, deterministic verification and graph modeling, and the analyst console. Organization scope is preserved throughout.</desc>
+
+  <defs>
+    <linearGradient id="page" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#050914"/>
+      <stop offset="0.55" stop-color="#07101d"/>
+      <stop offset="1" stop-color="#040710"/>
+    </linearGradient>
+    <linearGradient id="header" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#0a1930"/>
+      <stop offset="0.48" stop-color="#08111f"/>
+      <stop offset="1" stop-color="#10102a"/>
+    </linearGradient>
+    <linearGradient id="scope" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#10284a" stop-opacity="0.78"/>
+      <stop offset="0.5" stop-color="#102139" stop-opacity="0.92"/>
+      <stop offset="1" stop-color="#211541" stop-opacity="0.78"/>
+    </linearGradient>
+    <linearGradient id="blueCard" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#10294b" stop-opacity="0.96"/>
+      <stop offset="1" stop-color="#091729" stop-opacity="0.98"/>
+    </linearGradient>
+    <linearGradient id="violetCard" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#26164a" stop-opacity="0.98"/>
+      <stop offset="1" stop-color="#120d2b" stop-opacity="0.98"/>
+    </linearGradient>
+    <linearGradient id="tealCard" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b343d" stop-opacity="0.96"/>
+      <stop offset="1" stop-color="#081d2a" stop-opacity="0.98"/>
+    </linearGradient>
+    <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1" fill="#4c8dff" opacity="0.12"/>
+    </pattern>
+    <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="7" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="panelShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="16" flood-color="#000814" flood-opacity="0.62"/>
+    </filter>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4c8dff"/>
+    </marker>
+    <marker id="arrowTeal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4fd1c5"/>
+    </marker>
+    <style>
+      .sans { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .mono { font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace; }
+      .phase { font: 700 13px "IBM Plex Mono", "SFMono-Regular", Consolas, monospace; letter-spacing: 2.6px; fill: #78aaff; }
+      .card-title { font: 650 15px Inter, ui-sans-serif, system-ui, sans-serif; fill: #eef4ff; }
+      .card-copy { font: 500 11.5px Inter, ui-sans-serif, system-ui, sans-serif; fill: #8ea3c0; }
+      .token { font: 600 10px "IBM Plex Mono", "SFMono-Regular", Consolas, monospace; letter-spacing: 0.5px; fill: #aac7f5; }
+      .micro { font: 600 10px "IBM Plex Mono", "SFMono-Regular", Consolas, monospace; letter-spacing: 1.2px; fill: #6e86a8; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#page)"/>
+  <rect width="1600" height="900" fill="url(#dots)"/>
+  <circle cx="1190" cy="120" r="310" fill="#5637d9" opacity="0.055"/>
+  <circle cx="275" cy="520" r="330" fill="#2f7cf6" opacity="0.045"/>
+
+  <!-- Header -->
+  <rect x="24" y="22" width="1552" height="104" rx="20" fill="url(#header)" stroke="#1b3557" filter="url(#panelShadow)"/>
+  <g transform="translate(54 48)">
+    <path d="M22 2 L39 9 L35 31 L22 43 L9 31 L5 9 Z" fill="#43bdf2" opacity="0.2" stroke="#43bdf2" stroke-width="2"/>
+    <path d="M12 13 L20 17 L22 31 L24 17 L32 13 L29 27 L22 34 L15 27 Z" fill="#55c7f5"/>
+    <text x="55" y="28" class="sans" fill="#f2f6ff" font-size="26" font-weight="750" letter-spacing="2.4">NOCTURNE</text>
+  </g>
+  <text x="54" y="106" class="mono" fill="#6f89ad" font-size="11" letter-spacing="1.6">DARK-WEB EXPOSURE INTELLIGENCE · END-TO-END SYSTEM ARCHITECTURE</text>
+  <g transform="translate(1190 50)">
+    <rect width="106" height="30" rx="15" fill="#102a47" stroke="#2c64a7"/>
+    <circle cx="17" cy="15" r="4" fill="#4c8dff"/>
+    <text x="30" y="19" class="mono" fill="#b9d1f7" font-size="10">SNOWFLAKE</text>
+    <rect x="116" width="91" height="30" rx="15" fill="#102d35" stroke="#287884"/>
+    <circle cx="133" cy="15" r="4" fill="#4fd1c5"/>
+    <text x="146" y="19" class="mono" fill="#b5e9e3" font-size="10">GCP</text>
+    <rect x="217" width="109" height="30" rx="15" fill="#251842" stroke="#6844aa"/>
+    <circle cx="234" cy="15" r="4" fill="#a78bfa"/>
+    <text x="247" y="19" class="mono" fill="#d8cdfb" font-size="10">CORTEX AI</text>
+  </g>
+
+  <!-- Control plane and tenancy -->
+  <rect x="188" y="146" width="1224" height="76" rx="16" fill="url(#scope)" stroke="#294b76"/>
+  <rect x="208" y="164" width="150" height="38" rx="10" fill="#0b1c32" stroke="#315b91"/>
+  <text x="226" y="181" class="micro">CONTROL PLANE</text>
+  <text x="226" y="194" class="mono" fill="#d7e6ff" font-size="11">ORG_ID boundary</text>
+  <line x1="380" y1="184" x2="428" y2="184" stroke="#4c8dff" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+  <text x="453" y="179" class="token">CONFIG.MONITORED_ORGANIZATIONS</text>
+  <text x="453" y="197" class="card-copy">aliases · domains · products · enabled tenants</text>
+  <line x1="825" y1="164" x2="825" y2="202" stroke="#32547f"/>
+  <text x="858" y="179" class="token">TARGET PROFILE</text>
+  <text x="858" y="197" class="card-copy">crawler scope + exact ownership resolution</text>
+  <rect x="1230" y="164" width="156" height="38" rx="19" fill="#102c31" stroke="#2d7d7d"/>
+  <circle cx="1250" cy="183" r="5" fill="#4fd1c5" filter="url(#softGlow)"/>
+  <text x="1265" y="187" class="mono" fill="#bceee9" font-size="10.5">SCOPED END TO END</text>
+
+  <!-- Control plane drops -->
+  <path d="M520 222 V243 H172 V273" fill="none" stroke="#345d8e" stroke-width="1.2" stroke-dasharray="5 6" marker-end="url(#arrowBlue)" opacity="0.8"/>
+  <path d="M820 222 V273" fill="none" stroke="#345d8e" stroke-width="1.2" stroke-dasharray="5 6" marker-end="url(#arrowBlue)" opacity="0.8"/>
+  <path d="M1080 222 V243 H1106 V273" fill="none" stroke="#3c688a" stroke-width="1.2" stroke-dasharray="5 6" marker-end="url(#arrowTeal)" opacity="0.8"/>
+
+  <!-- Phase panels -->
+  <g filter="url(#panelShadow)">
+    <rect x="40" y="268" width="280" height="448" rx="18" fill="#071221" stroke="#1a3454"/>
+    <rect x="350" y="268" width="280" height="448" rx="18" fill="#071221" stroke="#1a3454"/>
+    <rect x="660" y="268" width="280" height="448" rx="18" fill="#091122" stroke="#26325e"/>
+    <rect x="970" y="268" width="280" height="448" rx="18" fill="#081321" stroke="#1d4255"/>
+    <rect x="1280" y="268" width="280" height="448" rx="18" fill="#071221" stroke="#1a3454"/>
+  </g>
+
+  <!-- Flow rail -->
+  <line x1="320" y1="489" x2="350" y2="489" stroke="#4c8dff" stroke-width="2" marker-end="url(#arrowBlue)"/>
+  <line x1="630" y1="489" x2="660" y2="489" stroke="#4c8dff" stroke-width="2" marker-end="url(#arrowBlue)"/>
+  <line x1="940" y1="489" x2="970" y2="489" stroke="#4c8dff" stroke-width="2" marker-end="url(#arrowBlue)"/>
+  <line x1="1250" y1="489" x2="1280" y2="489" stroke="#4c8dff" stroke-width="2" marker-end="url(#arrowBlue)"/>
+  <g fill="#07101d" stroke="#4c8dff" stroke-width="1.5">
+    <circle cx="335" cy="489" r="4"/><circle cx="645" cy="489" r="4"/><circle cx="955" cy="489" r="4"/><circle cx="1265" cy="489" r="4"/>
+  </g>
+
+  <!-- 1 Collect -->
+  <text x="60" y="300" class="phase">01 · COLLECT</text>
+  <rect x="60" y="322" width="240" height="56" rx="10" fill="url(#blueCard)" stroke="#2d67a8"/>
+  <text x="78" y="346" class="card-title">Dark-Web Discovery</text>
+  <text x="78" y="364" class="card-copy">Ahmia + Dread .onion seeds</text>
+
+  <rect x="60" y="392" width="240" height="90" rx="10" fill="url(#tealCard)" stroke="#27808b"/>
+  <text x="78" y="418" class="card-title">Nocturne Crawler</text>
+  <text x="78" y="438" class="card-copy">Tor SOCKS5 · headless Chromium</text>
+  <rect x="78" y="451" width="112" height="18" rx="9" fill="#12393e" stroke="#28777e"/>
+  <text x="91" y="464" class="mono" fill="#82ddd3" font-size="9.5">12 HOUR SWEEP</text>
+
+  <rect x="60" y="501" width="240" height="68" rx="10" fill="url(#blueCard)" stroke="#2d67a8"/>
+  <text x="78" y="527" class="card-title">Evidence Landing Zone</text>
+  <text x="78" y="547" class="card-copy">GCS · partitioned gzipped JSONL</text>
+
+  <rect x="60" y="590" width="240" height="94" rx="12" fill="#091827" stroke="#173857"/>
+  <text x="78" y="616" class="micro">AUTONOMOUS SWEEP</text>
+  <text x="78" y="640" class="token">0 */12 * * *</text>
+  <text x="78" y="660" class="card-copy">Cloud Scheduler starts the fleet crawl;</text>
+  <text x="78" y="677" class="card-copy">admins can also launch a scoped run.</text>
+
+  <!-- 2 Land -->
+  <text x="370" y="300" class="phase">02 · LAND</text>
+  <rect x="370" y="322" width="240" height="62" rx="10" fill="url(#blueCard)" stroke="#2d67a8"/>
+  <text x="388" y="348" class="card-title">Secure Intake Stage</text>
+  <text x="388" y="367" class="card-copy">GCS_CRAWL_STAGE · external stage</text>
+
+  <rect x="370" y="402" width="240" height="82" rx="10" fill="url(#blueCard)" stroke="#2d67a8"/>
+  <text x="388" y="437" class="card-title">Ingest Orchestrator</text>
+  <text x="388" y="459" class="card-copy">CRAWL_INGEST_TASK · file intake</text>
+
+  <rect x="370" y="503" width="240" height="82" rx="10" fill="url(#blueCard)" stroke="#2d67a8"/>
+  <text x="388" y="529" class="card-title">Raw Evidence Store</text>
+  <text x="388" y="549" class="card-copy">CRAWL_PAGES · append-safe evidence</text>
+  <text x="388" y="569" class="token">ORG_ID + DEDUPE_KEY</text>
+
+  <rect x="370" y="604" width="240" height="80" rx="12" fill="#091827" stroke="#173857"/>
+  <text x="388" y="630" class="micro">DEDUPE SHIELD</text>
+  <text x="388" y="653" class="card-copy">Repeat evidence is recognized before</text>
+  <text x="388" y="670" class="card-copy">the paid AI stages see it again.</text>
+
+  <!-- 3 Cascade -->
+  <text x="680" y="300" class="phase">03 · CASCADE</text>
+  <rect x="680" y="322" width="240" height="58" rx="10" fill="url(#blueCard)" stroke="#2d67a8"/>
+  <text x="698" y="347" class="card-title">SignalScan Engine</text>
+  <text x="698" y="366" class="card-copy">L0 · in-house DLP-style regex matching</text>
+
+  <rect x="680" y="394" width="240" height="64" rx="10" fill="url(#violetCard)" stroke="#7047bd"/>
+  <text x="698" y="419" class="card-title">Relevance Gate</text>
+  <text x="698" y="439" class="card-copy">L1 · cached Cortex AI_CLASSIFY</text>
+
+  <rect x="680" y="472" width="240" height="58" rx="10" fill="url(#blueCard)" stroke="#2d67a8"/>
+  <text x="698" y="497" class="card-title">Evidence Firewall</text>
+  <text x="698" y="516" class="card-copy">bounded context · target identity hidden</text>
+
+  <rect x="680" y="544" width="240" height="64" rx="10" fill="url(#violetCard)" stroke="#7047bd"/>
+  <text x="698" y="569" class="card-title">Proof Extractor</text>
+  <text x="698" y="589" class="card-copy">L2 · cached Cortex AI_COMPLETE</text>
+
+  <rect x="680" y="622" width="240" height="62" rx="12" fill="#14102c" stroke="#47317b"/>
+  <text x="698" y="647" class="micro" fill="#a78bfa">SURVIVOR COST GATE</text>
+  <text x="698" y="669" class="card-copy">cached AI runs only on new survivors</text>
+
+  <!-- 4 Verify and model -->
+  <text x="990" y="300" class="phase">04 · VERIFY + MODEL</text>
+  <rect x="990" y="322" width="240" height="66" rx="10" fill="url(#tealCard)" stroke="#27808b"/>
+  <text x="1008" y="347" class="card-title">Ownership Proof Engine</text>
+  <text x="1008" y="367" class="card-copy">verbatim grounding · exact org resolution</text>
+
+  <rect x="990" y="402" width="240" height="54" rx="10" fill="url(#violetCard)" stroke="#7047bd"/>
+  <text x="1008" y="426" class="card-title">Exposure Classifier</text>
+  <text x="1008" y="444" class="card-copy">cached multi-label data classes</text>
+
+  <rect x="990" y="470" width="240" height="54" rx="10" fill="url(#blueCard)" stroke="#2d67a8"/>
+  <text x="1008" y="494" class="card-title">Threat Knowledge Graph</text>
+  <text x="1008" y="512" class="card-copy">L3 · entities + resolved relationships</text>
+
+  <rect x="990" y="538" width="240" height="58" rx="10" fill="url(#blueCard)" stroke="#2d67a8"/>
+  <text x="1008" y="562" class="card-title">Risk Scoring Engine</text>
+  <text x="1008" y="581" class="card-copy">L4 · impact · confidence · triage</text>
+
+  <rect x="990" y="610" width="240" height="74" rx="10" fill="url(#violetCard)" stroke="#7047bd"/>
+  <text x="1008" y="636" class="card-title">Analyst Briefing AI</text>
+  <text x="1008" y="656" class="card-copy">one cached, evidence-backed narrative</text>
+  <text x="1008" y="674" class="card-copy">per incident · caveats preserved</text>
+
+  <!-- 5 Serve -->
+  <text x="1300" y="300" class="phase">05 · SERVE + RESPOND</text>
+  <rect x="1300" y="322" width="240" height="58" rx="10" fill="url(#blueCard)" stroke="#2d67a8"/>
+  <text x="1318" y="347" class="card-title">Intelligence API Surface</text>
+  <text x="1318" y="366" class="card-copy">18 stable, tenant-scoped SQL views</text>
+
+  <rect x="1300" y="394" width="240" height="64" rx="10" fill="url(#blueCard)" stroke="#2d67a8"/>
+  <text x="1318" y="419" class="card-title">Scoped API Gateway</text>
+  <text x="1318" y="439" class="card-copy">Next.js routes · signed tenant session</text>
+
+  <rect x="1300" y="472" width="240" height="58" rx="10" fill="url(#tealCard)" stroke="#27808b"/>
+  <text x="1318" y="497" class="card-title">Nocturne Command Center</text>
+  <text x="1318" y="516" class="card-copy">Firebase Hosting → Cloud Run</text>
+
+  <rect x="1300" y="544" width="240" height="58" rx="10" fill="url(#blueCard)" stroke="#2d67a8"/>
+  <text x="1318" y="569" class="card-title">Response Workspace</text>
+  <text x="1318" y="588" class="card-copy">triage, evidence export, SOC dispatch</text>
+
+  <rect x="1300" y="616" width="240" height="68" rx="10" fill="url(#tealCard)" stroke="#27808b"/>
+  <text x="1318" y="642" class="card-title">Audited Response Loop</text>
+  <text x="1318" y="662" class="card-copy">remediation state + immutable audit</text>
+
+  <!-- End-to-end boundary -->
+  <path d="M62 750 H1538" stroke="#22466e" stroke-width="1.2" stroke-dasharray="4 7"/>
+  <rect x="530" y="733" width="540" height="34" rx="17" fill="#08182a" stroke="#315b91"/>
+  <circle cx="552" cy="750" r="4" fill="#4c8dff" filter="url(#softGlow)"/>
+  <text x="568" y="754" class="mono" fill="#c6daf7" font-size="10.5" letter-spacing="1.2">ORG_ID IN PATHS · HASHES · CACHE KEYS · GRAPH KEYS · VIEWS</text>
+
+  <!-- Footer legend and statement -->
+  <g transform="translate(42 800)">
+    <rect width="1516" height="68" rx="16" fill="#07111e" stroke="#172d48"/>
+    <g transform="translate(24 19)">
+      <rect width="138" height="30" rx="15" fill="#10264a" stroke="#2d67a8"/>
+      <circle cx="17" cy="15" r="4" fill="#4c8dff"/>
+      <text x="30" y="19" class="mono" fill="#b8d2fa" font-size="9.5">DETERMINISTIC</text>
+      <rect x="150" width="119" height="30" rx="15" fill="#231442" stroke="#7047bd"/>
+      <circle cx="167" cy="15" r="4" fill="#a78bfa"/>
+      <text x="180" y="19" class="mono" fill="#d8cdfb" font-size="9.5">CACHED AI</text>
+      <rect x="281" width="126" height="30" rx="15" fill="#0d2b32" stroke="#27808b"/>
+      <circle cx="298" cy="15" r="4" fill="#4fd1c5"/>
+      <text x="311" y="19" class="mono" fill="#b5e9e3" font-size="9.5">CONTROLLED I/O</text>
+    </g>
+    <text x="493" y="31" class="sans" fill="#edf4ff" font-size="15" font-weight="650">One boundary, held end to end.</text>
+    <text x="493" y="50" class="sans" fill="#8399b7" font-size="12">Deterministic gates run broadly; cached AI runs only on new evidence that survives the previous stage.</text>
+  </g>
+</svg>
