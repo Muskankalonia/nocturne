@@ -1,14 +1,19 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import type { LucideIcon } from "lucide-react";
 import NextLink from "next/link";
 import { Box, Stack, Typography, alpha } from "@mui/material";
 import {
   Boxes,
+  Camera,
   FileSearch,
   Gauge,
+  Link2,
+  Lock,
   MailWarning,
+  Radar,
   ShieldCheck,
-  Workflow,
+  Table2,
 } from "lucide-react";
 import { colors, fonts, gradients, layout, shadows } from "@/theme/tokens";
 import { AmbientBackdrop } from "@/components/landing/AmbientBackdrop";
@@ -101,6 +106,24 @@ const CAPABILITIES = [
       + "quote, the actor, the marketplace and the scores — not a link asking you to go "
       + "and find out whether it mattered.",
   },
+] as const;
+
+/**
+ * Short by design. This section is carried by its diagram; the words exist to
+ * name what the picture already shows, not to re-explain it.
+ */
+const NOX_ABILITIES = [
+  { icon: Radar, text: "Queries your warehouse, never its memory" },
+  { icon: Table2, text: "Answers in tables with real values" },
+  { icon: Link2, text: "Links the page every number came from" },
+  { icon: Lock, text: "No SQL, no internals, scoped to your tenant" },
+] as const;
+
+const CAPTURE_POINTS = [
+  { icon: Radar, text: "Fetched by an isolated worker, over Tor" },
+  { icon: Camera, text: "Waits out marketplace access queues" },
+  { icon: Lock, text: "Private storage, authenticated stream" },
+  { icon: ShieldCheck, text: "Shown as a flat image, never live markup" },
 ] as const;
 
 const EDGES = [
@@ -494,6 +517,26 @@ export default function StartPage() {
       </Section>
 
       {/* ── closing ───────────────────────────────────────────────────────── */}
+      {/* ── evidence capture ──────────────────────────────────────────────── */}
+      <Section id="capture" eyebrow="Dark-web capture">
+        <TwoColumn
+          diagram={<CaptureShot />}
+          title="See the page. Never visit it."
+          body="Listings vanish. Nocturne photographs the source over Tor, so the evidence outlives the post — and nothing of yours ever touches it."
+          points={CAPTURE_POINTS}
+        />
+      </Section>
+
+      {/* ── Nox ───────────────────────────────────────────────────────────── */}
+      <Section id="nox" eyebrow="Meet Nox">
+        <TwoColumn
+          diagram={<NoxChat />}
+          title="Ask. It queries. You get numbers."
+          body="Nox answers from your live warehouse, not from training data — and it has to fetch before it can speak."
+          points={NOX_ABILITIES}
+        />
+      </Section>
+
       <Section>
         <Stack
           alignItems="center"
@@ -517,9 +560,6 @@ export default function StartPage() {
             sx={{ fontSize: "clamp(22px, 3vw, 32px)", letterSpacing: "-0.025em", maxWidth: "22ch" }}
           >
             See what the dark web is already saying about you.
-          </Typography>
-          <Typography sx={{ fontSize: 14, color: colors.text2, maxWidth: "52ch", lineHeight: 1.7 }}>
-            Sign in with your organization identifier to open the console.
           </Typography>
           <HeroActions secondary={false} align="center" />
         </Stack>
@@ -552,6 +592,303 @@ export default function StartPage() {
 /* ── building blocks ──────────────────────────────────────────────────────── */
 
 /** Shared max-width and gutter. Every section sits on this one measure. */
+/**
+ * What a capture actually looks like when it lands in the console.
+ *
+ * The listing is invented and names a fictional operator on purpose. A landing
+ * page that mocked up a real company's data being sold would be making an
+ * allegation about that company, in public, for decoration — which is the exact
+ * failure the product is built to avoid.
+ *
+ * Sensitive lines are rendered as redaction bars rather than as text, matching
+ * what the console does with sample data: the value of the capture is that the
+ * post existed and said this, not the credentials themselves.
+ */
+function CaptureShot() {
+  return (
+    <Box
+      sx={{
+        borderRadius: `${layout.radiusSm}px`,
+        border: `1px solid ${colors.edgeHi}`,
+        backgroundColor: colors.abyss,
+        overflow: "hidden",
+      }}
+    >
+      {/* capture chrome */}
+      <Stack
+        direction="row"
+        alignItems="center"
+        gap={1}
+        sx={{
+          px: 1.6,
+          py: 1,
+          borderBottom: `1px solid ${colors.edge}`,
+          backgroundColor: alpha(colors.ion, 0.06),
+        }}
+      >
+        <Lock size={11} color={colors.verified} />
+        <Typography
+          sx={{
+            fontFamily: fonts.mono,
+            fontSize: 9.5,
+            color: colors.text3,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          dreadytofatroptsdj6io7…onion/d/leaks
+        </Typography>
+        <Box sx={{ ml: "auto", flexShrink: 0 }}>
+          <Typography sx={{ fontFamily: fonts.mono, fontSize: 9, color: colors.verified }}>
+            CAPTURED
+          </Typography>
+        </Box>
+      </Stack>
+
+      {/* the page itself */}
+      <Box sx={{ p: 2 }}>
+        <Typography sx={{ fontFamily: fonts.mono, fontSize: 9.5, color: colors.text3, mb: 1.2 }}>
+          /d/leaks · 2,379 subscribers
+        </Typography>
+
+        <Typography sx={{ fontSize: 13.5, fontWeight: 600, color: colors.text1, lineHeight: 1.35 }}>
+          Northwind Telecom — full customer DB, 4.2M rows
+        </Typography>
+        <Typography sx={{ fontFamily: fonts.mono, fontSize: 9.5, color: colors.text3, mt: 0.7 }}>
+          by v4d3r_ · 3 days ago · 1 comment
+        </Typography>
+
+        <Typography sx={{ fontSize: 11.5, color: colors.text2, lineHeight: 1.6, mt: 1.4 }}>
+          Names, emails, phone numbers, addresses. Plaintext passwords included.
+          Sample rows below, serious buyers only.
+        </Typography>
+
+        {/* redacted sample block */}
+        <Box
+          sx={{
+            mt: 1.4,
+            p: 1.2,
+            borderRadius: "5px",
+            border: `1px dashed ${colors.edge}`,
+            backgroundColor: alpha(colors.critical, 0.05),
+          }}
+        >
+          {[86, 72, 91, 64].map((width, index) => (
+            <Box
+              key={width}
+              sx={{
+                height: 6,
+                width: `${width}%`,
+                borderRadius: "3px",
+                mb: index === 3 ? 0 : 0.9,
+                backgroundColor: alpha(colors.critical, 0.22),
+              }}
+            />
+          ))}
+        </Box>
+        <Typography sx={{ fontFamily: fonts.mono, fontSize: 8.5, color: colors.text3, mt: 0.9 }}>
+          SAMPLE DATA REDACTED IN THIS PREVIEW
+        </Typography>
+      </Box>
+    </Box>
+  );
+}
+
+/**
+ * The assistant panel as it appears in the console — same header, bubbles,
+ * table and follow-up chips, one exchange deep.
+ */
+function NoxChat() {
+  return (
+    <Box
+      sx={{
+        borderRadius: `${layout.radiusSm}px`,
+        border: `1px solid ${colors.edgeHi}`,
+        backgroundColor: colors.abyss,
+        overflow: "hidden",
+      }}
+    >
+      {/* header */}
+      <Stack
+        direction="row"
+        alignItems="center"
+        gap={1}
+        sx={{ px: 1.8, py: 1.2, borderBottom: `1px solid ${colors.edge}` }}
+      >
+        <Box
+          component="img"
+          src="/nocturne-mark.png"
+          alt=""
+          width={17}
+          height={17}
+          sx={{ display: "block", borderRadius: "3px" }}
+        />
+        <Typography sx={{ fontSize: 12.5, fontWeight: 600, color: colors.text1 }}>
+          Nox
+        </Typography>
+      </Stack>
+
+      <Stack gap={1.4} sx={{ p: 1.8 }}>
+        {/* question */}
+        <Box
+          sx={{
+            alignSelf: "flex-end",
+            maxWidth: "85%",
+            px: 1.4,
+            py: 0.9,
+            borderRadius: "9px",
+            border: `1px solid ${colors.edgeHi}`,
+            backgroundColor: alpha(colors.ion, 0.12),
+          }}
+        >
+          <Typography sx={{ fontSize: 11.5, color: colors.text1 }}>
+            What&apos;s my current breach posture?
+          </Typography>
+        </Box>
+
+        {/* answer */}
+        <Box>
+          <Typography sx={{ fontSize: 11.5, color: colors.text2, lineHeight: 1.55 }}>
+            Pulled from your live Command Center:
+          </Typography>
+          <Stack
+            sx={{
+              mt: 1,
+              borderRadius: "6px",
+              border: `1px solid ${colors.edge}`,
+              overflow: "hidden",
+            }}
+          >
+            {[
+              ["Confirmed incidents", "99"],
+              ["Critical severity", "31"],
+              ["Evidence grounding", "99.8%"],
+            ].map(([label, value], index) => (
+              <Stack
+                key={label}
+                direction="row"
+                justifyContent="space-between"
+                gap={1.5}
+                sx={{
+                  px: 1.3,
+                  py: 0.8,
+                  borderTop: index === 0 ? "none" : `1px solid ${colors.edge}`,
+                }}
+              >
+                <Typography sx={{ fontSize: 11, color: colors.text3 }}>{label}</Typography>
+                <Typography
+                  sx={{ fontFamily: fonts.mono, fontSize: 11, fontWeight: 600, color: colors.text1 }}
+                >
+                  {value}
+                </Typography>
+              </Stack>
+            ))}
+          </Stack>
+          <Typography sx={{ fontSize: 11, color: colors.ion, mt: 1 }}>
+            → View Command Center
+          </Typography>
+        </Box>
+
+        {/* follow-ups, as the real panel offers them */}
+        <Stack direction="row" gap={0.7} flexWrap="wrap" sx={{ mt: 0.2 }}>
+          {["Which are critical?", "Who is the actor?"].map((chip) => (
+            <Box
+              key={chip}
+              sx={{
+                px: 1.1,
+                py: 0.5,
+                borderRadius: "999px",
+                border: `1px solid ${alpha(colors.ion, 0.3)}`,
+                fontSize: 10.5,
+                color: colors.ion,
+              }}
+            >
+              {chip}
+            </Box>
+          ))}
+        </Stack>
+      </Stack>
+    </Box>
+  );
+}
+
+function TwoColumn({
+  title,
+  body,
+  points,
+  diagram,
+}: {
+  title: string;
+  body: string;
+  points: ReadonlyArray<{ icon: LucideIcon; text: string }>;
+  diagram: ReactNode;
+}) {
+  return (
+    <Box
+      sx={{
+        display: "grid",
+        gap: { xs: 4, lg: 6 },
+        gridTemplateColumns: { xs: "1fr", lg: "1fr 1fr" },
+        alignItems: "center",
+      }}
+    >
+      <Box>
+        <Typography
+          variant="h2"
+          sx={{
+            fontSize: "clamp(24px, 3.2vw, 38px)",
+            letterSpacing: "-0.026em",
+            lineHeight: 1.15,
+          }}
+        >
+          {title}
+        </Typography>
+        <Typography sx={{ mt: 1.8, fontSize: 16, lineHeight: 1.6, color: colors.text2 }}>
+          {body}
+        </Typography>
+
+        {/* Tighter than the page's default rhythm and a size up. These four
+            lines are a single list, so they should read as one block rather
+            than as four separate statements spaced like paragraphs. */}
+        <Stack gap={1.1} sx={{ mt: 2.4 }}>
+          {points.map((item) => {
+            const Icon = item.icon;
+            return (
+              <Stack key={item.text} direction="row" gap={1.4} alignItems="flex-start">
+                <Box sx={{ mt: "2px", flexShrink: 0 }}>
+                  <Icon size={16} color={colors.ion} />
+                </Box>
+                <Typography sx={{ fontSize: 14.5, lineHeight: 1.5, color: colors.text2 }}>
+                  {item.text}
+                </Typography>
+              </Stack>
+            );
+          })}
+        </Stack>
+      </Box>
+
+      {/* Capped and centred. These are product mockups, not hero art: at full
+          column width the chrome stretches into something that looks like
+          neither the console nor a captured page. */}
+      <Box
+        sx={{
+          justifySelf: { lg: "center" },
+          width: "100%",
+          maxWidth: 420,
+          p: { xs: 1.6, md: 2 },
+          borderRadius: `${layout.radius}px`,
+          border: `1px solid ${colors.edge}`,
+          backgroundImage: gradients.panel,
+          boxShadow: shadows.panel,
+        }}
+      >
+        {diagram}
+      </Box>
+    </Box>
+  );
+}
+
 function Shell({
   children,
   sx,

@@ -202,9 +202,6 @@ export default function LoginPage() {
         >
           <Box>
             <Typography variant="h3">Sign in</Typography>
-            <Typography sx={{ fontSize: 12.5, color: colors.text3, mt: 0.4 }}>
-              Use your organization identifier
-            </Typography>
           </Box>
 
           {error && (

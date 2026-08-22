@@ -24,6 +24,8 @@ const SECTIONS = [
   { href: "#platform", label: "Platform"},
   { href: "#evidence", label: "Evidence" },
   { href: "#graph", label: "Knowledge graph" },
+  { href: "#capture", label: "Capture" },
+  { href: "#nox", label: "Nox" },
 ] as const;
 
 export function LandingNav() {
