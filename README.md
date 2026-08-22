@@ -21,6 +21,7 @@
   <img src="https://img.shields.io/badge/Python_3.11-04070E?style=for-the-badge&logo=python&logoColor=F4C96C" alt="Python 3.11" />
   <img src="https://img.shields.io/badge/Tor-04070E?style=for-the-badge&logo=torproject&logoColor=A78BFA" alt="Tor" />
   <img src="https://img.shields.io/badge/Cloud_Run-04070E?style=for-the-badge&logo=googlecloud&logoColor=4C8DFF" alt="Google Cloud Run" />
+  <img src="https://img.shields.io/badge/Firebase-04070E?style=for-the-badge&logo=firebase&logoColor=FFCA28" alt="Firebase" />
 </p>
 
 <p align="center">

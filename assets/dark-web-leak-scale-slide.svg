@@ -1,0 +1,187 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Annual growth in organizations named on dark-web cyber-extortion leak sites</title>
+  <desc id="desc">An infographic showing annual observed victim organizations rising from 1,497 in 2020 to 4,685 in the first three quarters of 2025, plus 6,142 victims in the latest rolling twelve-month period, and explaining why Nocturne verifies leak-site claims.</desc>
+
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#050914"/>
+      <stop offset="0.55" stop-color="#08111f"/>
+      <stop offset="1" stop-color="#04070e"/>
+    </linearGradient>
+    <linearGradient id="danger" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff9b45"/>
+      <stop offset="0.52" stop-color="#ff5e69"/>
+      <stop offset="1" stop-color="#e84d93"/>
+    </linearGradient>
+    <linearGradient id="ion" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4c8dff"/>
+      <stop offset="1" stop-color="#49c8f2"/>
+    </linearGradient>
+    <linearGradient id="verified" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4fd1c5"/>
+      <stop offset="1" stop-color="#4be08f"/>
+    </linearGradient>
+    <radialGradient id="redHalo">
+      <stop offset="0" stop-color="#ff5e69" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#ff5e69" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="blueHalo">
+      <stop offset="0" stop-color="#4c8dff" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#4c8dff" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1" fill="#4c8dff" opacity="0.12"/>
+    </pattern>
+    <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="7" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#000711" flood-opacity="0.7"/>
+    </filter>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#4c8dff"/>
+    </marker>
+    <style>
+      .sans { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .mono { font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace; }
+      .eyebrow { font: 700 12px "IBM Plex Mono", "SFMono-Regular", Consolas, monospace; letter-spacing: 2.5px; fill: #7caaff; }
+      .small { font: 500 13px Inter, ui-sans-serif, system-ui, sans-serif; fill: #8fa4c0; }
+      .micro { font: 600 10px "IBM Plex Mono", "SFMono-Regular", Consolas, monospace; letter-spacing: 1.1px; fill: #7890b0; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <rect width="1600" height="900" fill="url(#dots)"/>
+  <circle cx="1280" cy="390" r="420" fill="url(#redHalo)"/>
+  <circle cx="520" cy="720" r="420" fill="url(#blueHalo)"/>
+
+  <!-- Brand and source -->
+  <g transform="translate(52 42)">
+    <clipPath id="brandLogoMarkClip">
+      <rect x="0" y="-1" width="44" height="46" rx="2"/>
+    </clipPath>
+    <image href="nocturne-logo.png" x="-22" y="-39" width="250" height="120" preserveAspectRatio="xMinYMin meet" clip-path="url(#brandLogoMarkClip)"/>
+    <text x="55" y="29" class="sans" fill="#f1f6ff" font-size="25" font-weight="760" letter-spacing="2.2">NOCTURNE</text>
+  </g>
+  <rect x="1172" y="42" width="376" height="42" rx="21" fill="#0c1725" stroke="#263d5a"/>
+  <circle cx="1197" cy="63" r="5" fill="#ff7a62"/>
+  <text x="1214" y="67" class="mono" fill="#b9c9dd" font-size="10.5">OBSERVED CYBER-EXTORTION SCALE · 2024–25</text>
+
+  <!-- Headline -->
+  <text x="62" y="145" class="eyebrow">WHY THIS PRODUCT HAS TO EXIST</text>
+  <text x="62" y="211" class="sans" fill="#f3f7ff" font-size="52" font-weight="780" letter-spacing="-1.6">LEAK-SITE VICTIMS HAVE</text>
+  <text x="62" y="274" class="sans" fill="url(#danger)" font-size="58" font-weight="820" letter-spacing="-1.8">TRIPLED SINCE 2020.</text>
+  <text x="64" y="310" class="sans" fill="#91a6c2" font-size="17">Organizations observed on double-extortion leak sites — public claims that still require verification.</text>
+
+  <!-- Primary metric card -->
+  <rect x="54" y="352" width="850" height="238" rx="22" fill="#081422" stroke="#263b58" filter="url(#shadow)"/>
+  <rect x="54" y="352" width="8" height="238" rx="4" fill="url(#danger)"/>
+  <text x="92" y="410" class="micro">VICTIM ORGANIZATIONS OBSERVED IN 12 MONTHS</text>
+  <text x="88" y="503" class="sans" fill="#f5f8ff" font-size="104" font-weight="820" letter-spacing="-4">6,142</text>
+  <text x="92" y="545" class="sans" fill="#9eb0c7" font-size="17">named across public-facing cyber-extortion leak sites</text>
+
+  <line x1="520" y1="387" x2="520" y2="557" stroke="#203650"/>
+  <text x="558" y="418" class="micro">THE INDUSTRIALIZED THREAT</text>
+  <text x="558" y="473" class="sans" fill="#ffcf9d" font-size="38" font-weight="760">91</text>
+  <text x="625" y="470" class="sans" fill="#dce7f7" font-size="17" font-weight="650">active Cy-X brands</text>
+  <text x="558" y="513" class="sans" fill="#ff9b8d" font-size="38" font-weight="760">+44.5%</text>
+  <text x="707" y="510" class="sans" fill="#dce7f7" font-size="17" font-weight="650">year over year</text>
+  <text x="558" y="548" class="small">More listings. More actors. More claims to verify.</text>
+
+  <!-- Annual cyber-extortion leak-site victim trend -->
+  <g>
+    <rect x="950" y="140" width="598" height="500" rx="22" fill="#07111e" stroke="#28374c" stroke-width="2" filter="url(#shadow)"/>
+    <text x="980" y="181" class="sans" fill="#f1f6ff" font-size="20" font-weight="740">Annual leak-site victims</text>
+    <text x="980" y="205" class="small">Organizations named on monitored cyber-extortion sites</text>
+
+    <rect x="1390" y="162" width="126" height="42" rx="12" fill="#281421" stroke="#8f3c50"/>
+    <text x="1453" y="180" text-anchor="middle" class="mono" fill="#ff948b" font-size="10" font-weight="700">3.1× GROWTH</text>
+    <text x="1453" y="195" text-anchor="middle" class="mono" fill="#bd7e88" font-size="8.5">VS 2020</text>
+
+    <!-- Scale and grid: 0–5,000 organizations -->
+    <g class="mono" fill="#6f86a4" font-size="9">
+      <text x="1005" y="564" text-anchor="end">0</text>
+      <text x="1005" y="506" text-anchor="end">1K</text>
+      <text x="1005" y="448" text-anchor="end">2K</text>
+      <text x="1005" y="390" text-anchor="end">3K</text>
+      <text x="1005" y="332" text-anchor="end">4K</text>
+      <text x="1005" y="274" text-anchor="end">5K</text>
+    </g>
+    <g stroke="#1d3049" stroke-width="1">
+      <line x1="1018" y1="560" x2="1518" y2="560"/>
+      <line x1="1018" y1="502" x2="1518" y2="502"/>
+      <line x1="1018" y1="444" x2="1518" y2="444"/>
+      <line x1="1018" y1="386" x2="1518" y2="386"/>
+      <line x1="1018" y1="328" x2="1518" y2="328"/>
+      <line x1="1018" y1="270" x2="1518" y2="270"/>
+    </g>
+
+    <!-- Exact annual counts; 2025 covers Q1–Q3 only -->
+    <g>
+      <rect x="1026" y="473" width="58" height="87" rx="7" fill="#18355b" stroke="#3979c8"/>
+      <rect x="1111" y="428" width="58" height="132" rx="7" fill="#1d4678" stroke="#4489dd"/>
+      <rect x="1196" y="434" width="58" height="126" rx="7" fill="#235890" stroke="#4b96ed"/>
+      <rect x="1281" y="323" width="58" height="237" rx="7" fill="#673043" stroke="#d55268"/>
+      <rect x="1366" y="300" width="58" height="260" rx="7" fill="#8b3949" stroke="#f06472"/>
+      <rect x="1451" y="288" width="58" height="272" rx="7" fill="url(#danger)" stroke="#ff9b6a" stroke-width="2"/>
+    </g>
+
+    <g class="sans" fill="#eef5ff" font-size="12" font-weight="740" text-anchor="middle">
+      <text x="1055" y="462">1,497</text>
+      <text x="1140" y="417">2,268</text>
+      <text x="1225" y="423">2,169</text>
+      <text x="1310" y="312">4,092</text>
+      <text x="1395" y="289">4,478</text>
+      <text x="1480" y="277" fill="#ffd0b0">4,685</text>
+    </g>
+    <g class="mono" fill="#9aafc8" font-size="10" font-weight="650" text-anchor="middle">
+      <text x="1055" y="583">2020</text>
+      <text x="1140" y="583">2021</text>
+      <text x="1225" y="583">2022</text>
+      <text x="1310" y="583">2023</text>
+      <text x="1395" y="583">2024</text>
+      <text x="1480" y="583" fill="#ffb291">2025*</text>
+    </g>
+
+    <line x1="980" y1="603" x2="1518" y2="603" stroke="#203650"/>
+    <circle cx="990" cy="620" r="4" fill="#ff7a62"/>
+    <text x="1003" y="624" class="mono" fill="#8fa4c0" font-size="9.5">* 2025 = Q1–Q3 only · latest comparable published series</text>
+  </g>
+
+  <!-- Product relevance flow -->
+  <text x="56" y="656" class="sans" fill="#f1f6ff" font-size="23" font-weight="720">Volume creates alerts. Verification creates intelligence.</text>
+  <g transform="translate(54 685)">
+    <rect width="396" height="116" rx="18" fill="#22111c" stroke="#803544"/>
+    <circle cx="32" cy="34" r="11" fill="#ff6470" opacity="0.2" stroke="#ff6470"/>
+    <path d="M27 34 h10 M32 29 v10" stroke="#ff8a83" stroke-width="2"/>
+    <text x="58" y="39" class="sans" fill="#ffd5d1" font-size="17" font-weight="720">LEAK-SITE CLAIM</text>
+    <text x="26" y="71" class="small">allegation · repost · mirror · misattribution</text>
+    <text x="26" y="94" class="mono" fill="#bd7e88" font-size="10">PUBLIC DOES NOT MEAN PROVEN</text>
+
+    <line x1="414" y1="58" x2="490" y2="58" stroke="#4c8dff" stroke-width="2" marker-end="url(#arrowBlue)"/>
+
+    <rect x="506" width="474" height="116" rx="18" fill="#0a1a30" stroke="#356fb6"/>
+    <clipPath id="pipelineLogoMarkClip">
+      <rect x="522" y="19" width="42" height="48" rx="4"/>
+    </clipPath>
+    <image href="nocturne-logo.png" x="502" y="-18" width="230" height="110" preserveAspectRatio="xMinYMin meet" clip-path="url(#pipelineLogoMarkClip)"/>
+    <text x="578" y="42" class="sans" fill="#eef6ff" font-size="19" font-weight="760">NOCTURNE PROOF PIPELINE</text>
+    <text x="532" y="77" class="mono" fill="#8eb9f1" font-size="10.5">GROUND · RESOLVE OWNERSHIP · SCORE · RESPOND</text>
+    <text x="532" y="98" class="small">target-blind extraction, then deterministic proof</text>
+
+    <line x1="998" y1="58" x2="1074" y2="58" stroke="#4fd1c5" stroke-width="2" marker-end="url(#arrowBlue)"/>
+
+    <rect x="1090" width="456" height="116" rx="18" fill="#0a2529" stroke="#2b817e"/>
+    <circle cx="1124" cy="35" r="12" fill="#4fd1c5" opacity="0.18" stroke="#4fd1c5"/>
+    <path d="M1118 35 l4 4 8-9" fill="none" stroke="#64e0d4" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="1150" y="41" class="sans" fill="#d9fff8" font-size="18" font-weight="740">GROUNDED RECEIPT</text>
+    <text x="1116" y="73" class="small">verbatim proof · exact ownership · tenant scope</text>
+    <text x="1116" y="96" class="mono" fill="#65bdb5" font-size="10">AN ALERT AN ANALYST CAN DEFEND</text>
+  </g>
+
+  <!-- Source and caveat -->
+  <line x1="54" y1="830" x2="1546" y2="830" stroke="#1d334e"/>
+  <text x="56" y="857" class="mono" fill="#7288a5" font-size="9.5">SOURCE · ORANGE CYBERDEFENSE, SECURITY NAVIGATOR 2026 · ANNUAL SERIES 2020–2025 Q3 · ROLLING METRIC OCT 2024–SEP 2025</text>
+  <text x="1546" y="857" text-anchor="end" class="sans" fill="#788da8" font-size="10.5">Leak-site posts are claims and can include duplicates or misattribution. That is why verification matters.</text>
+</svg>
