@@ -80,10 +80,24 @@ async function withStoredProfile(user: User): Promise<User> {
  * sign in. Keep the real value in .env.local and in the Cloud Run environment.
  *
  * With the variable unset the password is simply the username, which keeps
- * local development working without extra setup.
+ * local development working without extra setup. That convenience is refused
+ * in production: a deploy once shipped an empty suffix and every account,
+ * including `admin`, signed in with its own name as the password. The fallback
+ * is silent by design, so nothing surfaced it — the console simply accepted
+ * admin/admin until someone tried it. Failing the sign-in makes a missing
+ * suffix loud in the one environment where it is a published password.
  */
+class DemoPasswordUnconfigured extends Error {}
+
 function expectedPassword(username: string): string {
-  return `${username}${process.env.NOCTURNE_DEMO_PASSWORD_SUFFIX ?? ""}`;
+  const suffix = process.env.NOCTURNE_DEMO_PASSWORD_SUFFIX ?? "";
+  if (!suffix && process.env.NODE_ENV === "production") {
+    throw new DemoPasswordUnconfigured(
+      "NOCTURNE_DEMO_PASSWORD_SUFFIX is empty, which would make every "
+      + "password equal to its username.",
+    );
+  }
+  return `${username}${suffix}`;
 }
 
 /**
@@ -139,7 +153,26 @@ export async function POST(request: Request) {
 
   const username = submitted.username.trim().toLowerCase();
   const user = users.find((candidate) => candidate.username === username);
-  if (!user || submitted.password !== expectedPassword(username)) {
+
+  let expected: string;
+  try {
+    expected = expectedPassword(username);
+  } catch (error) {
+    // Refuse every sign-in rather than fall through to a comparison that
+    // would accept the username as its own password. 503 and a named cause,
+    // so this reads as "the server is misconfigured" in the logs instead of
+    // an anonymous 500 — or worse, a successful login.
+    if (error instanceof DemoPasswordUnconfigured) {
+      console.error("[nocturne-auth] refusing sign-in:", error.message);
+      return NextResponse.json(
+        { error: "Sign-in is unavailable because the server is misconfigured." },
+        { status: 503, headers: NO_STORE_HEADERS },
+      );
+    }
+    throw error;
+  }
+
+  if (!user || submitted.password !== expected) {
     return unauthorized(rateKey);
   }
 

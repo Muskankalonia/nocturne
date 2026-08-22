@@ -184,8 +184,12 @@ jobs:
       - name: Fail fast if configuration is missing
         run: |
           missing=0
+          # Every key deploy_cloudrun.sh treats as required. Checking them here
+          # costs five seconds and names all the missing ones at once; letting
+          # the deploy script find them costs a minute and stops at the first.
           for key in SNOWFLAKE_ACCOUNT SNOWFLAKE_USER SNOWFLAKE_TOKEN \
-                     NOCTURNE_SESSION_SECRET NOCTURNE_MANUAL_UPLOAD_BUCKET; do
+                     NOCTURNE_SESSION_SECRET NOCTURNE_MANUAL_UPLOAD_BUCKET \
+                     NOCTURNE_SECRET_KEY NOCTURNE_DEMO_PASSWORD_SUFFIX; do
             if ! grep -q "^${key}=." .env.local; then
               echo "::error::${key} is missing from the CONSOLE_ENV_LOCAL secret"
               missing=1
