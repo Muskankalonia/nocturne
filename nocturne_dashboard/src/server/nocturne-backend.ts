@@ -2358,7 +2358,18 @@ export class SnowflakeNocturneBackend implements NocturneBackend {
       ? ` LIMIT ${pagination.pageSize} OFFSET ${(pagination.page - 1) * pagination.pageSize}`
       : "";
 
-    const [resultRows, countRows] = await Promise.all([
+    // Data freshness is deliberately a separate query against the per-org
+    // summary rather than something derived from the rows above. DISCOVERED_AT
+    // is an incident's FIRST_SEEN, so a scan that re-finds only known content
+    // never advances it, and the max over `rows` also moves whenever a filter
+    // or a page boundary changes which rows came back. Neither is what a
+    // "LIVE SNOWFLAKE" stamp claims. VW_COMMAND_CENTER.LAST_UPDATED_AT is the
+    // greatest of the org's ingest, L1, L2, leak-type and incident times,
+    // which is the freshness the label is actually promising, and it matches
+    // what the Command Center shows for the same tenant.
+    const freshness = scopeFilter(scope);
+
+    const [resultRows, countRows, freshnessRows] = await Promise.all([
       executeQuery(
         `SELECT ${BREACH_MONITOR_COLUMNS}
          FROM NOCTURNE.DASHBOARD.VW_BREACH_MONITOR${filter.clause}
@@ -2378,6 +2389,14 @@ export class SnowflakeNocturneBackend implements NocturneBackend {
          FROM NOCTURNE.DASHBOARD.VW_BREACH_MONITOR${filter.clause}`,
         filter.binds,
       ),
+      executeQuery(
+        `SELECT TO_VARCHAR(
+           LAST_UPDATED_AT,
+           'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM'
+         ) AS LAST_UPDATED_AT
+         FROM NOCTURNE.DASHBOARD.VW_COMMAND_CENTER${freshness.clause}`,
+        freshness.binds,
+      ),
     ]);
     const rows = resultRows.map(mapBreachMonitorRecord);
     const totalCount = numberValue((countRows[0] as Record<string, unknown>)?.CNT ?? resultRows.length);
@@ -2387,7 +2406,9 @@ export class SnowflakeNocturneBackend implements NocturneBackend {
       summary: summarizeBreachMonitor(rows),
       rows,
       totalCount,
-      lastUpdatedAt: latestTimestamp(rows.map((row) => row.discoveredAt)),
+      lastUpdatedAt: latestTimestamp(
+        freshnessRows.map((row) => nullableString(row.LAST_UPDATED_AT)),
+      ),
       fetchedAt: new Date().toISOString(),
     };
   }
@@ -4176,50 +4197,59 @@ async function insertManualIncidentInsightAiResults(uploadId: string): Promise<v
           ON PAGE.ORG_ID = INCIDENT.ORG_ID
           AND PAGE.CONTENT_SHA256 = INCIDENT.CONTENT_SHA256
         LEFT JOIN (
-          WITH DISTINCT_CLAIMS AS (
+          WITH CLAIM_INCIDENT_MAP AS (
+            SELECT DISTINCT ORG_ID, DEDUPE_KEY, INCIDENT_KEY
+            FROM NOCTURNE.RAW.DT_L4_DOCUMENT_SEVERITY
+            WHERE TARGET_SCORE_ELIGIBLE
+              AND INCIDENT_KEY IS NOT NULL
+          ),
+          DISTINCT_CLAIMS AS (
             SELECT
-              ORG_ID,
-              CONTENT_SHA256,
-              LEFT(REGEXP_REPLACE(STATEMENT, '[[:space:]]+', ' '), 500)
+              CLAIM.ORG_ID,
+              MAP.INCIDENT_KEY,
+              LEFT(REGEXP_REPLACE(CLAIM.STATEMENT, '[[:space:]]+', ' '), 500)
                 AS CLAIM_STATEMENT,
               CASE
-                WHEN COUNT_IF(CLAIM_STATUS = 'disputed') > 0 THEN 'disputed'
-                WHEN COUNT_IF(CLAIM_STATUS = 'corroborated') > 0
+                WHEN COUNT_IF(CLAIM.CLAIM_STATUS = 'disputed') > 0 THEN 'disputed'
+                WHEN COUNT_IF(CLAIM.CLAIM_STATUS = 'corroborated') > 0
                   THEN 'corroborated'
-                WHEN COUNT_IF(CLAIM_STATUS = 'partially_corroborated') > 0
+                WHEN COUNT_IF(CLAIM.CLAIM_STATUS = 'partially_corroborated') > 0
                   THEN 'partially_corroborated'
-                WHEN COUNT_IF(CLAIM_STATUS = 'self_evidenced') > 0
+                WHEN COUNT_IF(CLAIM.CLAIM_STATUS = 'self_evidenced') > 0
                   THEN 'self_evidenced'
                 ELSE 'unverified'
               END AS CLAIM_STATUS,
-              MAX(QUANTITY_CLAIMED) AS QUANTITY_CLAIMED,
+              MAX(CLAIM.QUANTITY_CLAIMED) AS QUANTITY_CLAIMED,
               IFF(
-                COUNT_IF(GROUNDING_LEVEL = 'exact') > 0,
+                COUNT_IF(CLAIM.GROUNDING_LEVEL = 'exact') > 0,
                 'exact',
                 'normalized'
               ) AS GROUNDING_LEVEL
-            FROM NOCTURNE.RAW.DT_L3_CLAIM_CORROBORATION
-            WHERE IS_ACCEPTED
-              AND IS_GROUNDED
-              AND GRAPH_SCOPE = 'target_incident'
-              AND STATEMENT IS NOT NULL
+            FROM NOCTURNE.RAW.DT_L3_CLAIM_CORROBORATION AS CLAIM
+            JOIN CLAIM_INCIDENT_MAP AS MAP
+              ON MAP.ORG_ID = CLAIM.ORG_ID
+              AND MAP.DEDUPE_KEY = CLAIM.DEDUPE_KEY
+            WHERE CLAIM.IS_ACCEPTED
+              AND CLAIM.IS_GROUNDED
+              AND CLAIM.GRAPH_SCOPE = 'target_incident'
+              AND CLAIM.STATEMENT IS NOT NULL
             GROUP BY
-              ORG_ID,
-              CONTENT_SHA256,
-              LEFT(REGEXP_REPLACE(STATEMENT, '[[:space:]]+', ' '), 500)
+              CLAIM.ORG_ID,
+              MAP.INCIDENT_KEY,
+              LEFT(REGEXP_REPLACE(CLAIM.STATEMENT, '[[:space:]]+', ' '), 500)
           ),
           RANKED_CLAIMS AS (
             SELECT
               *,
               ROW_NUMBER() OVER (
-                PARTITION BY ORG_ID, CONTENT_SHA256
+                PARTITION BY ORG_ID, INCIDENT_KEY
                 ORDER BY CLAIM_STATEMENT
               ) AS CLAIM_RANK
             FROM DISTINCT_CLAIMS
           )
           SELECT
             ORG_ID,
-            CONTENT_SHA256,
+            INCIDENT_KEY,
             ARRAY_AGG(OBJECT_CONSTRUCT_KEEP_NULL(
               'statement', CLAIM_STATEMENT,
               'status', CLAIM_STATUS,
@@ -4228,10 +4258,10 @@ async function insertManualIncidentInsightAiResults(uploadId: string): Promise<v
             )) WITHIN GROUP (ORDER BY CLAIM_STATEMENT) AS GROUNDED_CLAIMS
           FROM RANKED_CLAIMS
           WHERE CLAIM_RANK <= 10
-          GROUP BY ORG_ID, CONTENT_SHA256
+          GROUP BY ORG_ID, INCIDENT_KEY
         ) AS CLAIMS
           ON CLAIMS.ORG_ID = INCIDENT.ORG_ID
-          AND CLAIMS.CONTENT_SHA256 = INCIDENT.CONTENT_SHA256
+          AND CLAIMS.INCIDENT_KEY = INCIDENT.INCIDENT_KEY
         LEFT JOIN NOCTURNE.RAW.INCIDENT_INSIGHT_AI_RESULTS AS EXISTING_RESULT
           ON EXISTING_RESULT.ORG_ID = INCIDENT.ORG_ID
           AND EXISTING_RESULT.INCIDENT_KEY = INCIDENT.INCIDENT_KEY

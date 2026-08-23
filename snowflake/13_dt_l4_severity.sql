@@ -294,8 +294,10 @@ AS
       WHEN TRIAGE_PRIORITY_SCORE >= 20 THEN 'low'
       ELSE 'informational'
     END AS TRIAGE_PRIORITY_BAND,
+    -- Normalize the link before hashing so trailing-slash and #fragment
+    -- variants of the same URL collapse into one incident.
     CASE WHEN TARGET_SCORE_ELIGIBLE
-      THEN SHA2(ORG_ID || '|' || CONTENT_SHA256)
+      THEN SHA2(ORG_ID || '|' || RTRIM(SPLIT_PART(URL, '#', 1), '/'))
     END AS INCIDENT_KEY,
     OBJECT_CONSTRUCT_KEEP_NULL(
       'data_sensitivity', DATA_SENSITIVITY_SCORE,
@@ -344,14 +346,14 @@ CREATE OR REPLACE VIEW NOCTURNE.RAW.VW_L4_DOCUMENT_SEVERITY AS
   WHERE TARGET_SCORE_ELIGIBLE
     AND TARGET_SEVERITY_SCORE IS NOT NULL;
 
--- CONTENT_SHA256 defines the hackathon incident boundary. Mirrors reuse one
--- incident; differently written reports remain separate until event clustering
--- is introduced after the hackathon.
+-- URL (per organization) defines the incident boundary: one incident per dark
+-- web link. Re-crawls of the same URL collapse into one incident and are counted
+-- as sightings. Identical content mirrored on different URLs stays separate.
 CREATE OR REPLACE VIEW NOCTURNE.RAW.VW_L4_INCIDENT_SEVERITY AS
   SELECT
     ORG_ID,
     INCIDENT_KEY,
-    CONTENT_SHA256,
+    MAX_BY(CONTENT_SHA256, TRIAGE_PRIORITY_SCORE) AS CONTENT_SHA256,
     ANY_VALUE(CANONICAL_NAME) AS CANONICAL_NAME,
     MAX_BY(ACTOR_NAME, TRIAGE_PRIORITY_SCORE) AS ACTOR_NAME,
     MAX_BY(ACTOR_NODE_KEY, TRIAGE_PRIORITY_SCORE) AS ACTOR_NODE_KEY,
@@ -378,7 +380,7 @@ CREATE OR REPLACE VIEW NOCTURNE.RAW.VW_L4_INCIDENT_SEVERITY AS
     MAX(FETCHED_AT) AS LAST_SEEN,
     'target_incident' AS GRAPH_SCOPE
   FROM NOCTURNE.RAW.VW_L4_DOCUMENT_SEVERITY
-  GROUP BY ORG_ID, INCIDENT_KEY, CONTENT_SHA256;
+  GROUP BY ORG_ID, INCIDENT_KEY;
 
 CREATE OR REPLACE VIEW NOCTURNE.RAW.VW_L4_ORG_POSTURE AS
   SELECT

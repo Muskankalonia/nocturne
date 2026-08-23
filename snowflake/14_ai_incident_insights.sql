@@ -2,8 +2,8 @@
 -- Nocturne Pipeline: Step 14 - Cached AI Incident Insights
 -- =============================================================================
 -- Generates one dashboard insight for each organization-scoped L4 incident.
--- Paid AI output is cached by (ORG_ID, INCIDENT_KEY), so exact-content mirrors
--- reuse one insight and normal redeployment does not repeat the Cortex call.
+-- Paid AI output is cached by (ORG_ID, INCIDENT_KEY), so re-crawls of the same
+-- link reuse one insight and normal redeployment does not repeat the Cortex call.
 -- A small scheduled task discovers deterministic L4 incidents and writes them
 -- to a persistent queue. The paid AI task remains stream-triggered and runs
 -- only when that queue receives a genuinely new incident.
@@ -63,43 +63,57 @@ ALTER TABLE NOCTURNE.RAW.INCIDENT_INSIGHT_AI_CANDIDATES
 CREATE OR REPLACE VIEW
   NOCTURNE.RAW.VW_INCIDENT_INSIGHT_AI_MISSING_CANDIDATES
 AS
-  WITH DISTINCT_CLAIMS AS (
-    SELECT
+  WITH CLAIM_INCIDENT_MAP AS (
+    -- DEDUPE_KEY belongs to exactly one URL, so this maps each per-crawl claim
+    -- to the single link-scoped incident that URL now represents.
+    SELECT DISTINCT
       ORG_ID,
-      CONTENT_SHA256,
-      LEFT(REGEXP_REPLACE(STATEMENT, '[[:space:]]+', ' '), 500)
+      DEDUPE_KEY,
+      INCIDENT_KEY
+    FROM NOCTURNE.RAW.DT_L4_DOCUMENT_SEVERITY
+    WHERE TARGET_SCORE_ELIGIBLE
+      AND INCIDENT_KEY IS NOT NULL
+  ),
+  DISTINCT_CLAIMS AS (
+    SELECT
+      CLAIM.ORG_ID,
+      MAP.INCIDENT_KEY,
+      LEFT(REGEXP_REPLACE(CLAIM.STATEMENT, '[[:space:]]+', ' '), 500)
         AS CLAIM_STATEMENT,
       CASE
-        WHEN COUNT_IF(CLAIM_STATUS = 'disputed') > 0 THEN 'disputed'
-        WHEN COUNT_IF(CLAIM_STATUS = 'corroborated') > 0
+        WHEN COUNT_IF(CLAIM.CLAIM_STATUS = 'disputed') > 0 THEN 'disputed'
+        WHEN COUNT_IF(CLAIM.CLAIM_STATUS = 'corroborated') > 0
           THEN 'corroborated'
-        WHEN COUNT_IF(CLAIM_STATUS = 'partially_corroborated') > 0
+        WHEN COUNT_IF(CLAIM.CLAIM_STATUS = 'partially_corroborated') > 0
           THEN 'partially_corroborated'
-        WHEN COUNT_IF(CLAIM_STATUS = 'self_evidenced') > 0
+        WHEN COUNT_IF(CLAIM.CLAIM_STATUS = 'self_evidenced') > 0
           THEN 'self_evidenced'
         ELSE 'unverified'
       END AS CLAIM_STATUS,
-      MAX(QUANTITY_CLAIMED) AS QUANTITY_CLAIMED,
+      MAX(CLAIM.QUANTITY_CLAIMED) AS QUANTITY_CLAIMED,
       IFF(
-        COUNT_IF(GROUNDING_LEVEL = 'exact') > 0,
+        COUNT_IF(CLAIM.GROUNDING_LEVEL = 'exact') > 0,
         'exact',
         'normalized'
       ) AS GROUNDING_LEVEL
-    FROM NOCTURNE.RAW.DT_L3_CLAIM_CORROBORATION
-    WHERE IS_ACCEPTED
-      AND IS_GROUNDED
-      AND GRAPH_SCOPE = 'target_incident'
-      AND STATEMENT IS NOT NULL
+    FROM NOCTURNE.RAW.DT_L3_CLAIM_CORROBORATION AS CLAIM
+    JOIN CLAIM_INCIDENT_MAP AS MAP
+      ON MAP.ORG_ID = CLAIM.ORG_ID
+      AND MAP.DEDUPE_KEY = CLAIM.DEDUPE_KEY
+    WHERE CLAIM.IS_ACCEPTED
+      AND CLAIM.IS_GROUNDED
+      AND CLAIM.GRAPH_SCOPE = 'target_incident'
+      AND CLAIM.STATEMENT IS NOT NULL
     GROUP BY
-      ORG_ID,
-      CONTENT_SHA256,
-      LEFT(REGEXP_REPLACE(STATEMENT, '[[:space:]]+', ' '), 500)
+      CLAIM.ORG_ID,
+      MAP.INCIDENT_KEY,
+      LEFT(REGEXP_REPLACE(CLAIM.STATEMENT, '[[:space:]]+', ' '), 500)
   ),
   RANKED_CLAIMS AS (
     SELECT
       *,
       ROW_NUMBER() OVER (
-        PARTITION BY ORG_ID, CONTENT_SHA256
+        PARTITION BY ORG_ID, INCIDENT_KEY
         ORDER BY CLAIM_STATEMENT
       ) AS CLAIM_RANK
     FROM DISTINCT_CLAIMS
@@ -107,7 +121,7 @@ AS
   INCIDENT_CLAIMS AS (
     SELECT
       ORG_ID,
-      CONTENT_SHA256,
+      INCIDENT_KEY,
       ARRAY_AGG(OBJECT_CONSTRUCT_KEEP_NULL(
         'statement', CLAIM_STATEMENT,
         'status', CLAIM_STATUS,
@@ -116,13 +130,13 @@ AS
       )) WITHIN GROUP (ORDER BY CLAIM_STATEMENT) AS GROUNDED_CLAIMS
     FROM RANKED_CLAIMS
     WHERE CLAIM_RANK <= 10
-    GROUP BY ORG_ID, CONTENT_SHA256
+    GROUP BY ORG_ID, INCIDENT_KEY
   ),
   INCIDENT_ROWS AS (
     SELECT
       ORG_ID,
-      SHA2(ORG_ID || '|' || CONTENT_SHA256) AS INCIDENT_KEY,
-      CONTENT_SHA256,
+      INCIDENT_KEY,
+      MAX_BY(CONTENT_SHA256, TRIAGE_PRIORITY_SCORE) AS CONTENT_SHA256,
       MAX_BY(CANONICAL_NAME, TRIAGE_PRIORITY_SCORE) AS CANONICAL_NAME,
       MAX_BY(TITLE, TRIAGE_PRIORITY_SCORE) AS TOP_TITLE,
       MAX_BY(ACTOR_NAME, TRIAGE_PRIORITY_SCORE) AS ACTOR_NAME,
@@ -150,7 +164,7 @@ AS
     WHERE TARGET_SCORE_ELIGIBLE
       AND COALESCE(SOURCE, '') <> 'manual_upload'
       AND TARGET_SEVERITY_SCORE IS NOT NULL
-    GROUP BY ORG_ID, CONTENT_SHA256
+    GROUP BY ORG_ID, INCIDENT_KEY
   ),
   INCIDENT_FACTS AS (
     SELECT
@@ -189,7 +203,7 @@ AS
     FROM INCIDENT_ROWS AS INCIDENT
     LEFT JOIN INCIDENT_CLAIMS AS CLAIMS
       ON CLAIMS.ORG_ID = INCIDENT.ORG_ID
-      AND CLAIMS.CONTENT_SHA256 = INCIDENT.CONTENT_SHA256
+      AND CLAIMS.INCIDENT_KEY = INCIDENT.INCIDENT_KEY
   )
   SELECT
     FACTS.ORG_ID,

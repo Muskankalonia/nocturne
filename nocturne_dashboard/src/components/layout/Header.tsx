@@ -77,10 +77,6 @@ export function Header() {
     [switchableOrgs, summaryFor],
   );
 
-  const liveLabel = isFleetScope
-    ? `${switchableOrgs.length} TENANTS LIVE`
-    : "INGEST LIVE";
-
   return (
     <Stack
       component="header"
@@ -102,36 +98,6 @@ export function Header() {
       <GlobalSearch />
 
       <Box sx={{ ml: "auto" }} />
-
-      {/* live indicator */}
-      <Stack direction="row" alignItems="center" gap={0.9}>
-        <Box
-          sx={{
-            width: 7,
-            height: 7,
-            borderRadius: "50%",
-            backgroundColor: colors.verified,
-            boxShadow: `0 0 10px ${colors.verified}`,
-            animation: "nocturne-pulse 2.4s ease-in-out infinite",
-            "@keyframes nocturne-pulse": {
-              "0%,100%": { opacity: 1, transform: "scale(1)" },
-              "50%": { opacity: 0.45, transform: "scale(0.82)" },
-            },
-            "@media (prefers-reduced-motion: reduce)": { animation: "none" },
-          }}
-        />
-        <Typography
-          sx={{
-            fontFamily: fonts.mono,
-            fontSize: 11,
-            letterSpacing: "0.1em",
-            color: colors.verified,
-            whiteSpace: "nowrap",
-          }}
-        >
-          {liveLabel}
-        </Typography>
-      </Stack>
 
       {/* There was an "UPDATED 04:05 PM" clock here. It was a hardcoded string
         * — no caller ever passed a value — so it showed the same time on every
