@@ -46,16 +46,16 @@ ENV PUPPETEER_SKIP_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        chromium \
-        fonts-liberation \
-        fonts-dejavu-core \
-        fonts-noto-core \
-        fonts-noto-cjk \
-        ca-certificates \
+    chromium \
+    fonts-liberation \
+    fonts-dejavu-core \
+    fonts-noto-core \
+    fonts-noto-cjk \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --system --gid 1001 nodejs \
-    && useradd --system --uid 1001 --gid nodejs nextjs
+    && useradd --system --uid 1001 --gid nodejs --create-home nextjs
 
 # `output: "standalone"` emits server.js plus only the node_modules the build
 # actually traced. static/ and public/ are deliberately excluded from that
