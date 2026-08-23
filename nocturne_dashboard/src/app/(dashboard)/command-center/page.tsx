@@ -167,7 +167,7 @@ export default function CommandCenterPage() {
           subtitle={
             isFleetScope
               ? `Aggregated across ${switchableOrgs.length} organizations.`
-              : "What of yours was exposed, how badly, and what to do about it."
+              : "Exposure, severity, and next steps."
           }
         />
         <StatGridSkeleton cards={4} />
@@ -197,7 +197,7 @@ export default function CommandCenterPage() {
           subtitle={
             isFleetScope
               ? `Aggregated across ${switchableOrgs.length} organizations.`
-              : "What of yours was exposed, how badly, and what to do about it."
+              : "Exposure, severity, and next steps."
           }
         />
         <Panel>
@@ -266,7 +266,7 @@ export default function CommandCenterPage() {
         subtitle={
           isFleetScope
             ? `Aggregated across ${visibleData.organizations.length} organizations.`
-            : "What of yours was exposed, how badly, and what to do about it."
+            : "Exposure, severity, and next steps."
         }
         lastUpdatedAt={visibleData.lastUpdatedAt}
         isRefreshing={isRefreshing}
