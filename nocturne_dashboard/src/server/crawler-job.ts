@@ -88,6 +88,49 @@ function crawlerTarget(): CrawlerTarget {
   };
 }
 
+/**
+ * The page-capture job, which shares the crawler's project and region.
+ *
+ * Separate job, same plumbing: both are Cloud Run jobs in us-central1 next to
+ * the bucket they write into.
+ */
+function captureTarget(): CrawlerTarget {
+  const target = crawlerTarget();
+  return {
+    ...target,
+    job: process.env.NOCTURNE_CAPTURE_JOB?.trim() || "nocturne-capture",
+  };
+}
+
+/**
+ * Starts one capture run, on demand.
+ *
+ * The worker used to run continuously with `--watch`, polling a queue that is
+ * empty almost all of the time. At 2 vCPU and 4 GiB that is roughly five
+ * dollars a day to wait for something that happens a handful of times a week —
+ * one measured 24-hour run cost more than three days of actual crawling. A
+ * capture is user-initiated and the console already knows the moment one is
+ * requested, so the container's lifetime should be the length of the work, not
+ * the length of the day.
+ *
+ * Deliberately not guarded against overlapping runs. Claiming is atomic in
+ * Snowflake, so a second worker simply finds nothing to take, and a redundant
+ * few-minute run costs about a penny — cheaper than the race a
+ * "skip if one is already running" check would introduce, where a request
+ * arriving just after a worker drained the queue would be picked up by nobody.
+ *
+ * Best-effort by contract. The request row is already written when this is
+ * called; a trigger that fails means the capture waits for the next run, not
+ * that the analyst's click was lost.
+ */
+export async function startCaptureRun(): Promise<void> {
+  const target = captureTarget();
+  await callGoogleApi<{ error?: { message?: string } }>(
+    `https://run.googleapis.com/v2/${jobResourceName(target)}:run`,
+    { method: "POST", body: {} },
+  );
+}
+
 async function accessToken(): Promise<string> {
   let token;
   try {

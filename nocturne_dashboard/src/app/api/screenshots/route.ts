@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { invalidateIncidentViews } from "@/server/query-cache";
+import { startCaptureRun } from "@/server/crawler-job";
 
 import {
   API_RESPONSE_HEADERS,
@@ -130,6 +131,19 @@ export async function POST(request: Request) {
       refresh: body?.refresh === true,
     });
     invalidateIncidentViews(scoped.orgId);
+
+    // Wake a worker for this request rather than paying one to wait.
+    //
+    // Fire-and-forget on purpose: the queue row is already committed, so a
+    // trigger that fails delays the capture rather than losing it, and the
+    // analyst should not see a 503 because Cloud Run was briefly unhappy.
+    void startCaptureRun().catch((error: unknown) => {
+      console.error(
+        "[nocturne-screenshots] could not start the capture worker:",
+        error instanceof Error ? error.message : "unknown error",
+      );
+    });
+
     const screenshot = await getScreenshot(scoped.orgId, monitorKey);
 
     await recordAction({

@@ -86,6 +86,11 @@ CREATE TABLE IF NOT EXISTS NOCTURNE.RAW.CRAWL_PAGES (
   CONTENT_SHA256 STRING NOT NULL,
   RAW_TEXT STRING NOT NULL,
   SCHEMA_VERSION NUMBER NOT NULL,
+  -- Populated only for analyst image/paste uploads (step 15 seed COPY and the
+  -- dashboard upload path). Crawler JSONL records omit these fields, so both
+  -- must be nullable or the crawler COPY would reject every row.
+  IMAGE_BASE64 STRING,
+  CONTENT_TYPE STRING,
   _PATH_ORG_ID STRING NOT NULL,
   _SOURCE_FILE STRING NOT NULL,
   _INGESTED_AT TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP()

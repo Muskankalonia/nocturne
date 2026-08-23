@@ -53,4 +53,12 @@ COPY scripts/capture_screenshots.py ./scripts/capture_screenshots.py
 # forever on a dependency that is never coming.
 #
 # tee keeps Tor's own notices on stdout, so Cloud Run still captures them.
-CMD ["bash", "-c", "tor 2>&1 | tee /tmp/tor.log & waited=0; until grep -q 'Bootstrapped 100%' /tmp/tor.log 2>/dev/null || [ \"$waited\" -ge 180 ]; do sleep 1; waited=$((waited+1)); done; echo \"tor: ready after ${waited}s\"; exec python -u scripts/capture_screenshots.py --watch --interval 20"]
+#
+# Drain and exit, not --watch.
+#
+# A watcher billed for a full day to serve a queue that is empty almost all of
+# it: one measured 24-hour run cost more than three days of actual crawling, for
+# a handful of captures. The console now starts this job at the moment a capture
+# is requested, so the container lives for the length of the work. Pass --watch
+# as an args override if a long-lived worker is ever wanted again.
+CMD ["bash", "-c", "tor 2>&1 | tee /tmp/tor.log & waited=0; until grep -q 'Bootstrapped 100%' /tmp/tor.log 2>/dev/null || [ \"$waited\" -ge 180 ]; do sleep 1; waited=$((waited+1)); done; echo \"tor: ready after ${waited}s\"; exec python -u scripts/capture_screenshots.py --max 25"]
