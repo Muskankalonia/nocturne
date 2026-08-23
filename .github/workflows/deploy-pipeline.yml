@@ -1,25 +1,81 @@
+# Deploy the Nocturne Snowflake pipeline — 17 ordered, idempotent SQL steps.
+#
+# ---------------------------------------------------------------------------
+# Why a merge can no longer deploy
+# ---------------------------------------------------------------------------
+#
+# A full deploy runs every step, and step 15 (15_seed_validate_golive.sql) ends
+# in ALTER TASK ... RESUME for RELATIONSHIP_AI_TASK, L2_EXTRACTION_AI_TASK,
+# LEAK_TYPE_AI_TASK, the insight tasks and CRAWL_INGEST_TASK. Those tasks call
+# Cortex. So a successful push-triggered run does not just publish DDL — it
+# starts the AI cascade spending credits, on whichever account the secrets
+# point at, triggered by a merge rather than by a decision.
+#
+# It also rewrites views the live console reads. Getting that on a merge, mid
+# demo, is the failure mode worth designing against.
+#
+# So: push runs --verify-only, which opens a connection, checks object and task
+# health, and changes nothing. The full deploy is a deliberate button press.
+#
+# ---------------------------------------------------------------------------
+# Required secrets (Settings > Secrets and variables > Actions)
+# ---------------------------------------------------------------------------
+#
+#   SNOWFLAKE_ACCOUNT    e.g. ABCDEFG-HI12345. Missing today, which is why the
+#                        run failed with "--account is required": the script
+#                        already reads the environment variable, it was simply
+#                        empty.
+#   SNOWFLAKE_USER       Required for PAT auth. deploy_pipeline.py connects with
+#                        user=os.environ["SNOWFLAKE_USER"], and an empty user
+#                        fails authentication after the account check passes.
+#   SNOWFLAKE_TOKEN      Programmatic access token.
+#   SNOWFLAKE_WAREHOUSE  Optional. Defaulted to COMPUTE_WH in the env block
+#                        below rather than relying on the script's own
+#                        default: an undefined secret arrives as an empty
+#                        string, not as an unset variable, so os.environ.get
+#                        would return "" and never reach its fallback.
+#
+# The account these point at must be the one the console reads, or the two
+# halves of the product will disagree about what exists.
+
 name: Deploy Snowflake Pipeline
 
 on:
   push:
-    branches: [main]
+    branches: [main, ci/snowflake-pipeline]
     paths:
       - 'snowflake/**'
       - 'deploy_pipeline.py'
+      - '.github/workflows/deploy-pipeline.yml'
   workflow_dispatch:
     inputs:
+      mode:
+        description: 'verify = health check only, changes nothing. deploy = run the SQL steps and resume the AI tasks (spends Cortex credits).'
+        required: true
+        default: 'verify'
+        type: choice
+        options: [verify, deploy]
       step:
-        description: 'Run specific step (1-6), or leave empty for all'
+        description: 'Deploy mode only: run one step, 1-17. Leave empty for all.'
         required: false
-      verify_only:
-        description: 'Only verify pipeline health (true/false)'
-        required: false
-        default: 'false'
+        default: ''
+
+# Never two pipeline deploys at once, and never cancel one midway: the steps
+# are idempotent individually, but a half-applied cascade is a confusing state
+# to debug against a live console.
+concurrency:
+  group: snowflake-pipeline
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
   deploy:
+    name: Verify or deploy
     runs-on: ubuntu-latest
     environment: snowflake-prod
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -29,29 +85,79 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: pip
 
       - name: Install dependencies
         run: pip install -r snowflake/requirements.txt
 
-      - name: Deploy pipeline
+      # Names every missing secret at once, before opening a connection.
+      - name: Fail fast if credentials are missing
         env:
           SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
           SNOWFLAKE_TOKEN: ${{ secrets.SNOWFLAKE_TOKEN }}
-          SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE }}
         run: |
-          ARGS=""
-          if [ "${{ github.event.inputs.step }}" != "" ]; then
-            ARGS="--step ${{ github.event.inputs.step }}"
-          fi
-          if [ "${{ github.event.inputs.verify_only }}" == "true" ]; then
-            ARGS="--verify-only"
-          fi
-          python deploy_pipeline.py $ARGS
+          missing=0
+          for key in SNOWFLAKE_ACCOUNT SNOWFLAKE_USER SNOWFLAKE_TOKEN; do
+            if [ -z "$(printenv "$key")" ]; then
+              echo "::error::${key} is not set. Add it under Settings > Secrets and variables > Actions."
+              missing=1
+            fi
+          done
+          exit "$missing"
 
-      - name: Verify deployment
-        if: github.event.inputs.verify_only != 'true'
+      # A push is always verify-only, whatever the inputs say — workflow_dispatch
+      # is the only path that can reach a real deploy.
+      #
+      # Inputs arrive through env rather than being interpolated into the script.
+      # A ${{ }} expansion is substituted before bash parses the line, so a value
+      # containing a quote or a semicolon would run as script; as an env var it
+      # is only ever data.
+      - name: Resolve mode
+        id: mode
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_STEP: ${{ inputs.step }}
+        run: |
+          if [ "${EVENT}" != "workflow_dispatch" ] || [ "${INPUT_MODE}" != "deploy" ]; then
+            echo "args=--verify-only" >> "$GITHUB_OUTPUT"
+            echo "summary=verify-only (nothing is changed)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ -n "${INPUT_STEP}" ]; then
+            case "${INPUT_STEP}" in
+              ''|*[!0-9]*) echo "::error::step must be a whole number between 1 and 17"; exit 1 ;;
+            esac
+            if [ "${INPUT_STEP}" -lt 1 ] || [ "${INPUT_STEP}" -gt 17 ]; then
+              echo "::error::step must be between 1 and 17"; exit 1
+            fi
+            echo "args=--step ${INPUT_STEP}" >> "$GITHUB_OUTPUT"
+            echo "summary=deploying step ${INPUT_STEP} only" >> "$GITHUB_OUTPUT"
+          else
+            echo "args=" >> "$GITHUB_OUTPUT"
+            echo "summary=FULL DEPLOY — all 17 steps, and step 15 resumes the AI tasks" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report what will run
+        run: echo "::notice::${{ steps.mode.outputs.summary }}"
+
+      - name: Run
         env:
           SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
           SNOWFLAKE_TOKEN: ${{ secrets.SNOWFLAKE_TOKEN }}
-          SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE }}
+          SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE || 'COMPUTE_WH' }}
+          ARGS: ${{ steps.mode.outputs.args }}
+        run: python deploy_pipeline.py ${ARGS}
+
+      # Only after a real deploy — a verify run has already done exactly this.
+      - name: Verify after deploy
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'deploy'
+        env:
+          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+          SNOWFLAKE_TOKEN: ${{ secrets.SNOWFLAKE_TOKEN }}
+          SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE || 'COMPUTE_WH' }}
         run: python deploy_pipeline.py --verify-only
