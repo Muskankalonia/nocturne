@@ -338,7 +338,7 @@ export function ReviewCapturePanel({
             <Typography sx={{ color: colors.text2, fontSize: 12 }}>
               {exhausted
                 ? "Still queued. The Tor capture worker may not be running."
-                : "Fetching the page over Tor. This usually takes under a minute."}
+                : "Fetching the page over Tor. This usually takes around 4-5 minutes. You can come back later to check on the evidence."}
             </Typography>
           </Stack>
         ) : (
