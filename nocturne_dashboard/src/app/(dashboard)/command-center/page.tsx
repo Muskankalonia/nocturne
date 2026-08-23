@@ -163,11 +163,11 @@ export default function CommandCenterPage() {
     return (
       <Stack gap={2} sx={{ minHeight: `calc(100dvh - ${layoutTokens.headerHeight + (layoutTokens.gutter - 4) * 2}px)`, pb: 1 }}>
         <PageHeading
-          title={`${organizationName} posture`}
+          title={`${organizationName} Posture`}
           subtitle={
             isFleetScope
               ? `Aggregated across ${switchableOrgs.length} organizations.`
-              : "Exposure, severity, and next steps."
+              : "What of yours was exposed, how badly, and what to do about it."
           }
         />
         <StatGridSkeleton cards={4} />
@@ -193,11 +193,11 @@ export default function CommandCenterPage() {
     return (
       <Stack gap={2}>
         <PageHeading
-          title={`${organizationName} posture`}
+          title={`${organizationName} Posture`}
           subtitle={
             isFleetScope
               ? `Aggregated across ${switchableOrgs.length} organizations.`
-              : "Exposure, severity, and next steps."
+              : "What of yours was exposed, how badly, and what to do about it."
           }
         />
         <Panel>
@@ -262,11 +262,11 @@ export default function CommandCenterPage() {
   return (
     <Stack gap={2}>
       <PageHeading
-        title={`${organizationName} posture`}
+        title={`${organizationName} Posture`}
         subtitle={
           isFleetScope
             ? `Aggregated across ${visibleData.organizations.length} organizations.`
-            : "Exposure, severity, and next steps."
+            : "What of yours was exposed, how badly, and what to do about it."
         }
         lastUpdatedAt={visibleData.lastUpdatedAt}
         isRefreshing={isRefreshing}
