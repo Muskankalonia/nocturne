@@ -52,6 +52,18 @@ CONSOLE_URL="${CONSOLE_URL:-https://nocturne-console.web.app}"
 # billing. Put it back to 0 when you are done.
 MIN_INSTANCES="${MIN_INSTANCES:-0}"
 
+# Static-egress networking. The service leaves through a Cloud NAT bound to a
+# reserved IP (nocturne-egress-ip → nocturne-nat on the default VPC) so its
+# outbound address never rotates; that fixed IP is what the Snowflake network
+# policy DEPLOY_PIPELINE_POLICY allowlists. These flags are reasserted on every
+# deploy on purpose: a `gcloud run deploy` that omitted them could drop the
+# service back to dynamic Google egress, at which point the next Snowflake query
+# 503s with "IP ... is not allowed to access Snowflake". Override only if you
+# move the service to a different VPC/subnet.
+VPC_NETWORK="${VPC_NETWORK:-default}"
+VPC_SUBNET="${VPC_SUBNET:-default}"
+VPC_EGRESS="${VPC_EGRESS:-all-traffic}"
+
 die() { echo "error: $*" >&2; exit 1; }
 
 command -v gcloud >/dev/null || die "gcloud not found. Install the SDK or run this from Cloud Shell."
@@ -223,6 +235,7 @@ echo "    cpu: ${CPU_THROTTLING_FLAG#--}"
 
 echo "==> building and deploying (Cloud Build compiles remotely; no local Docker needed)"
 echo "    perimeter ips=${ALLOWED_IPS:-<any>} hosts=${ALLOWED_HOSTS:-<any>}"
+echo "    egress: ${VPC_NETWORK}/${VPC_SUBNET} vpc-egress=${VPC_EGRESS} (static NAT IP)"
 
 # --allow-unauthenticated lets the request reach the container. The perimeter
 # allowlist in src/middleware.ts and the login page decide who gets further.
@@ -239,6 +252,9 @@ gcloud run deploy "$SERVICE" \
   --min-instances "$MIN_INSTANCES" \
   --max-instances 3 \
   --timeout 60 \
+  --network "$VPC_NETWORK" \
+  --subnet "$VPC_SUBNET" \
+  --vpc-egress "$VPC_EGRESS" \
   ${CPU_THROTTLING_FLAG} \
   --set-env-vars "$ENV_VARS" \
   --set-secrets "$RUN_SECRETS"
